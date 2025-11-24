@@ -51,21 +51,32 @@ The.Matrix.2160p.mkv   →   The.Matrix.2160p-TSD.mkv
 handbrake-tsd-helper/
 │
 ├── docker-compose.yml
+├── Dockerfile                 ← Builds hb-web container
+├── README.md
+├── .gitignore
 │
-├── webui/                 ← Web interface + API
-│   ├── Dockerfile
-│   └── ...
+├── webui/                     ← Main Flask application package
+│   ├── __init__.py            ← App factory (create_app)
+│   ├── __main__.py            ← Allows `python -m webui`
+│   ├── config.py              ← Global paths, env vars, ROOTS, defaults
+│   ├── presets.py             ← Preset scanning, loading, auto-detect name
+│   ├── jobs.py                ← Job queue, dispatcher, persistence
+│   ├── routes.py              ← All Flask API/UI endpoints
+│   ├── templates/
+│   │   └── index.html         ← Main Web UI (HTML + JS)
+│   └── static/
+│       └── (future CSS/JS/img if added)
 │
-├── worker/                ← Runs HandBrakeCLI
-│   └── encode-one.sh
+├── worker/                    ← Encoding execution environment
+│   └── encode-one.sh          ← Runs HandBrakeCLI using env vars
 │
-├── presets/               ← HandBrake preset JSONs
+├── presets/                   ← HandBrake preset JSON library
 │   ├── full1080.json
 │   └── 4k.json
 │
-└── data/
-    ├── jobs.json          ← Persisted job history
-    └── logs/              ← Saved encode logs
+└── data/                      ← Persistent runtime storage
+    ├── jobs.json              ← Restored queue + history on restart
+    └── logs/                  ← Per-job HandBrake output logs
 ```
 
 ---
