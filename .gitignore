@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+
+# Runtime data
+data/
+logs/
+config/
+*.log
+
+# IDE/editor
+.vscode/
+.idea/
+
+# Archives / misc
+*.tar
+*.zip

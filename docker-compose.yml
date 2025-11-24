@@ -1,0 +1,63 @@
+version: "3.8"
+
+services:
+  # ====================================================
+  # 1) HandBrake TSD Helper Web UI (Flask app + queue)
+  # ====================================================
+  hb-web:
+    build:
+      context: .                      # folder containing Dockerfile + webui/
+    container_name: hb-web
+    restart: unless-stopped
+
+    ports:
+      - "8081:8080"                   # Web UI → http://SERVER-IP:8081
+
+    environment:
+      - TZ=America/Los_Angeles
+      - HB_DATA_DIR=/app/data         # job history + logs inside container
+      - HB_PRESET_DIR=/presets        # preset folder inside container
+
+    volumes:
+      # ✅ Media mount points — MUST match config.py ROOTS
+      - /mnt/nas/PLEX_MEDIA:/mnt/nas/PLEX_MEDIA:ro
+      - /mnt/media:/mnt/media:ro
+      - /mnt/media1:/mnt/media1:ro
+
+      # ✅ Persist jobs.json + log history across rebuilds
+      - ./data:/app/data
+
+      # ✅ Override/edit HandBrake presets without rebuilding image
+      - ./presets:/presets
+
+      # ✅ Worker shell script that runs HandBrakeCLI
+      - ./worker:/worker
+
+
+  # ====================================================
+  # 2) Optional: HandBrake Desktop GUI (manual encoding)
+  # ====================================================
+  handbrake:
+    container_name: handbrake
+    image: jlesage/handbrake:latest
+    restart: unless-stopped
+
+    ports:
+      - "5800:5800"                   # GUI → http://SERVER-IP:5800
+
+    environment:
+      - USER_ID=1000
+      - GROUP_ID=1000
+      - TZ=America/Los_Angeles
+
+    volumes:
+      # GUI config storage
+      - /path/to/handbrake/config:/config
+
+      # Same presets as hb-web for consistency
+      - ./presets:/presets
+
+      # Optional — access media for browsing/encoding
+      - /mnt/nas/PLEX_MEDIA:/mnt/nas/PLEX_MEDIA
+      - /mnt/media:/mnt/media
+      - /mnt/media1:/mnt/media1
