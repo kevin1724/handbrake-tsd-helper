@@ -249,6 +249,7 @@ MIT — free for personal, commercial & homelab use.
 ## 💙 Built For Media Nerds
 
 If you:
+
 ✅ hoard TBs of movies  
 ✅ run Plex, Jellyfin, or Emby  
 ✅ care about efficiency & organization  
