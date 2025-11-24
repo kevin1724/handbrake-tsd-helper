@@ -20,9 +20,9 @@ services:
 
     volumes:
       # ✅ Media mount points — MUST match config.py ROOTS
-      - /mnt/nas/PLEX_MEDIA:/mnt/nas/PLEX_MEDIA:ro
-      - /mnt/media:/mnt/media:ro
-      - /mnt/media1:/mnt/media1:ro
+      - /mnt/nas/PLEX_MEDIA:/mnt/nas/PLEX_MEDIA
+      - /mnt/media:/mnt/media
+      - /mnt/media1:/mnt/media1
 
       # ✅ Persist jobs.json + log history across rebuilds
       - ./data:/app/data

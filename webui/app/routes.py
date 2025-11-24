@@ -72,6 +72,20 @@ def register_routes(app):
             preset_dir=PRESET_DIR,
         )
 
+    @app.route("/debug_config")
+    def debug_config():
+        """
+        Simple debug endpoint so we can see what the backend thinks
+        the roots and preset files are.
+        """
+        preset_files = list_preset_files()
+        return jsonify(
+            roots=ROOTS,
+            preset_files=preset_files,
+            preset_dir=PRESET_DIR,
+        )
+
+
     # ------------- Directory listing -------------
 
     @app.route("/list")

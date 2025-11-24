@@ -21,8 +21,8 @@ VIDEO_EXTS = (".mkv", ".mp4", ".avi", ".mov", ".m4v")
 # -----------------------------
 ROOTS = [
     ("/mnt/nas/PLEX_MEDIA", "NAS Plex (/mnt/nas/PLEX_MEDIA)"),
-    ("/mnt/media", "Media Disk 1 (/mnt/media)"),
-    ("/mnt/media1", "Media Disk 2 (/mnt/media1)"),
+    ("/mnt/media",          "Media Disk 1 (/mnt/media)"),
+    ("/mnt/media1",         "Media Disk 2 (/mnt/media1)"),
 ]
 
 # Used for validating user-submitted file paths

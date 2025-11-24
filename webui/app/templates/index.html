@@ -2,8 +2,6 @@
      HTML template (single-page UI)
 --------------------------------------------------------------------- -->
 
-
-
 <!doctype html>
 <html>
 <head>
@@ -278,16 +276,47 @@
   </div>
 
 <script>
-const roots = {{ roots | tojson }};
-const presetFiles = {{ preset_files | tojson }};
-let currentPath = roots[0][0];
+// Server-side data injected by Flask/Jinja.
+// Use default([]) so the page doesn't explode if something is missing.
+const roots = {{ roots|default([], true)|tojson|safe }};
+const presetFiles = {{ preset_files|default([], true)|tojson|safe }};
+
+console.log('DEBUG roots from server:', roots);
+console.log('DEBUG presetFiles from server:', presetFiles);
+
+let currentPath = null;
 let currentJobId = null;
 let statusTimer = null;
 let jobsTimer = null;
 
+function safeInitCurrentPath() {
+  if (Array.isArray(roots) && roots.length > 0 && Array.isArray(roots[0]) && roots[0].length > 0) {
+    currentPath = roots[0][0];
+  } else {
+    console.error('No valid roots configured. Check config.py and /debug_config.');
+    const rootSelect = document.getElementById('rootSelect');
+    if (rootSelect) {
+      rootSelect.innerHTML = '';
+      const opt = document.createElement('option');
+      opt.value = '';
+      opt.textContent = 'No roots configured - see /debug_config';
+      rootSelect.appendChild(opt);
+    }
+  }
+}
+
 function populateRoots() {
   const select = document.getElementById('rootSelect');
   select.innerHTML = '';
+
+  if (!Array.isArray(roots) || roots.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No roots configured';
+    select.appendChild(opt);
+    return;
+  }
+
   roots.forEach(([path, label], idx) => {
     const opt = document.createElement('option');
     opt.value = path;
@@ -300,6 +329,14 @@ function populateRoots() {
 function populatePresetFileSelect(selectId, currentFile) {
   const select = document.getElementById(selectId);
   select.innerHTML = '';
+
+  if (!Array.isArray(presetFiles) || presetFiles.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No preset files found';
+    select.appendChild(opt);
+    return;
+  }
 
   let hasCurrent = false;
   presetFiles.forEach(path => {
@@ -323,6 +360,11 @@ function populatePresetFileSelect(selectId, currentFile) {
 }
 
 function loadDir(path) {
+  if (!path) {
+    console.error('loadDir called with empty path');
+    return;
+  }
+
   fetch('/list?path=' + encodeURIComponent(path))
     .then(r => r.json())
     .then(data => {
@@ -333,25 +375,38 @@ function loadDir(path) {
       currentPath = data.path;
       document.getElementById('currentPath').textContent = data.path;
 
+      // ------- Folder list -------
       const dirsUl = document.getElementById('dirs');
       dirsUl.innerHTML = '';
       data.dirs.forEach(name => {
         const li = document.createElement('li');
         li.textContent = name;
         li.onclick = () => {
-          const newPath = data.path.replace(/\\/$/, '') + '/' + name;
+          let base = data.path;
+
+          // Ensure proper formatting
+          if (!base.startsWith('/')) base = '/' + base;
+          if (base.endsWith('/')) base = base.slice(0, -1);
+
+          const newPath = base + '/' + name;
+          console.log('Navigating to:', newPath);
           loadDir(newPath);
         };
         dirsUl.appendChild(li);
       });
 
+      // ------- File list -------
       const filesUl = document.getElementById('files');
       filesUl.innerHTML = '';
       data.files.forEach(name => {
         const li = document.createElement('li');
         li.textContent = name;
         li.onclick = () => {
-          const fullPath = data.path.replace(/\\/$/, '') + '/' + name;
+          let base = data.path;
+          if (!base.startsWith('/')) base = '/' + base;
+          if (base.endsWith('/')) base = base.slice(0, -1);
+
+          const fullPath = base + '/' + name;
           document.getElementById('selectedFile').value = fullPath;
         };
         filesUl.appendChild(li);
@@ -750,13 +805,24 @@ function savePresetConfigUI() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  // Fill the Root dropdown from the roots array
   populateRoots();
-  const initialRoot = roots[0][0];
-  loadDir(initialRoot);
 
-  document.getElementById('rootSelect').addEventListener('change', (e) => {
-    loadDir(e.target.value);
-  });
+  // Set currentPath safely based on roots
+  safeInitCurrentPath();
+
+  if (currentPath) {
+    loadDir(currentPath);
+  }
+
+  const rootSelectEl = document.getElementById('rootSelect');
+  if (rootSelectEl) {
+    rootSelectEl.addEventListener('change', (e) => {
+      if (e.target.value) {
+        loadDir(e.target.value);
+      }
+    });
+  }
 
   document.getElementById('upBtn').onclick = goUp;
   document.getElementById('startBtn').onclick = startEncode;
