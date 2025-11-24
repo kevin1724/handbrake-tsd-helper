@@ -1,217 +1,236 @@
+🎬 HandBrake TSD Helper — Web UI + Automated Transcoding Queue
 
-# 🎬 HandBrake TSD Helper — Web UI + Automated Transcoding Queue
+HandBrake TSD Helper is a lightweight, self-hostable web interface for HandBrakeCLI — built for NAS owners, Plex users, and media hoarders who want simple, safe, automated transcoding without launching a desktop GUI.
 
-HandBrake TSD Helper is a lightweight, self-hostable web interface for **HandBrakeCLI** — built for NAS, media servers, and Plex users who want simple, safe, automated transcoding without opening a desktop GUI.
+Browse media folders, queue encodes, batch-process entire shows, track progress, pause the queue, download logs, rename files, and automatically avoid double-encoding — all from a clean dark-mode web UI.
 
-Browse media folders, queue encodes, batch-process entire shows, track live progress, download logs, rename files, skip already-transcoded content — all from a clean dark-mode web UI.
+🔤 What does TSD mean?
 
----
+TSD = Transcoded
 
-## ✅ Key Features
+It’s our shorthand tag appended to finished files:
 
-- 🌐 Web UI — accessible from any device
-- 🧭 File browser — pick files visually
-- 🎚️ Preset selector (1080p / 4K included)
-- 📥 Queue system — jobs run one-by-one
-- ⏳ Live progress + real-time logs
-- 🛑 Cancel running encodes
-- 📂 Batch encode an entire folder
-- 🔁 Recursive encode (all subfolders — ideal for TV seasons)
-- 🚫 Automatically skips files already ending in `-TSD`
-- 🏷️ Batch rename tool to append `-TSD`
-- 📜 Job history persists across container restarts
-- 🧾 Download logs for each job
-- 🌙 Modern dark-mode UI
-- 🐳 Fully Dockerized — zero system dependencies required
+MovieName- TSD.mkv
 
----
 
-## 📌 Project Goals
+✅ Indicates the file has already been processed
+✅ Prevents accidental re-encoding
+✅ Keeps Plex/Sonarr/Radarr libraries tidy
+✅ Works perfectly with bulk automation
 
-✔ Make HandBrakeCLI usable from a phone, tablet, or browser  
-✔ Protect media libraries from re-encoding mistakes  
-✔ Automate large batch workflows — set and forget  
-✔ Stay simple, lightweight, fast, and self-hosted
+If a filename already ends in -TSD, the system politely skips it. No wasted CPU, no duplicates — just clean media.
 
----
+✅ Key Features
 
-## 🏗️ Folder Structure
+🌐 Web UI — accessible from any device
 
-```
+🧭 File browser — visually pick media files
+
+🎚️ Preset selector (1080p / 4K included)
+
+📥 Automatic job queue — one at a time
+
+⏳ Live progress + streaming logs
+
+🛑 Cancel running encodes
+
+✂️ Remove jobs from queue
+
+🔀 Pause/resume queue anytime
+
+📂 Batch encode entire folders
+
+🔁 Recursive scanning for TV seasons
+
+🚫 Auto-skip already transcoded (-TSD)
+
+🏷 Batch rename helper for consistency
+
+📜 Job history survives container restarts
+
+📄 Per-job log downloads
+
+🌙 Modern dark-mode UI
+
+🐳 Fully Dockerized — no HandBrake install required
+
+🎯 Project Goals
+
+✔ Make HandBrakeCLI approachable
+✔ Protect media libraries from mistakes
+✔ Automate long batch encodes
+✔ Run reliably on home servers
+✔ Stay clean, fast, and self-hosted
+
+Not trying to be a full media-management system — just the best darn encoding helper.
+
+🏗️ Folder Structure
 handbrake-tsd-helper/
 │
 ├── docker-compose.yml
+├── Dockerfile
 │
-├── webui/
-│   ├── Dockerfile
-│   └── app.py              ← Flask web server
+├── webui/                  ← Flask web server
+│   ├── __init__.py
+│   ├── routes.py
+│   ├── jobs.py
+│   ├── presets.py
+│   ├── config.py
+│   └── templates/          ← HTML
 │
 ├── worker/
-│   └── encode-one.sh       ← Runs actual HandBrakeCLI encode
+│   └── encode-one.sh       ← Runs HandBrakeCLI encode
 │
-├── presets/
+├── presets/                ← Your HandBrake preset JSONs
 │   ├── full1080.json
 │   └── 4k.json
 │
-└── data/
-    └── jobs.json           ← Saved job history & queue
-```
+└── data/                   ← Persistent job state
+    └── jobs.json
 
----
+🐳 Run With Docker Compose
 
-## 🐳 Run With Docker Compose
+1️⃣ Clone repo:
 
-1. Clone repo:
-
-```bash
 git clone git@github.com:kevin1724/handbrake-tsd-helper.git
 cd handbrake-tsd-helper
-```
 
-2. Start:
 
-```bash
+2️⃣ Start:
+
 docker compose up -d --build
-```
 
-3. Open the UI:
 
-```
+3️⃣ Open UI:
+
 http://SERVER-IP:8081
-```
 
----
 
-## ⚙️ Requirements
+✅ Works from desktop, tablet, or phone.
 
-- Docker + Docker Compose
-- Linux host — Ubuntu, Debian, Proxmox, UnRAID, TrueNAS, etc.
-- Media directories mounted on host (SMB/NFS ok)
-- CPU-based encoding (GPU support coming soon)
+⚙️ Requirements
+
+Docker + Docker Compose
+
+Linux server or NAS
+
+Media mounted into container
+
+CPU encoding (GPU optional soon)
 
 Tested on:
 
-- Intel i5, i7 home servers
-- NFS-mounted Plex libraries
-- Proxmox LXC bind-mounts
+✅ Ubuntu / Debian
+✅ Proxmox LXC bind-mounts
+✅ TrueNAS SCALE
+✅ UnRAID
+✅ NFS + SMB shares
 
----
+🧭 Everyday Usage
 
-## 🧭 Usage Workflow
+Pick a storage root
 
-1️⃣ Select a storage root  
-2️⃣ Browse into movie/show folder  
-3️⃣ Click a file to select it  
-4️⃣ Choose preset (1080p or 4K)  
-5️⃣ Click **Start Encode**  
-6️⃣ Watch progress, logs, and job history update  
-7️⃣ Wait for completion ✅
+Browse to a folder
 
----
+Select a file
 
-## 📦 Batch Encoding
+Choose preset
 
-### Encode all videos in folder:
+Click Start Encode
 
-✅ Great for movie collections
+Chill — logs + progress update live
 
-### Recursive encode (includes subfolders):
+Batch workflows?
 
-✅ Perfect for TV shows with Season folders:
+✅ Yes
+Recursive TV-season processing?
 
-```
+✅ Yes
+
+📦 Batch Encoding
+Encode everything inside one folder:
+
+✅ Great for movie libraries
+
+Recursive mode (includes subfolders):
+
+✅ Perfect for shows:
+
 Shows/
- └── Breaking Bad/
-     ├── Season 01/
-     ├── Season 02/
-     └── Season 03/
-```
+ └── The Office/
+     ├── Season 1
+     ├── Season 2
+     └── Season 3
 
-Both queue encodes safely — one at a time.
 
----
+Each file is automatically queued — safely.
 
-## 🛡️ Safety Features
+🛡️ Safety Features
 
-✅ Automatically skips files already tagged `-TSD`  
-✅ Prevents accidental double-encoding  
-✅ Will not encode outside configured media directories  
-✅ Won’t overwrite existing files unless explicitly defined  
-✅ Cancel button terminates running encoder safely
+✅ Auto-skip already transcoded files (-TSD)
+✅ Never escapes allowed media directories
+✅ No overwriting originals unless you modify script
+✅ Cancel kills current encode safely
+✅ Job state auto-recovers after container restart
 
----
+🧹 Optional — Delete Original After Success
 
-## 🧹 Optional — Delete Original After Encoding
+Inside worker/encode-one.sh, uncomment:
 
-Modify `worker/encode-one.sh`:
-
-```bash
 rm -f "$SRC"
-```
 
-Disabled by default for safety.
 
----
+⚠️ Be 100% sure before enabling.
 
-## 🔥 Performance Notes
+🔥 Performance Notes
 
-- Optimized x265 CPU presets included
-- Dual-pass CRF 20 recommended balance
-- Uses all available CPU threads
-- Ideal for low-power home servers
+Uses all CPU threads
 
----
+Includes solid x265 presets
 
-## 🛠 Updating
+Ideal for home Plex servers
 
-```bash
+Faster than GUI when batch-encoding
+
+GPU support coming — NVIDIA + QSV planned.
+
+🔁 Updating
 git pull
 docker compose up -d --build
-```
 
----
 
-## ❓ Troubleshooting
+Done ✅
 
-### UI loads but no files?
-Check bind mounts in `docker-compose.yml`
+❓ Common Issues
+UI shows empty folders?
 
-### Output cannot be written?
-Fix permissions:
+Fix your volume mounts:
 
-```bash
-sudo chown -R 1000:1000 /mnt/media
-```
+- /path/to/media:/mnt/media:ro
 
-### Job stuck or unresponsive?
-Restart container:
+Permission denied on write?
+sudo chown -R 1000:1000 /path/to/media
 
-```bash
-docker restart hb-web
-```
+Queue won’t start?
 
----
+Check that storage paths exist inside container.
 
-## 📍 Roadmap / Planned Enhancements
+🧭 Roadmap
 
-- ✅ GPU encoding support (Intel/NVIDIA)
-- ✅ Push notifications on completion
-- ✅ Upload custom HandBrake presets via UI
-- ✅ Move/delete output location selector
-- ✅ Web auth & user permissions
-- ✅ Plex library auto-refresh
-- ✅ Docker Hub prebuilt images
+✅ Remove-from-queue controls
+✅ Pause/resume dispatcher
+⬜ GPU encode support
+⬜ Web authentication
+⬜ Drag-and-drop upload
+⬜ Notifications (Discord/webhook)
+⬜ Multi-output presets
+⬜ Auto Plex library refresh
 
----
+🤝 Contributing
 
-## 🤝 Contributing
+Ideas, bugs, UI tweaks, preset suggestions — all welcome.
+Open an issue or PR anytime.
 
-PRs & feature requests welcome!
+📄 License
 
----
-
-## 📄 License
-
-MIT — free for personal, commercial & self-hosted use.
-
----
+MIT — use freely, self-host happily.
