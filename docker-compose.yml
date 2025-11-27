@@ -21,10 +21,10 @@ services:
     volumes:
       - ./webui:/app/webui 
       # ✅ Media mount points — MUST match config.py ROOTS
-      
-      - /mnt/nas/PLEX_MEDIA:/mnt/nas/PLEX_MEDIA
-      - /mnt/media:/mnt/media
-      - /mnt/media1:/mnt/media1
+
+      - /mnt/nas/PLEX_MEDIA:/media/PLEX_MEDIA
+      - /mnt/media:/media/Media
+      - /mnt/media1:/media/Media1
 
       # ✅ Persist jobs.json + log history across rebuilds
       - ./data:/app/data
