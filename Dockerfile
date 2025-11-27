@@ -58,6 +58,13 @@ ENV HB_PRESET_DIR=/presets
 # Make Python see /app as the root for imports (so "webui" package works)
 ENV PYTHONPATH=/app
 
+# Enable Flask debug / auto-reload behavior
+ENV FLASK_ENV=development
+ENV FLASK_DEBUG=1
+
+# Optional: unbuffered logs so you see output immediately
+ENV PYTHONUNBUFFERED=1
+
 # -------------------------------
 # Expose port & default command
 # -------------------------------

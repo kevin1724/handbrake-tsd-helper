@@ -1,41 +1,44 @@
 /* =========================================================
    Color theme variables
+   - Global CSS variables used for dark theme + accents
    --------------------------------------------------------- */
 :root {
-  --bg: #121212;
-  --bg-alt: #1e1e1e;
-  --border: #333;
-  --text: #e5e5e5;
-  --accent: #00bcd4;
-  --accent-soft: #004852;
+  --bg: #121212;        /* Main page background (dark gray/black) */
+  --bg-alt: #1e1e1e;    /* Slightly lighter background (cards, inputs, lists) */
+  --border: #333;       /* Standard border color for boxes/tables/lists */
+  --text: #e5e5e5;      /* Default text color (light gray) */
+  --accent: #00bcd4;    /* Primary accent color (hover states, links, etc.) */
+  --accent-soft: #004852; /* Darker accent for normal button background */
 }
 
 /* =========================================================
    Global layout + typography
    --------------------------------------------------------- */
 body {
+  /* System fonts for a clean native look */
   font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  margin: 20px;
-  background: var(--bg);
-  color: var(--text);
+  margin: 20px;          /* Padding around the whole app (from window edge) */
+  background: var(--bg); /* Use main dark background */
+  color: var(--text);    /* Default text color for the whole app */
 }
 
 h1,
 h2,
 h3 {
-  margin-top: 0;
-  color: #ffffff;
+  margin-top: 0;         /* Remove default top margin (tighter spacing) */
+  color: #ffffff;        /* Make headings pure white for contrast */
 }
 
-/* General spacing row helper */
+/* General spacing row helper:
+   - Used as a wrapper for each "row" of controls or content. */
 .row {
-  margin-bottom: 10px;
+  margin-bottom: 10px;   /* Space between stacked rows */
 }
 
-/* Small text helper (used for paths, hints, etc.) */
+/* Small text helper (used for file paths, hints, status labels, etc.) */
 .small {
-  font-size: 12px;
-  opacity: 0.85;
+  font-size: 12px;       /* Slightly smaller than normal body text */
+  opacity: 0.85;         /* Slight fade to show it's secondary info */
 }
 
 /* =========================================================
@@ -44,28 +47,31 @@ h3 {
 select,
 input[type="text"],
 button {
-  background: var(--bg-alt);
-  color: var(--text);
-  border: 1px solid var(--border);
-  padding: 4px 8px;
-  border-radius: 4px;
+  background: var(--bg-alt);     /* Match card background for inputs/buttons */
+  color: var(--text);            /* Light text on dark background */
+  border: 1px solid var(--border); /* Subtle border to define edges */
+  padding: 4px 8px;              /* Inner spacing so content isn't cramped */
+  border-radius: 4px;            /* Slightly rounded corners for modern look */
 }
 
-/* Default button styles */
+/* Default button styles
+   - Applies to every <button> element unless overridden */
 button {
-  cursor: pointer;
-  background: var(--accent-soft);
+  cursor: pointer;               /* Pointer cursor on hover to show it's clickable */
+  background: var(--accent-soft);/* Dark teal accent as default button color */
 }
 
-/* Hover state */
+/* Hover state
+   - When hovering any button, brighten background to main accent color */
 button:hover {
-  background: var(--accent);
+  background: var(--accent);     /* Brighter cyan on hover */
 }
 
-/* Disabled button state */
+/* Disabled button state
+   - Used for buttons like "Cancel" when no job is active */
 button:disabled {
-  opacity: 0.5;
-  cursor: default;
+  opacity: 0.5;                  /* Faded appearance to show disabled */
+  cursor: default;               /* Remove pointer cursor when disabled */
 }
 
 /* =========================================================
@@ -73,29 +79,31 @@ button:disabled {
    --------------------------------------------------------- */
 #dirs,
 #files {
-  list-style: none;
-  padding-left: 0;
-  max-height: 300px;
-  overflow-y: auto;
-  border: 1px solid var(--border);
-  margin: 0;
-  background: var(--bg-alt);
+  list-style: none;              /* Remove bullet points from <ul> lists */
+  padding-left: 0;               /* Remove default left padding from <ul> */
+  max-height: 300px;             /* Cap height so long lists scroll */
+  overflow-y: auto;              /* Enable vertical scroll if content exceeds max-height */
+  border: 1px solid var(--border); /* Box around the list area */
+  margin: 0;                     /* No extra spacing around lists */
+  background: var(--bg-alt);     /* Use alt background to distinguish from page */
 }
 
-/* Individual list items */
+/* Individual list items in directory/file lists */
 #dirs li,
 #files li {
-  padding: 4px 8px;
-  cursor: pointer;
+  padding: 4px 8px;              /* Spacing inside each row */
+  cursor: pointer;               /* Show it's clickable (for navigation/selection) */
 }
 
-/* Hover on list items */
+/* Hover on list items
+   - Slightly lighter background to highlight hovered row */
 #dirs li:hover,
 #files li:hover {
   background: #2a2a2a;
 }
 
-/* Folders are bold to stand out from files */
+/* Folders are bold to stand out from files
+   - Makes it easier to distinguish folders from video files at a glance */
 #dirs li {
   font-weight: bold;
 }
@@ -104,111 +112,114 @@ button:disabled {
    Status / log output area
    --------------------------------------------------------- */
 #statusBox {
-  margin-top: 10px;
-  white-space: pre-wrap;
-  background: #000;
-  color: #0f0;
-  padding: 8px;
-  font-size: 12px;
-  max-height: 200px;
-  overflow-y: auto;
-  border-radius: 4px;
-  border: 1px solid var(--border);
+  margin-top: 10px;              /* Space above logs box */
+  white-space: pre-wrap;         /* Preserve line breaks and spacing from log text */
+  background: #000;              /* Black "console" style background */
+  color: #0f0;                   /* Green text, classic terminal look */
+  padding: 8px;                  /* Inner padding for readability */
+  font-size: 12px;               /* Smaller font to fit more log text */
+  max-height: 200px;             /* Keep height manageable, scroll for overflow */
+  overflow-y: auto;              /* Enable vertical scroll for long logs */
+  border-radius: 4px;            /* Rounded corners to match the rest of UI */
+  border: 1px solid var(--border); /* Border to separate from background */
 }
 
 /* =========================================================
    Progress bar + label
    --------------------------------------------------------- */
 #progressBar {
-  height: 14px;
+  height: 14px;                  /* Make progress bar slightly taller than default */
 }
 
 #progressLabel {
-  font-size: 14px;
-  margin-left: 8px;
+  font-size: 14px;               /* Slightly larger than small text for visibility */
+  margin-left: 8px;              /* Space between bar and text label */
 }
 
 /* =========================================================
    Jobs table (history / queue)
    --------------------------------------------------------- */
 table {
-  width: 100%;
-  border-collapse: collapse;
-  background: var(--bg-alt);
-  font-size: 13px;
+  width: 100%;                   /* Stretch table to fill container width */
+  border-collapse: collapse;     /* Merge cell borders into single lines */
+  background: var(--bg-alt);     /* Same background as cards/lists */
+  font-size: 13px;               /* Slightly smaller text for dense data */
 }
 
-/* Table cells */
+/* Table cells: header (<th>) and data (<td>) */
 th,
 td {
-  border: 1px solid var(--border);
-  padding: 4px 6px;
-  text-align: left;
+  border: 1px solid var(--border); /* Grid lines between rows/columns */
+  padding: 4px 6px;               /* Inner spacing for readability */
+  text-align: left;               /* Left-align text in all cells */
 }
 
 /* Table header row */
 th {
-  background: #222;
+  background: #222;              /* Darker header row to separate from body */
 }
 
 /* =========================================================
    Job status color coding
+   - Used on status cells to visually show job state
    --------------------------------------------------------- */
 .job-status-done {
-  color: #4caf50;
+  color: #4caf50;                /* Green = success */
 }
 
 .job-status-error {
-  color: #ff5252;
+  color: #ff5252;                /* Red = error/failure */
 }
 
 .job-status-running {
-  color: #ffb300;
+  color: #ffb300;                /* Yellow/orange = currently running */
 }
 
 .job-status-canceled {
-  color: #9e9e9e;
+  color: #9e9e9e;                /* Grey = canceled by user/system */
 }
 
 .job-status-queued {
-  color: #42a5f5;
+  color: #42a5f5;                /* Blue = waiting in queue */
 }
 
 /* =========================================================
    Section cards (main panels)
+   - Used to wrap main sections: browser, presets, job history, etc.
    --------------------------------------------------------- */
 .section-card {
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  padding: 10px;
-  background: rgba(255, 255, 255, 0.03);
-  margin-bottom: 16px;
+  border: 1px solid var(--border);          /* Outline around each card */
+  border-radius: 6px;                       /* Rounded corners */
+  padding: 10px;                            /* Inner padding so content isn't cramped */
+  background: rgba(255, 255, 255, 0.03);    /* Slight lift from background (very subtle) */
+  margin-bottom: 16px;                      /* Space between stacked cards */
 }
 
 /* =========================================================
    Links
    --------------------------------------------------------- */
 a {
-  color: var(--accent);
-  text-decoration: none;
+  color: var(--accent);          /* Use primary accent color for links */
+  text-decoration: none;        /* No underline by default */
 }
 
 a:hover {
-  text-decoration: underline;
+  text-decoration: underline;   /* Add underline on hover for clarity */
 }
 
 /* =========================================================
    Inline input group (label + select on one line)
+   - Used in preset section where label + <select> share a row
    --------------------------------------------------------- */
 .inline-input-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
-  align-items: center;
+  display: flex;                /* Flex layout to put items on one row */
+  flex-wrap: wrap;              /* Allow wrapping on smaller screens */
+  gap: 6px;                     /* Space between label and select */
+  align-items: center;          /* Vertically center items in the row */
 }
 
-/* Make select grow to fill remaining space */
+/* Make select grow to fill remaining horizontal space */
 .inline-input-group select {
-  flex: 1 1 auto;
-  min-width: 180px;
+  flex: 1 1 auto;               /* Let select expand but still shrink if needed */
+  min-width: 180px;             /* Don't let select get too tiny */
 }

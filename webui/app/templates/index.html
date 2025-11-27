@@ -1,47 +1,74 @@
 <!-- -------------------------------------------------------------------
      HTML template (single-page UI)
+     - Rendered by Flask/Jinja.
+     - Provides the full web UI for browsing media, starting encodes,
+       managing presets, and viewing job history.
 --------------------------------------------------------------------- -->
 
 <!doctype html>
 <html>
 <head>
+  <!-- Character encoding + page title -->
   <meta charset="utf-8">
   <title>HandBrake TSD Helper</title>
-  <!-- External CSS file -->
+  <!-- External CSS file for all styles (colors, layout, etc.) -->
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
 </head>
 <body>
+  <!-- Main page heading -->
   <h1>HandBrake One-shot Encoder (TSD)</h1>
 
+  <!-- =========================================================
+       SECTION 1: Browse & Select File
+       - Pick a root (NAS / media mount)
+       - Navigate folders and files
+       - Choose preset
+       - Start single or batch encodes
+       ========================================================= -->
   <div class="section-card">
     <h2>Browse & Select File</h2>
+
+    <!-- Root selection row:
+         - rootSelect: list of roots from server config (ROOTS in config.py)
+         - upBtn: go up one folder level relative to currentPath -->
     <div class="row">
       <label for="rootSelect">Root:</label>
       <select id="rootSelect"></select>
       <button id="upBtn">Up</button>
     </div>
 
+    <!-- Shows the full directory path currently being browsed -->
     <div class="row">
       <strong>Current path:</strong>
       <span id="currentPath" class="small"></span>
     </div>
 
+    <!-- Two-column layout:
+         Left side: folders (dirs)
+         Right side: files (video files only) -->
     <div class="row" style="display:flex; gap:10px;">
+      <!-- Folder list: each <li> is a subdirectory you can click into -->
       <div style="flex:1;">
         <strong>Folders</strong>
         <ul id="dirs"></ul>
       </div>
+      <!-- File list: each <li> is a video file you can select for encode -->
       <div style="flex:1;">
         <strong>Video files</strong>
         <ul id="files"></ul>
       </div>
     </div>
 
+    <!-- Shows which specific file will be encoded when you press Start -->
     <div class="row">
       <label>Selected file:</label>
       <input type="text" id="selectedFile" style="width:80%;" readonly>
     </div>
 
+    <!-- Preset mode selector:
+         - auto: guess 1080p vs 4K preset based on filename resolution
+         - 1080: force 1080p preset
+         - 4k: force 4K preset -->
     <div class="row">
       <label for="presetSelect">Preset mode:</label>
       <select id="presetSelect">
@@ -51,38 +78,68 @@
       </select>
     </div>
 
+    <!-- Buttons for starting and canceling a single encode job -->
     <div class="row">
+      <!-- startBtn: sends POST /encode with {src, preset} -->
       <button id="startBtn">Start Encode (queue)</button>
+      <!-- cancelBtn: sends POST /cancel/<job_id> for the active job -->
       <button id="cancelBtn" disabled>Cancel Encode</button>
     </div>
 
+    <!-- Buttons to queue batch encodes:
+         - Current folder only
+         - Current folder + all subfolders -->
     <div class="row">
+      <!-- batchEncodeBtn: POST /batch_encode with {path, preset} -->
       <button id="batchEncodeBtn">Batch encode ALL videos in this folder (queued)</button>
+      <!-- batchEncodeRecursiveBtn: POST /batch_encode_recursive with {path, preset} -->
       <button id="batchEncodeRecursiveBtn">Batch encode this folder + subfolders (queued)</button>
     </div>
 
+    <!-- Progress bar + label for the currently selected job -->
     <div class="row">
+      <!-- progressBar:
+           - Hidden by default (display:none)
+           - Shows numeric % while encoding -->
       <progress id="progressBar" max="100" value="0" style="width:100%; display:none;"></progress>
+      <!-- progressLabel: text label (e.g., "Queued", "45.2%") -->
       <span id="progressLabel"></span>
     </div>
 
+    <!-- Status and log output for the active job -->
     <div class="row">
       <strong>Status / Log</strong>
+      <!-- statusText: short summary (Status: running / done / error / etc.) -->
       <div id="statusText" class="small"></div>
+      <!-- statusBox: detailed log text pulled from job log file -->
       <div id="statusBox"></div>
     </div>
   </div>
 
+  <!-- =========================================================
+       SECTION 2: Batch Rename Helper
+       - Renames all video files in currentPath to include "-TSD"
+       - Only acts on visible/current folder, not subfolders
+       ========================================================= -->
   <div class="section-card">
     <h2>Batch Rename Helper</h2>
     <p class="small">
       This will rename <strong>all video files</strong> in the current folder to add
       <code>-TSD</code> before the extension (only if they don't already have it).
     </p>
+    <!-- batchRenameBtn: triggers POST /batch_rename with currentPath -->
     <button id="batchRenameBtn">Batch rename visible folder to -TSD</button>
+    <!-- batchRenameResult: shows summary: renamed count + skipped count -->
     <div id="batchRenameResult" class="small"></div>
   </div>
 
+  <!-- =========================================================
+       SECTION 3: Preset Settings
+       - Controls which HandBrake JSON presets are used for:
+         * 1080p jobs
+         * 4K/2160p jobs
+       - Saved on backend and used by "auto"/1080/4k modes
+       ========================================================= -->
   <div class="section-card">
     <h2>Preset Settings (saved defaults for Auto mode)</h2>
     <p class="small">
@@ -92,70 +149,114 @@
       The dropdowns are populated from the <code>{{ preset_dir }}</code> folder.
     </p>
 
+    <!-- 1080p preset configuration -->
     <div class="row">
       <h3 style="margin-bottom:4px;">Default 1080p preset file</h3>
       <div class="inline-input-group">
         <label>HB_PRESET_FILE:</label>
+        <!-- preset1080FileSelect: filled from presetFiles JS, saved via POST /preset_config -->
         <select id="preset1080FileSelect"></select>
       </div>
     </div>
 
+    <!-- 4K / 2160p preset configuration -->
     <div class="row" style="margin-top:10px;">
       <h3 style="margin-bottom:4px;">Default 4K / 2160p preset file</h3>
       <div class="inline-input-group">
         <label>HB_PRESET_FILE:</label>
+        <!-- preset4kFileSelect: filled from presetFiles JS, saved via POST /preset_config -->
         <select id="preset4kFileSelect"></select>
       </div>
     </div>
 
+    <!-- Save preset configuration to backend -->
     <div class="row" style="margin-top:10px;">
+      <!-- savePresetConfigBtn: sends the selected 1080/4k files to POST /preset_config -->
       <button id="savePresetConfigBtn">Save preset settings</button>
+      <!-- presetSaveStatus: shows "Preset settings saved." or error text -->
       <span id="presetSaveStatus" class="small"></span>
     </div>
   </div>
 
+  <!-- =========================================================
+       SECTION 4: Job History / Queue
+       - Displays all jobs (queued/running/done/error/canceled)
+       - Lets you pause the global worker queue
+       - Lets you clear finished jobs from history + delete logs
+       ========================================================= -->
   <div class="section-card">
     <h2>Job History (persists across restarts, queued)</h2>
+
+    <!-- Queue control row (pause/resume + clear finished) -->
     <div class="row" style="display:flex; gap:10px; align-items:center;">
+      <!-- pauseQueueBtn: toggles queue paused state via POST /pause_queue -->
       <button id="pauseQueueBtn">Pause queue</button>
+      <!-- queueStatusLabel: text saying "Queue is running." or "Queue is paused..." -->
       <span id="queueStatusLabel" class="small"></span>
+      <!-- clearFinishedBtn: clears done/error jobs via POST /clear_finished_jobs -->
       <button id="clearFinishedBtn" style="margin-left:auto;">Clear finished jobs (done/error)</button>
     </div>
+
+    <!-- Table listing all jobs, with status, progress, and actions -->
     <table>
       <thead>
         <tr>
-          <th>Job ID</th>
-          <th>File</th>
-          <th>Preset</th>
-          <th>Status</th>
-          <th>Return</th>
-          <th>Progress</th>
-          <th>Log</th>
-          <th>Actions</th>
+          <th>Job ID</th>     <!-- Unique job identifier (UUID or similar) -->
+          <th>File</th>       <!-- Source file path for the encode -->
+          <th>Preset</th>     <!-- Chosen preset mode (auto/1080/4k) -->
+          <th>Status</th>     <!-- queued/running/done/error/canceled -->
+          <th>Return</th>     <!-- Process return code (0 = OK, non-zero = error) -->
+          <th>Progress</th>   <!-- Last known % progress for this job -->
+          <th>Log</th>        <!-- Link to download job log file -->
+          <th>Actions</th>    <!-- Extra buttons like "Remove from queue" when queued -->
         </tr>
       </thead>
+      <!-- jobsTableBody: populated dynamically in refreshJobs() -->
       <tbody id="jobsTableBody">
       </tbody>
     </table>
   </div>
 
 <script>
+/**
+ * ==============================
+ * CLIENT-SIDE JAVASCRIPT LOGIC
+ * ==============================
+ * - Talks to Flask backend via fetch()
+ * - Handles:
+ *   * Loading directory listings
+ *   * Managing currentPath
+ *   * Starting/canceling jobs
+ *   * Batch operations
+ *   * Preset configuration
+ *   * Queue pause/resume
+ *   * Periodic job list refresh
+ */
+
 // Server-side data injected by Flask/Jinja.
-// Use default([]) so the page doesn't explode if something is missing.
+// roots: list of [path, label] pairs from config (ex: ["/mnt/media", "Media (/mnt/media)"])
+// presetFiles: list of available preset JSON files under PRESET_DIR.
+// Use default([]) so it doesn't crash when missing.
 const roots = {{ roots|default([], true)|tojson|safe }};
 const presetFiles = {{ preset_files|default([], true)|tojson|safe }};
 
 console.log('DEBUG roots from server:', roots);
 console.log('DEBUG presetFiles from server:', presetFiles);
 
-let currentPath = null;
-let currentJobId = null;
-let statusTimer = null;
-let jobsTimer = null;
+// Global state variables
+let currentPath = null;   // The directory currently being browsed
+let currentJobId = null;  // The job ID we are currently tracking with checkStatus()
+let statusTimer = null;   // Interval timer for polling /status/<job_id>
+let jobsTimer = null;     // Interval timer for refreshing job list + queue status
 
+/**
+ * Safely initialize currentPath from the roots array.
+ * If valid roots exist, use the first one as the default.
+ * If not, show a "No roots configured" message in the dropdown.
+ */
 function safeInitCurrentPath() {
   if (Array.isArray(roots) && roots.length > 0 && Array.isArray(roots[0]) && roots[0].length > 0) {
-    currentPath = roots[0][0];
+    currentPath = roots[0][0];  // first root path
   } else {
     console.error('No valid roots configured. Check config.py and /debug_config.');
     const rootSelect = document.getElementById('rootSelect');
@@ -169,10 +270,14 @@ function safeInitCurrentPath() {
   }
 }
 
+/**
+ * Populate the "Root" dropdown with all roots provided by the server.
+ */
 function populateRoots() {
   const select = document.getElementById('rootSelect');
   select.innerHTML = '';
 
+  // No roots? Show a placeholder option.
   if (!Array.isArray(roots) || roots.length === 0) {
     const opt = document.createElement('option');
     opt.value = '';
@@ -181,19 +286,26 @@ function populateRoots() {
     return;
   }
 
+  // Add each [path, label] as an <option>
   roots.forEach(([path, label], idx) => {
     const opt = document.createElement('option');
     opt.value = path;
     opt.textContent = label;
-    if (idx === 0) opt.selected = true;
+    if (idx === 0) opt.selected = true;  // select first root by default
     select.appendChild(opt);
   });
 }
 
+/**
+ * Populate one of the preset file dropdowns with the available presetFiles.
+ * - selectId: id of the <select> element to fill (preset1080FileSelect / preset4kFileSelect)
+ * - currentFile: a saved file path from the config so we can pre-select it
+ */
 function populatePresetFileSelect(selectId, currentFile) {
   const select = document.getElementById(selectId);
   select.innerHTML = '';
 
+  // If no presets are available, show a placeholder option
   if (!Array.isArray(presetFiles) || presetFiles.length === 0) {
     const opt = document.createElement('option');
     opt.value = '';
@@ -203,10 +315,12 @@ function populatePresetFileSelect(selectId, currentFile) {
   }
 
   let hasCurrent = false;
+
+  // Add each preset file path as an option
   presetFiles.forEach(path => {
     const opt = document.createElement('option');
     opt.value = path;
-    opt.textContent = path.split('/').pop();
+    opt.textContent = path.split('/').pop();  // show just filename
     if (currentFile && path === currentFile) {
       opt.selected = true;
       hasCurrent = true;
@@ -214,6 +328,7 @@ function populatePresetFileSelect(selectId, currentFile) {
     select.appendChild(opt);
   });
 
+  // If the config references a file not in presetFiles, keep it visible
   if (currentFile && !hasCurrent) {
     const opt = document.createElement('option');
     opt.value = currentFile;
@@ -223,6 +338,11 @@ function populatePresetFileSelect(selectId, currentFile) {
   }
 }
 
+/**
+ * Load directory contents from backend:
+ * GET /list?path=<path>
+ * Expected response: { path, dirs: [...], files: [...] }
+ */
 function loadDir(path) {
   if (!path) {
     console.error('loadDir called with empty path');
@@ -236,19 +356,23 @@ function loadDir(path) {
         alert(data.error);
         return;
       }
+      // Update global state and UI with the new path
       currentPath = data.path;
       document.getElementById('currentPath').textContent = data.path;
 
-      // ------- Folder list -------
+      // ------- Folder list (dirs) -------
       const dirsUl = document.getElementById('dirs');
       dirsUl.innerHTML = '';
       data.dirs.forEach(name => {
         const li = document.createElement('li');
         li.textContent = name;
+        // On click, navigate into that subfolder
         li.onclick = () => {
           let base = data.path;
 
-          // Ensure proper formatting
+          // Ensure proper formatting:
+          // - path starts with '/'
+          // - no trailing '/'
           if (!base.startsWith('/')) base = '/' + base;
           if (base.endsWith('/')) base = base.slice(0, -1);
 
@@ -259,12 +383,13 @@ function loadDir(path) {
         dirsUl.appendChild(li);
       });
 
-      // ------- File list -------
+      // ------- File list (files) -------
       const filesUl = document.getElementById('files');
       filesUl.innerHTML = '';
       data.files.forEach(name => {
         const li = document.createElement('li');
         li.textContent = name;
+        // On click, set "Selected file" input to full path
         li.onclick = () => {
           let base = data.path;
           if (!base.startsWith('/')) base = '/' + base;
@@ -282,17 +407,26 @@ function loadDir(path) {
     });
 }
 
+/**
+ * Navigate "up" one directory level based on currentPath.
+ * If already at a root path, do nothing.
+ */
 function goUp() {
   const rootPaths = roots.map(r => r[0]);
   if (rootPaths.includes(currentPath)) {
     return; // already at root
   }
+  // Split path into segments, drop last one, and rebuild
   const parts = currentPath.split('/').filter(Boolean);
   parts.pop();
   const newPath = '/' + parts.join('/');
   loadDir(newPath || currentPath);
 }
 
+/**
+ * Start a single encode job for the selected file and chosen preset.
+ * Sends POST /encode with JSON {src, preset}
+ */
 function startEncode() {
   const src = document.getElementById('selectedFile').value;
   const preset = document.getElementById('presetSelect').value;
@@ -311,7 +445,10 @@ function startEncode() {
       alert(data.error);
       return;
     }
+    // Store job ID to track status
     currentJobId = data.job_id;
+
+    // Update status UI for new job
     document.getElementById('statusText').textContent = "Job queued: " + currentJobId;
     document.getElementById('statusBox').textContent = '';
     const pb = document.getElementById('progressBar');
@@ -321,8 +458,10 @@ function startEncode() {
 
     document.getElementById('cancelBtn').disabled = false;
 
+    // Start polling job status every 2 seconds
     if (statusTimer) clearInterval(statusTimer);
     statusTimer = setInterval(checkStatus, 2000);
+    // Refresh job list right away
     refreshJobs();
   })
   .catch(err => {
@@ -331,6 +470,10 @@ function startEncode() {
   });
 }
 
+/**
+ * Cancel the currently tracked job (currentJobId).
+ * Sends POST /cancel/<job_id>.
+ */
 function cancelEncode() {
   if (!currentJobId) return;
   fetch('/cancel/' + currentJobId, { method: 'POST' })
@@ -340,12 +483,15 @@ function cancelEncode() {
         alert(data.error);
         return;
       }
+      // Update UI to show job as canceled
       document.getElementById('statusText').textContent = 'Status: canceled';
       document.getElementById('cancelBtn').disabled = true;
       const pb = document.getElementById('progressBar');
       pb.value = 0;
       document.getElementById('progressLabel').textContent = 'Canceled';
+      // Stop polling status for this job
       if (statusTimer) clearInterval(statusTimer);
+      // Refresh jobs table after cancel
       refreshJobs();
     })
     .catch(err => {
@@ -353,6 +499,11 @@ function cancelEncode() {
     });
 }
 
+/**
+ * Check the status of the current job:
+ * GET /status/<job_id>
+ * Updates status text, log, progress, and job table.
+ */
 function checkStatus() {
   if (!currentJobId) return;
   fetch('/status/' + currentJobId)
@@ -364,25 +515,30 @@ function checkStatus() {
         return;
       }
 
+      // Build status line with optional return code
       const statusText = 'Status: ' + data.status +
         (data.returncode !== null && data.returncode !== undefined
            ? (' (code ' + data.returncode + ')')
            : '');
       document.getElementById('statusText').textContent = statusText;
+      // Show log text
       document.getElementById('statusBox').textContent = data.log || '';
 
       const pb = document.getElementById('progressBar');
+      // If progress exists, update progress bar and label
       if (data.progress !== undefined && data.progress !== null) {
         pb.value = data.progress;
         document.getElementById('progressLabel').textContent =
           data.progress.toFixed(1) + '%';
       }
 
+      // If job finished (done/error/canceled), stop polling and disable cancel button
       if (data.status === 'done' || data.status === 'error' || data.status === 'canceled') {
         document.getElementById('cancelBtn').disabled = true;
         clearInterval(statusTimer);
       }
 
+      // Always refresh job table to keep everything synced
       refreshJobs();
     })
     .catch(err => {
@@ -391,6 +547,10 @@ function checkStatus() {
     });
 }
 
+/**
+ * Refresh the jobs table by fetching /jobs from the backend.
+ * Fills #jobsTableBody with one row per job.
+ */
 function refreshJobs() {
   fetch('/jobs')
     .then(r => r.json())
@@ -403,20 +563,24 @@ function refreshJobs() {
       data.jobs.forEach(job => {
         const tr = document.createElement('tr');
 
+        // Job ID column
         const tdId = document.createElement('td');
         tdId.textContent = job.id;
         tdId.className = "small";
         tr.appendChild(tdId);
 
+        // Source file path column
         const tdSrc = document.createElement('td');
         tdSrc.textContent = job.src;
         tdSrc.className = "small";
         tr.appendChild(tdSrc);
 
+        // Preset column
         const tdPreset = document.createElement('td');
         tdPreset.textContent = job.preset;
         tr.appendChild(tdPreset);
 
+        // Status column (with CSS class for color)
         const tdStatus = document.createElement('td');
         tdStatus.textContent = job.status;
         if (job.status === 'done') tdStatus.className = 'job-status-done';
@@ -426,14 +590,17 @@ function refreshJobs() {
         else if (job.status === 'queued') tdStatus.className = 'job-status-queued';
         tr.appendChild(tdStatus);
 
+        // Return code column
         const tdRc = document.createElement('td');
         tdRc.textContent = job.returncode === null ? '' : job.returncode;
         tr.appendChild(tdRc);
 
+        // Progress column (percentage)
         const tdProg = document.createElement('td');
         tdProg.textContent = job.progress != null ? job.progress.toFixed(1) + '%' : '';
         tr.appendChild(tdProg);
 
+        // Log column (download link if log file is available)
         const tdLog = document.createElement('td');
         if (job.has_log) {
           const a = document.createElement('a');
@@ -446,7 +613,7 @@ function refreshJobs() {
         }
         tr.appendChild(tdLog);
 
-        // Actions column: remove from queue if queued
+        // Actions column (only for queued jobs)
         const tdActions = document.createElement('td');
         if (job.status === 'queued') {
           const removeBtn = document.createElement('button');
@@ -481,6 +648,11 @@ function refreshJobs() {
     });
 }
 
+/**
+ * Trigger batch rename on the currentPath:
+ * POST /batch_rename with { path: currentPath }
+ * Then reload directory listing.
+ */
 function batchRename() {
   if (!currentPath) {
     alert("No current path selected.");
@@ -509,6 +681,7 @@ function batchRename() {
       const text = "Renamed " + data.renamed_count +
         " file(s). Skipped " + data.skipped_count + ".";
       document.getElementById('batchRenameResult').textContent = text;
+      // Reload directory to show new filenames
       loadDir(currentPath);
     })
     .catch(err => {
@@ -517,6 +690,12 @@ function batchRename() {
     });
 }
 
+/**
+ * Batch encode helper:
+ * - folderOnly = true  → only files directly in currentPath
+ * - folderOnly = false → files in currentPath + all subfolders
+ * Uses POST /batch_encode or /batch_encode_recursive.
+ */
 function batchEncode(folderOnly) {
   if (!currentPath) {
     alert("No current path selected.");
@@ -525,6 +704,7 @@ function batchEncode(folderOnly) {
 
   const preset = document.getElementById('presetSelect').value;
 
+  // Build confirmation message based on mode
   const msg = folderOnly
     ? "This will QUEUE encodes for ALL video files directly in:\n" +
       currentPath +
@@ -559,6 +739,10 @@ function batchEncode(folderOnly) {
     });
 }
 
+/**
+ * Clear finished jobs (status 'done' or 'error') and delete their logs.
+ * Sends POST /clear_finished_jobs.
+ */
 function clearFinishedJobs() {
   if (!confirm("This will remove all jobs with status 'done' or 'error' from history and delete their log files. Continue?")) {
     return;
@@ -581,6 +765,11 @@ function clearFinishedJobs() {
     });
 }
 
+/**
+ * Refresh queue state (paused vs running) from backend:
+ * GET /queue_state returns { paused: true/false }
+ * Updates text + button label.
+ */
 function refreshQueueState() {
   fetch('/queue_state')
     .then(r => r.json())
@@ -602,6 +791,11 @@ function refreshQueueState() {
     });
 }
 
+/**
+ * Toggle queue paused state:
+ * POST /pause_queue with {paused: null} (backend flips it)
+ * Then refresh queue state on the front-end.
+ */
 function toggleQueuePause() {
   fetch('/pause_queue', {
     method: 'POST',
@@ -618,6 +812,11 @@ function toggleQueuePause() {
     });
 }
 
+/**
+ * Load preset config from backend:
+ * GET /preset_config returns structure with "1080" and "4k" entries.
+ * Then calls populatePresetFileSelect for each dropdown.
+ */
 function loadPresetConfigUI() {
   fetch('/preset_config')
     .then(r => r.json())
@@ -635,6 +834,10 @@ function loadPresetConfigUI() {
     });
 }
 
+/**
+ * Save current preset dropdown values to backend via:
+ * POST /preset_config with JSON { "1080": {file}, "4k": {file} }
+ */
 function savePresetConfigUI() {
   const body = {
     "1080": {
@@ -668,6 +871,13 @@ function savePresetConfigUI() {
     });
 }
 
+/**
+ * DOMContentLoaded:
+ * - Initialize roots & currentPath
+ * - Load initial directory
+ * - Wire all button click handlers
+ * - Start periodic refresh of jobs + queue state
+ */
 document.addEventListener('DOMContentLoaded', () => {
   // Fill the Root dropdown from the roots array
   populateRoots();
@@ -675,10 +885,12 @@ document.addEventListener('DOMContentLoaded', () => {
   // Set currentPath safely based on roots
   safeInitCurrentPath();
 
+  // If a valid currentPath exists, load that directory
   if (currentPath) {
     loadDir(currentPath);
   }
 
+  // When root selection changes, load that root path
   const rootSelectEl = document.getElementById('rootSelect');
   if (rootSelectEl) {
     rootSelectEl.addEventListener('change', (e) => {
@@ -688,6 +900,7 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
+  // Wire up all buttons to their respective functions
   document.getElementById('upBtn').onclick = goUp;
   document.getElementById('startBtn').onclick = startEncode;
   document.getElementById('cancelBtn').onclick = cancelEncode;
@@ -698,10 +911,12 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('pauseQueueBtn').onclick = toggleQueuePause;
   document.getElementById('savePresetConfigBtn').onclick = savePresetConfigUI;
 
+  // Initial load of preset configuration and job/queue state
   loadPresetConfigUI();
   refreshJobs();
   refreshQueueState();
 
+  // Keep jobs table + queue state updated every 5 seconds
   jobsTimer = setInterval(() => {
     refreshJobs();
     refreshQueueState();
