@@ -1,0 +1,214 @@
+/* =========================================================
+   Color theme variables
+   --------------------------------------------------------- */
+:root {
+  --bg: #121212;
+  --bg-alt: #1e1e1e;
+  --border: #333;
+  --text: #e5e5e5;
+  --accent: #00bcd4;
+  --accent-soft: #004852;
+}
+
+/* =========================================================
+   Global layout + typography
+   --------------------------------------------------------- */
+body {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  margin: 20px;
+  background: var(--bg);
+  color: var(--text);
+}
+
+h1,
+h2,
+h3 {
+  margin-top: 0;
+  color: #ffffff;
+}
+
+/* General spacing row helper */
+.row {
+  margin-bottom: 10px;
+}
+
+/* Small text helper (used for paths, hints, etc.) */
+.small {
+  font-size: 12px;
+  opacity: 0.85;
+}
+
+/* =========================================================
+   Form controls: selects, text inputs, buttons
+   --------------------------------------------------------- */
+select,
+input[type="text"],
+button {
+  background: var(--bg-alt);
+  color: var(--text);
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  border-radius: 4px;
+}
+
+/* Default button styles */
+button {
+  cursor: pointer;
+  background: var(--accent-soft);
+}
+
+/* Hover state */
+button:hover {
+  background: var(--accent);
+}
+
+/* Disabled button state */
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* =========================================================
+   Directory & file lists (left/right panes)
+   --------------------------------------------------------- */
+#dirs,
+#files {
+  list-style: none;
+  padding-left: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  margin: 0;
+  background: var(--bg-alt);
+}
+
+/* Individual list items */
+#dirs li,
+#files li {
+  padding: 4px 8px;
+  cursor: pointer;
+}
+
+/* Hover on list items */
+#dirs li:hover,
+#files li:hover {
+  background: #2a2a2a;
+}
+
+/* Folders are bold to stand out from files */
+#dirs li {
+  font-weight: bold;
+}
+
+/* =========================================================
+   Status / log output area
+   --------------------------------------------------------- */
+#statusBox {
+  margin-top: 10px;
+  white-space: pre-wrap;
+  background: #000;
+  color: #0f0;
+  padding: 8px;
+  font-size: 12px;
+  max-height: 200px;
+  overflow-y: auto;
+  border-radius: 4px;
+  border: 1px solid var(--border);
+}
+
+/* =========================================================
+   Progress bar + label
+   --------------------------------------------------------- */
+#progressBar {
+  height: 14px;
+}
+
+#progressLabel {
+  font-size: 14px;
+  margin-left: 8px;
+}
+
+/* =========================================================
+   Jobs table (history / queue)
+   --------------------------------------------------------- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  background: var(--bg-alt);
+  font-size: 13px;
+}
+
+/* Table cells */
+th,
+td {
+  border: 1px solid var(--border);
+  padding: 4px 6px;
+  text-align: left;
+}
+
+/* Table header row */
+th {
+  background: #222;
+}
+
+/* =========================================================
+   Job status color coding
+   --------------------------------------------------------- */
+.job-status-done {
+  color: #4caf50;
+}
+
+.job-status-error {
+  color: #ff5252;
+}
+
+.job-status-running {
+  color: #ffb300;
+}
+
+.job-status-canceled {
+  color: #9e9e9e;
+}
+
+.job-status-queued {
+  color: #42a5f5;
+}
+
+/* =========================================================
+   Section cards (main panels)
+   --------------------------------------------------------- */
+.section-card {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 10px;
+  background: rgba(255, 255, 255, 0.03);
+  margin-bottom: 16px;
+}
+
+/* =========================================================
+   Links
+   --------------------------------------------------------- */
+a {
+  color: var(--accent);
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+}
+
+/* =========================================================
+   Inline input group (label + select on one line)
+   --------------------------------------------------------- */
+.inline-input-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+/* Make select grow to fill remaining space */
+.inline-input-group select {
+  flex: 1 1 auto;
+  min-width: 180px;
+}
