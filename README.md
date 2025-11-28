@@ -150,7 +150,7 @@ services:
       - ./presets:/app/presets
 
     restart: unless-stopped
-    
+
 ```
 
 
@@ -228,7 +228,7 @@ Inside `worker/encode-one.sh`, uncomment:
 rm -f "$SRC"
 ```
 
-⚠️ Disabled by default — protect your media!
+⚠️ Enabled by default — protect your media! Please USE AT YOUR OWN RISK
 
 ---
 
