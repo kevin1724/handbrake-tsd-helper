@@ -106,6 +106,60 @@ http://SERVER-IP:8081
 
 ---
 
+🐳 Official Docker Image
+
+You can pull the prebuilt container directly:
+
+Pull the latest image
+docker pull ghcr.io/kevin1724/handbrake-tsd-helper:latest
+
+Run it manually
+docker run -d \
+  --name handbrake-tsd-helper \
+  -p 8081:8081 \
+  -v /path/to/media:/mnt/media \
+  -v /path/to/data:/app/data \
+  ghcr.io/kevin1724/handbrake-tsd-helper:latest
+
+📄 Example docker-compose.yml
+
+Here is a clean, ready-to-use docker-compose.yml for users:
+
+version: "3.9"
+
+services:
+  hb-web:
+    image: ghcr.io/kevin1724/handbrake-tsd-helper:latest
+    container_name: handbrake-tsd-helper
+    ports:
+      - "8081:8081"
+    volumes:
+      # Media folders mounted into /mnt
+      - /path/to/media1:/mnt/media1
+      - /path/to/media2:/mnt/media2
+
+      # Persistent app data (jobs, logs)
+      - /path/to/data:/app/data
+
+      # Optional: Custom HandBrake presets
+      - ./presets:/app/presets
+
+    restart: unless-stopped
+
+
+✔ Works with multiple media disk mounts
+✔ Keeps job history
+✔ Automatically loads custom preset JSON files
+✔ Fully portable and NAS-friendly
+
+🏷️ Docker Pull Badge (Place near top of README)
+
+Looks clean and clickable:
+
+[![Docker Image](https://img.shields.io/badge/GHCR-Pull%20Image-blue?style=for-the-badge&logo=docker)](https://ghcr.io/kevina1724/handbrake-tsd-helper)
+
+---
+
 ## ⚙️ Requirements
 
 - Docker + Docker Compose
