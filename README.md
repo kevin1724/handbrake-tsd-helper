@@ -6,6 +6,9 @@ HandBrake TSD Helper is a lightweight, self-hostable web interface for **HandBra
 
 Browse media folders, queue encodes, batch‑process entire shows, track real‑time progress, download logs, rename files, skip already‑transcoded content — all from a clean, fast, dark‑mode web UI.
 
+[![Docker Image](https://img.shields.io/badge/GHCR-Pull%20Image-blue?style=for-the-badge&logo=docker)](https://ghcr.io/kevina1724/handbrake-tsd-helper)
+
+
 ---
 
 ## ✅ Key Features
@@ -123,7 +126,8 @@ docker run -d \
 
 📄 Example docker-compose.yml
 
-Here is a clean, ready-to-use docker-compose.yml for users:
+Here is a clean, ready-to-use docker-compose.yml
+
 
 version: "3.9"
 
@@ -147,16 +151,11 @@ services:
     restart: unless-stopped
 
 
+
 ✔ Works with multiple media disk mounts
 ✔ Keeps job history
 ✔ Automatically loads custom preset JSON files
 ✔ Fully portable and NAS-friendly
-
-🏷️ Docker Pull Badge (Place near top of README)
-
-Looks clean and clickable:
-
-[![Docker Image](https://img.shields.io/badge/GHCR-Pull%20Image-blue?style=for-the-badge&logo=docker)](https://ghcr.io/kevina1724/handbrake-tsd-helper)
 
 ---
 
