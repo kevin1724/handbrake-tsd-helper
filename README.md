@@ -281,7 +281,6 @@ docker restart hb-web
 - ✅ Job removal & queue pausing
 - ✅ Auto‑detected preset names
 - ✅ Persistent logs
-- 🔜 GPU support (Intel/NVIDIA)
 - 🔜 Upload presets through UI
 - 🔜 Optional email/webhook alerts
 - 🔜 Auth & multi‑user permissions
