@@ -20,7 +20,7 @@ services:
 
     volumes:
       - ./webui:/app/webui 
-      # ✅ Media mount points — MUST match config.py ROOTS
+      # ✅ Media mount points
 
       - /mnt/nas/PLEX_MEDIA:/media/PLEX_MEDIA
       - /mnt/media:/media/Media
