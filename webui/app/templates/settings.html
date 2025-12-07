@@ -1,0 +1,168 @@
+<!-- -------------------------------------------------------------------
+     Settings page (global app settings)
+     This page allows users to configure app-wide behavior such as
+     HandBrake CPU thread usage, UI theme, and (future) bulk preset updates.
+--------------------------------------------------------------------- -->
+
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>HandBrake TSD Helper – Settings</title>
+
+  <!-- Load the same stylesheet used by index.html -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+</head>
+
+<body>
+  <!-- ============================================================
+       PAGE TITLE
+       ============================================================ -->
+  <h1>Settings – HandBrake TSD Helper</h1>
+
+  <!-- ============================================================
+       NAVIGATION BAR (Matches index.html)
+       - "Jobs" goes back to the main encoding interface
+       - "Settings" is highlighted since we're on this page
+       ============================================================ -->
+  <nav class="top-nav">
+    <a href="/" class="nav-link">Jobs</a>
+    <a href="/settings" class="nav-link nav-link-active">Settings</a>
+  </nav>
+
+  <!-- ============================================================
+       SECTION 1 — ENCODING SETTINGS
+       Controls HandBrake behavior, specifically how many CPU threads
+       HandBrakeCLI is allowed to use via HB_THREADS env variable.
+       ============================================================ -->
+  <div class="section-card">
+    <h2>Encoding Settings</h2>
+
+    <p class="small">
+      Control how many CPU threads HandBrake can use during encoding.
+      Higher values = faster encoding, but heavier CPU load.
+    </p>
+
+    <!-- CPU Thread Count Input -->
+    <div class="row">
+      <label for="hbThreadsInput">HandBrake threads (CPU cores):</label>
+      <input
+        id="hbThreadsInput"
+        type="number"
+        min="0"
+        step="1"
+        style="width:120px;"
+      >
+    </div>
+
+    <!-- Helpful explanation for users -->
+    <p class="small">
+      <strong>Tip:</strong><br>
+      • <code>0</code> or blank = let HandBrake decide automatically.<br>
+      • A good starting point is your machine’s physical core count.
+    </p>
+
+    <!-- Save button + confirmation text -->
+    <div class="row" style="margin-top:10px;">
+      <button id="saveSettingsBtn">Save settings</button>
+      <span id="settingsSaveStatus" class="small"></span>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       SECTION 2 — UI SETTINGS (Reserved for future features)
+       Possible additions:
+       - Dark/light mode toggle
+       - UI scaling
+       - Bulk preset editor
+       ============================================================ -->
+  <div class="section-card">
+    <h2>UI Settings (coming soon)</h2>
+    <p class="small">
+      This area will eventually hold UI customization options like
+      theme switching (dark/light) and interface preferences.
+    </p>
+  </div>
+
+  <!-- ============================================================
+       JAVASCRIPT LOGIC
+       Handles:
+       - Loading settings from Flask/Jinja into the form
+       - Saving settings to /api/settings
+       - Updating UI with success/error messages
+       ============================================================ -->
+  <script>
+    /* ------------------------------------------------------------
+       INITIAL SETTINGS (From Python → Jinja → JS)
+       settings.py loads settings from disk
+       routes.py injects them into the template
+       We parse hb_threads to pre-fill the input box
+       ------------------------------------------------------------ */
+    const initialSettings = {{ settings | tojson | safe }};
+    const initialThreads = parseInt(initialSettings.hb_threads || 0, 10) || 0;
+
+    /* ------------------------------------------------------------
+       UI Initialization:
+       Set the input box to the current saved hb_threads value
+       ------------------------------------------------------------ */
+    function initForm() {
+      const input = document.getElementById("hbThreadsInput");
+      input.value = initialThreads > 0 ? initialThreads : "";
+    }
+
+    /* ------------------------------------------------------------
+       SAVE FUNCTION:
+       Sends updated settings to /api/settings (POST)
+       Expects JSON: { "hb_threads": <number> }
+       On success, updates the UI and shows "Saved."
+       ------------------------------------------------------------ */
+    async function saveSettings() {
+      const input = document.getElementById("hbThreadsInput");
+      const statusEl = document.getElementById("settingsSaveStatus");
+
+      let raw = (input.value || "").trim();
+      let threads = parseInt(raw, 10);
+
+      // Normalize invalid values
+      if (isNaN(threads) || threads < 0) threads = 0;
+
+      try {
+        statusEl.textContent = "Saving...";
+
+        // POST updated settings to backend
+        const res = await fetch("/api/settings", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ hb_threads: threads })
+        });
+
+        if (!res.ok) throw new Error("Save failed with status " + res.status);
+
+        const data = await res.json();
+
+        // Update form with saved value returned by backend
+        const savedThreads = parseInt((data.settings || {}).hb_threads || 0, 10) || 0;
+        input.value = savedThreads > 0 ? savedThreads : "";
+
+        statusEl.textContent = "Saved.";
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "Error saving settings";
+      }
+    }
+
+    /* ------------------------------------------------------------
+       EVENT HOOKS:
+       - Initialize form when page loads
+       - Save settings when user clicks button
+       ------------------------------------------------------------ */
+    document.addEventListener("DOMContentLoaded", () => {
+      initForm();
+      document
+        .getElementById("saveSettingsBtn")
+        .addEventListener("click", saveSettings);
+    });
+  </script>
+
+</body>
+</html>

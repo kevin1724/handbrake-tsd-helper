@@ -34,6 +34,7 @@ from .config import (
     ALLOWED_PREFIXES,
 )
 from .presets import resolve_preset_file_and_name
+from .settings import load_settings  # <-- NEW: pull in global settings (hb_threads, etc.)
 
 # -------------------------------------------------------------------
 # Global in-memory job state
@@ -330,17 +331,40 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job["progress"] = 0.0
     save_jobs()
 
-    # Build the environment for HandBrake worker script
+    # ------------------------------------------------------------
+    # ENVIRONMENT SETUP FOR WORKER SCRIPT
+    # - SRC: path to source video (always required)
+    # - HB_PRESET_FILE / HB_PRESET_NAME: resolved from preset key
+    # - HB_THREADS: (NEW) optional override from settings.py (Settings page)
+    # ------------------------------------------------------------
     env = os.environ.copy()
     env["SRC"] = src_path  # encode-one.sh uses this
+
+    # --- NEW: CPU thread setting pulled from global Settings ---
+    # Settings page stores hb_threads in settings.json.
+    # If hb_threads > 0, we pass it down as HB_THREADS so encode-one.sh
+    # can include "--encopts threads=<N>" when calling HandBrakeCLI.
+    try:
+        hb_threads_val = load_settings().get("hb_threads", 0)
+        hb_threads = int(hb_threads_val or 0)
+    except (TypeError, ValueError):
+        hb_threads = 0
+
+    if hb_threads > 0:
+        env["HB_THREADS"] = str(hb_threads)
+        # Example consumed downstream:
+        #   HandBrakeCLI --encopts threads=$HB_THREADS ...
+        # If hb_threads == 0 (auto), we simply do not set HB_THREADS.
 
     # Resolve HB_PRESET_FILE + HB_PRESET_NAME based on preset key ("1080" or "4k")
     preset_file, preset_name = resolve_preset_file_and_name(preset_key)
     env["HB_PRESET_FILE"] = preset_file
     env["HB_PRESET_NAME"] = preset_name
 
+    # Log file location for this job
     log_path = os.path.join(LOG_DIR, f"{job_id}.log")
 
+    # Spawn worker shell script
     proc = subprocess.Popen(
         ["/bin/sh", "/worker/encode-one.sh"],
         stdout=subprocess.PIPE,
@@ -355,7 +379,12 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
 
     log_lines: list[str] = []
 
-    # Stream output to file and job log snippet
+    # ------------------------------------------------------------
+    # STREAM OUTPUT:
+    # - Write full log to file
+    # - Keep in-memory tail for quick viewing in web UI
+    # - Update progress based on HandBrake output
+    # ------------------------------------------------------------
     with open(log_path, "w") as lf:
         for line in proc.stdout:
             lf.write(line)

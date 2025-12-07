@@ -41,6 +41,10 @@ from .presets import (
     save_preset_config,
     guess_preset_from_filename,
 )
+from .settings import (
+    load_settings,
+    save_settings,
+)
 
 
 # -------------------------------------------------------------------
@@ -72,6 +76,20 @@ def register_routes(app):
             preset_dir=PRESET_DIR,
         )
 
+    @app.route("/settings")
+    def settings_page():
+        """
+        Render the settings page (global app settings).
+
+        Currently supports:
+        - HandBrake thread (CPU core) count (hb_threads)
+        """
+        settings = load_settings()
+        return render_template(
+            "settings.html",
+            settings=settings,
+        )
+
     @app.route("/debug_config")
     def debug_config():
         """
@@ -85,6 +103,25 @@ def register_routes(app):
             preset_dir=PRESET_DIR,
         )
 
+    # ------------- Global settings (JSON API) -------------
+
+    @app.route("/api/settings", methods=["GET", "POST"])
+    def settings_api():
+        """
+        GET  → return current settings (e.g., hb_threads)
+        POST → update settings; expected JSON body like:
+            { "hb_threads": 8 }
+
+        Returns:
+        { "settings": {...} }
+        """
+        if request.method == "GET":
+            settings = load_settings()
+            return jsonify(settings=settings)
+
+        data = request.get_json(silent=True) or {}
+        new_settings = save_settings(data)
+        return jsonify(settings=new_settings)
 
     # ------------- Directory listing -------------
 
