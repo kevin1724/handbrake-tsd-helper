@@ -630,3 +630,127 @@ def register_routes(app):
         if not ok:
             return jsonify(error=err or "remove failed"), 400
         return jsonify(ok=True, job_id=job_id)
+
+
+
+    # ------------- Media search (files + folders, fuzzy-ish) -------------
+    @app.route("/search_media")
+    def search_media():
+        """
+        Search for video files AND folders by name (case-insensitive, contains-all-words).
+
+        Query params:
+          q    → search text (required, e.g. "S01E01", "avatar 4k", "season 1")
+          base → optional starting folder; if omitted, search all ROOTS
+
+        Matching:
+        - We lowercase everything
+        - Replace ., _, - with spaces
+        - Split the query into words
+        - A file/folder matches if ALL query words appear in its normalized name
+
+        Returns JSON:
+        {
+          "matches": [
+            {
+              "path": "/full/path/to",
+              "name": "Season 01",
+              "folder": "/full/path",     # parent folder (for files) or same as path (for dirs)
+              "type": "dir" | "file"
+            },
+            ...
+          ],
+          "limit": 200
+        }
+        """
+        q = (request.args.get("q") or "").strip()
+        if not q:
+            return jsonify(error="missing 'q' search term"), 400
+
+        base = (request.args.get("base") or "").strip()
+
+        def normalize(s: str) -> str:
+            s = s.lower()
+            for ch in [".", "_", "-"]:
+                s = s.replace(ch, " ")
+            return " ".join(s.split())  # collapse multiple spaces
+
+        query_terms = normalize(q).split()
+        if not query_terms:
+            return jsonify(error="search term too short"), 400
+
+        matches = []
+        SEARCH_LIMIT = 200
+
+        def name_matches(name: str) -> bool:
+            n = normalize(name)
+            return all(term in n for term in query_terms)
+
+        def walk_root(root_path: str) -> bool:
+            """
+            Walk a single root path and collect up to SEARCH_LIMIT matches.
+            Returns True if we hit the limit and should stop.
+            """
+            nonlocal matches
+
+            if not os.path.isdir(root_path):
+                return False
+
+            for root_dir, dirs, files in os.walk(root_path):
+                # --- Folders ---
+                for d in dirs:
+                    if not name_matches(d):
+                        continue
+
+                    full_path = os.path.join(root_dir, d)
+                    if not is_allowed_path(full_path):
+                        continue
+
+                    matches.append(
+                        {
+                            "path": full_path,
+                            "name": d,
+                            "folder": root_dir,
+                            "type": "dir",
+                        }
+                    )
+                    if len(matches) >= SEARCH_LIMIT:
+                        return True
+
+                # --- Files (video only) ---
+                for name in files:
+                    if not name.lower().endswith(VIDEO_EXTS):
+                        continue
+
+                    if not name_matches(name):
+                        continue
+
+                    full_path = os.path.join(root_dir, name)
+                    if not is_allowed_path(full_path):
+                        continue
+
+                    matches.append(
+                        {
+                            "path": full_path,
+                            "name": name,
+                            "folder": root_dir,
+                            "type": "file",
+                        }
+                    )
+                    if len(matches) >= SEARCH_LIMIT:
+                        return True
+
+            return False
+
+        # If base is provided, search only under that folder
+        if base:
+            if not is_allowed_path(base) or not os.path.isdir(base):
+                return jsonify(error="base path not allowed or not a directory"), 400
+            walk_root(base)
+        else:
+            # Otherwise, search under all configured ROOTS
+            for root_path, _label in ROOTS:
+                if walk_root(root_path):
+                    break
+
+        return jsonify(matches=matches, limit=SEARCH_LIMIT)

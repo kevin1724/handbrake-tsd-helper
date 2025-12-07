@@ -11,16 +11,17 @@
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
 </head>
 <body>
-  <h1>HandBrake One-shot Encoder (TSD)</h1>
-
-  <!-- New top nav / tabs -->
+  <!-- Simple top nav (matches settings.html) -->
   <nav class="top-nav">
     <a href="/" class="nav-link nav-link-active">Jobs</a>
     <a href="/settings" class="nav-link">Settings</a>
   </nav>
 
+  <h1>HandBrake One-shot Encoder (TSD)</h1>
+
   <div class="section-card">
     <h2>Browse & Select File</h2>
+
     <div class="row">
       <label for="rootSelect">Root:</label>
       <select id="rootSelect"></select>
@@ -32,6 +33,19 @@
       <span id="currentPath" class="small"></span>
     </div>
 
+    <!-- New: search box for filenames -->
+    <div class="row">
+      <label for="searchInput">Search filename:</label>
+      <input
+        id="searchInput"
+        type="text"
+        placeholder="e.g. S01E01, movie name"
+        style="width:260px;"
+      >
+      <button id="searchBtn">Search</button>
+      <span id="searchStatus" class="small"></span>
+    </div>
+
     <div class="row" style="display:flex; gap:10px;">
       <div style="flex:1;">
         <strong>Folders</strong>
@@ -41,6 +55,12 @@
         <strong>Video files</strong>
         <ul id="files"></ul>
       </div>
+    </div>
+
+    <!-- New: search results list -->
+    <div class="row" id="searchResultsRow" style="display:none;">
+      <strong>Search results</strong>
+      <ul id="searchResults"></ul>
     </div>
 
     <div class="row">
@@ -147,7 +167,6 @@
 
 <script>
 // Server-side data injected by Flask/Jinja.
-// Use default([]) so the page doesn't explode if something is missing.
 const roots = {{ roots|default([], true)|tojson|safe }};
 const presetFiles = {{ preset_files|default([], true)|tojson|safe }};
 
@@ -159,6 +178,9 @@ let currentJobId = null;
 let statusTimer = null;
 let jobsTimer = null;
 
+// --------------------------
+// Helpers for roots / paths
+// --------------------------
 function safeInitCurrentPath() {
   if (Array.isArray(roots) && roots.length > 0 && Array.isArray(roots[0]) && roots[0].length > 0) {
     currentPath = roots[0][0];
@@ -196,39 +218,9 @@ function populateRoots() {
   });
 }
 
-function populatePresetFileSelect(selectId, currentFile) {
-  const select = document.getElementById(selectId);
-  select.innerHTML = '';
-
-  if (!Array.isArray(presetFiles) || presetFiles.length === 0) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'No preset files found';
-    select.appendChild(opt);
-    return;
-  }
-
-  let hasCurrent = false;
-  presetFiles.forEach(path => {
-    const opt = document.createElement('option');
-    opt.value = path;
-    opt.textContent = path.split('/').pop();
-    if (currentFile && path === currentFile) {
-      opt.selected = true;
-      hasCurrent = true;
-    }
-    select.appendChild(opt);
-  });
-
-  if (currentFile && !hasCurrent) {
-    const opt = document.createElement('option');
-    opt.value = currentFile;
-    opt.textContent = currentFile + ' (custom / not found)';
-    opt.selected = true;
-    select.appendChild(opt);
-  }
-}
-
+// --------------------------
+// Directory listing
+// --------------------------
 function loadDir(path) {
   if (!path) {
     console.error('loadDir called with empty path');
@@ -245,7 +237,10 @@ function loadDir(path) {
       currentPath = data.path;
       document.getElementById('currentPath').textContent = data.path;
 
-      // ------- Folder list -------
+      // Clear any previous search status/results when changing folder
+      clearSearchResults();
+
+      // Folders
       const dirsUl = document.getElementById('dirs');
       dirsUl.innerHTML = '';
       data.dirs.forEach(name => {
@@ -253,11 +248,8 @@ function loadDir(path) {
         li.textContent = name;
         li.onclick = () => {
           let base = data.path;
-
-          // Ensure proper formatting
           if (!base.startsWith('/')) base = '/' + base;
           if (base.endsWith('/')) base = base.slice(0, -1);
-
           const newPath = base + '/' + name;
           console.log('Navigating to:', newPath);
           loadDir(newPath);
@@ -265,7 +257,7 @@ function loadDir(path) {
         dirsUl.appendChild(li);
       });
 
-      // ------- File list -------
+      // Files
       const filesUl = document.getElementById('files');
       filesUl.innerHTML = '';
       data.files.forEach(name => {
@@ -275,7 +267,6 @@ function loadDir(path) {
           let base = data.path;
           if (!base.startsWith('/')) base = '/' + base;
           if (base.endsWith('/')) base = base.slice(0, -1);
-
           const fullPath = base + '/' + name;
           document.getElementById('selectedFile').value = fullPath;
         };
@@ -299,6 +290,108 @@ function goUp() {
   loadDir(newPath || currentPath);
 }
 
+// --------------------------
+// NEW: Search helpers
+// --------------------------
+function clearSearchResults() {
+  const row = document.getElementById('searchResultsRow');
+  const ul = document.getElementById('searchResults');
+  const status = document.getElementById('searchStatus');
+  if (ul) ul.innerHTML = '';
+  if (row) row.style.display = 'none';
+  if (status) status.textContent = '';
+}
+
+function renderSearchResults(results) {
+  const row = document.getElementById('searchResultsRow');
+  const ul = document.getElementById('searchResults');
+  const status = document.getElementById('searchStatus');
+
+  ul.innerHTML = '';
+
+  if (!Array.isArray(results) || results.length === 0) {
+    row.style.display = 'block';
+    const li = document.createElement('li');
+    li.textContent = '(no matches)';
+    ul.appendChild(li);
+    status.textContent = 'No matches found.';
+    return;
+  }
+
+  row.style.display = 'block';
+  status.textContent = `Found ${results.length} item(s).`;
+
+  results.forEach(item => {
+    const li = document.createElement('li');
+
+    // Tag to show if it's a folder or file
+    const tag = document.createElement('span');
+    tag.className = 'small';
+    tag.textContent = item.type === 'dir' ? '[Folder] ' : '[File] ';
+
+    const nameSpan = document.createElement('span');
+    nameSpan.textContent = item.name || item.path;
+
+    const meta = document.createElement('div');
+    meta.className = 'small';
+    meta.textContent = item.folder || '';
+
+    li.appendChild(tag);
+    li.appendChild(nameSpan);
+    li.appendChild(meta);
+
+    li.onclick = () => {
+      if (item.type === 'dir') {
+        // For folders: navigate there and clear any selected file
+        document.getElementById('selectedFile').value = '';
+        loadDir(item.path);
+      } else {
+        // For files: select the file and also load the folder it lives in
+        document.getElementById('selectedFile').value = item.path;
+        if (item.folder) {
+          loadDir(item.folder);
+        }
+      }
+    };
+
+    ul.appendChild(li);
+  });
+}
+
+
+function searchMedia() {
+  const input = document.getElementById('searchInput');
+  const status = document.getElementById('searchStatus');
+  const q = (input.value || '').trim();
+
+  if (!q) {
+    clearSearchResults();
+    status.textContent = 'Enter a name fragment to search.';
+    return;
+  }
+
+  status.textContent = 'Searching...';
+
+  const baseParam = currentPath ? '&base=' + encodeURIComponent(currentPath) : '';
+  fetch('/search_media?q=' + encodeURIComponent(q) + baseParam)
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        status.textContent = 'Search error: ' + data.error;
+        return;
+      }
+      renderSearchResults(data.matches || []);
+    })
+    .catch(err => {
+      console.error(err);
+      status.textContent = 'Search failed.';
+    });
+}
+
+
+// --------------------------
+// Encode / cancel / status
+// --------------------------
 function startEncode() {
   const src = document.getElementById('selectedFile').value;
   const preset = document.getElementById('presetSelect').value;
@@ -397,6 +490,9 @@ function checkStatus() {
     });
 }
 
+// --------------------------
+// Jobs table + queue state
+// --------------------------
 function refreshJobs() {
   fetch('/jobs')
     .then(r => r.json())
@@ -452,7 +548,6 @@ function refreshJobs() {
         }
         tr.appendChild(tdLog);
 
-        // Actions column: remove from queue if queued
         const tdActions = document.createElement('td');
         if (job.status === 'queued') {
           const removeBtn = document.createElement('button');
@@ -641,6 +736,39 @@ function loadPresetConfigUI() {
     });
 }
 
+function populatePresetFileSelect(selectId, currentFile) {
+  const select = document.getElementById(selectId);
+  select.innerHTML = '';
+
+  if (!Array.isArray(presetFiles) || presetFiles.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'No preset files found';
+    select.appendChild(opt);
+    return;
+  }
+
+  let hasCurrent = false;
+  presetFiles.forEach(path => {
+    const opt = document.createElement('option');
+    opt.value = path;
+    opt.textContent = path.split('/').pop();
+    if (currentFile && path === currentFile) {
+      opt.selected = true;
+      hasCurrent = true;
+    }
+    select.appendChild(opt);
+  });
+
+  if (currentFile && !hasCurrent) {
+    const opt = document.createElement('option');
+    opt.value = currentFile;
+    opt.textContent = currentFile + ' (custom / not found)';
+    opt.selected = true;
+    select.appendChild(opt);
+  }
+}
+
 function savePresetConfigUI() {
   const body = {
     "1080": {
@@ -674,11 +802,11 @@ function savePresetConfigUI() {
     });
 }
 
+// --------------------------
+// DOMContentLoaded init
+// --------------------------
 document.addEventListener('DOMContentLoaded', () => {
-  // Fill the Root dropdown from the roots array
   populateRoots();
-
-  // Set currentPath safely based on roots
   safeInitCurrentPath();
 
   if (currentPath) {
@@ -703,6 +831,14 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('clearFinishedBtn').onclick = clearFinishedJobs;
   document.getElementById('pauseQueueBtn').onclick = toggleQueuePause;
   document.getElementById('savePresetConfigBtn').onclick = savePresetConfigUI;
+
+  // NEW: bind search
+  document.getElementById('searchBtn').onclick = searchMedia;
+  document.getElementById('searchInput').addEventListener('keypress', (e) => {
+    if (e.key === 'Enter') {
+      searchMedia();
+    }
+  });
 
   loadPresetConfigUI();
   refreshJobs();
