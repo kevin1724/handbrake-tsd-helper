@@ -91,7 +91,7 @@ def register_routes(app):
         return render_template(
             "settings.html",
             settings=settings,
-            preset_file=preset_files,
+            preset_files=preset_files,
         )
 
     @app.route("/debug_config")
@@ -515,7 +515,80 @@ def register_routes(app):
             preset_files=updated_files,
         )
 
+    # ------------- Preset delete -------------
+    @app.route("/api/presets/delete", methods=["POST"])
+    def delete_preset_file():
+        """
+        Delete a HandBrake preset JSON file from PRESET_DIR.
 
+        Expects JSON body:
+        {
+          "path": "/app/presets/4kPlex.json"   # full path as returned by list_preset_files()
+        }
+
+        Safety:
+        - Only allows deleting files under PRESET_DIR
+        - Fails if file does not exist
+        """
+        data = request.get_json(force=True) or {}
+        path = data.get("path") or ""
+        if not path:
+            return jsonify(error="missing 'path' for preset to delete"), 400
+
+        # Resolve real paths to avoid traversal tricks
+        real_target = os.path.realpath(path)
+        real_root = os.path.realpath(PRESET_DIR)
+
+        # Ensure the file is inside PRESET_DIR
+        if not real_target.startswith(real_root + os.sep) and real_target != real_root:
+            return jsonify(error="refusing to delete file outside preset directory"), 400
+
+        if not os.path.isfile(real_target):
+            return jsonify(error="preset file not found"), 404
+
+        try:
+            os.remove(real_target)
+        except Exception as e:
+            return jsonify(error=f"failed to delete preset: {e}"), 500
+
+        # Return updated list so UI can refresh
+        updated_files = list_preset_files()
+        return jsonify(
+            ok=True,
+            preset_files=updated_files,
+        )
+
+
+# ------------------ preset download ----------------
+
+    @app.route("/api/presets/download")
+    def download_preset_file():
+        """
+        Download a preset JSON file from PRESET_DIR.
+
+        Query params:
+          ?path=/full/path/to/preset.json  (must be under PRESET_DIR)
+        """
+        path = request.args.get("path") or ""
+        if not path:
+            return jsonify(error="missing 'path'"), 400
+
+        real_target = os.path.realpath(path)
+        real_root = os.path.realpath(PRESET_DIR)
+
+        # Ensure target is inside PRESET_DIR
+        if not real_target.startswith(real_root + os.sep) and real_target != real_root:
+          return jsonify(error="refusing to access file outside preset directory"), 400
+
+        if not os.path.isfile(real_target):
+            return jsonify(error="preset file not found"), 404
+
+        return send_file(
+            real_target,
+            mimetype="application/json",
+            as_attachment=True,
+            download_name=os.path.basename(real_target),
+        )
 
 
 

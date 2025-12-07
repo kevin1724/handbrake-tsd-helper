@@ -66,7 +66,7 @@
   </div>
 
   <!-- ============================================================
-       Preset Upload: allow users to upload their own JSON presets
+       Preset Upload + Manage
        ------------------------------------------------------------ -->
   <div class="section-card">
     <h2>Upload HandBrake Preset (.json)</h2>
@@ -99,7 +99,7 @@
   </div>
 
   <!-- ============================================================
-       Page script: wiring up form + upload
+       Page script: wiring up form + upload + delete + download
        ------------------------------------------------------------ -->
   <script>
     // -------------------------------
@@ -175,9 +175,34 @@
 
       files.forEach((path) => {
         const li = document.createElement("li");
+
         // Show only the basename for readability
         const parts = String(path).split("/");
-        li.textContent = parts[parts.length - 1] || path;
+        const name = parts[parts.length - 1] || path;
+
+        const nameSpan = document.createElement("span");
+        nameSpan.textContent = name;
+
+        // Download link – uses query param with encoded full path
+        const dl = document.createElement("a");
+        dl.textContent = "Download";
+        dl.href = "/api/presets/download?path=" + encodeURIComponent(path);
+        dl.target = "_blank";
+        dl.className = "preset-download-link";
+
+        // Delete button
+        const btn = document.createElement("button");
+        btn.textContent = "Delete";
+        btn.className = "preset-delete-btn";
+        btn.onclick = () => deletePreset(path);
+
+        // Layout: [name] [Download] [Delete]
+        li.appendChild(nameSpan);
+        li.appendChild(document.createTextNode(" "));
+        li.appendChild(dl);
+        li.appendChild(document.createTextNode(" "));
+        li.appendChild(btn);
+
         ul.appendChild(li);
       });
     }
@@ -210,6 +235,7 @@
         }
 
         statusEl.textContent = "Uploaded: " + (data.filename || file.name);
+
         // Refresh the list using what backend returns
         if (Array.isArray(data.preset_files)) {
           renderPresetFilesList(data.preset_files);
@@ -227,13 +253,56 @@
     }
 
     // -------------------------------
+    // Delete preset via /api/presets/delete
+    // -------------------------------
+    async function deletePreset(path) {
+      const statusEl = document.getElementById("presetUploadStatus");
+
+      if (!path) {
+        statusEl.textContent = "Error: no preset path provided.";
+        return;
+      }
+
+      if (!confirm("Delete preset file?\n\n" + path)) {
+        return;
+      }
+
+      try {
+        statusEl.textContent = "Deleting...";
+        const res = await fetch("/api/presets/delete", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ path })
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+          statusEl.textContent = "Delete failed: " + (data.error || ("HTTP " + res.status));
+          return;
+        }
+
+        statusEl.textContent = "Preset deleted.";
+        if (Array.isArray(data.preset_files)) {
+          renderPresetFilesList(data.preset_files);
+        }
+
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "Error deleting preset";
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      }
+    }
+
+    // -------------------------------
     // DOM Ready: hook everything up
     // -------------------------------
     document.addEventListener("DOMContentLoaded", () => {
       // Init encoding settings from backend
       initEncodingSettings();
 
-      // Render initial list of preset files
+      // Render initial list of preset files (this is what makes existing presets show)
       renderPresetFilesList(initialPresetFiles);
 
       // Bind buttons
