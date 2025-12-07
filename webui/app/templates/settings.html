@@ -1,7 +1,5 @@
 <!-- -------------------------------------------------------------------
      Settings page (global app settings)
-     This page allows users to configure app-wide behavior such as
-     HandBrake CPU thread usage, UI theme, and (future) bulk preset updates.
 --------------------------------------------------------------------- -->
 
 <!doctype html>
@@ -9,41 +7,41 @@
 <head>
   <meta charset="utf-8">
   <title>HandBrake TSD Helper – Settings</title>
-
-  <!-- Load the same stylesheet used by index.html -->
+  <!-- Reuse the same CSS as the main UI -->
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
 </head>
-
 <body>
   <!-- ============================================================
-       PAGE TITLE
-       ============================================================ -->
-  <h1>Settings – HandBrake TSD Helper</h1>
-
-  <!-- ============================================================
-       NAVIGATION BAR (Matches index.html)
-       - "Jobs" goes back to the main encoding interface
-       - "Settings" is highlighted since we're on this page
-       ============================================================ -->
+       Top navigation (matches index.html)
+       ------------------------------------------------------------ -->
   <nav class="top-nav">
     <a href="/" class="nav-link">Jobs</a>
     <a href="/settings" class="nav-link nav-link-active">Settings</a>
   </nav>
 
+  <h1>Settings – HandBrake TSD Helper</h1>
+
   <!-- ============================================================
-       SECTION 1 — ENCODING SETTINGS
-       Controls HandBrake behavior, specifically how many CPU threads
-       HandBrakeCLI is allowed to use via HB_THREADS env variable.
-       ============================================================ -->
+       DATA PASSED FROM BACKEND
+       - settings: current global settings (hb_threads, etc.)
+       - preset_files: list of preset file paths in PRESET_DIR
+       ------------------------------------------------------------ -->
+  <script>
+    const initialSettings = {{ settings | tojson | safe }};
+    const initialPresetFiles = {{ preset_files | default([], true) | tojson | safe }};
+  </script>
+
+  <!-- ============================================================
+       Encoding Settings: CPU threads / cores
+       ------------------------------------------------------------ -->
   <div class="section-card">
     <h2>Encoding Settings</h2>
-
     <p class="small">
       Control how many CPU threads HandBrake can use during encoding.
-      Higher values = faster encoding, but heavier CPU load.
+      Setting this higher lets the encoder use more of your CPU (faster encodes,
+      but more system load).
     </p>
 
-    <!-- CPU Thread Count Input -->
     <div class="row">
       <label for="hbThreadsInput">HandBrake threads (CPU cores):</label>
       <input
@@ -55,14 +53,12 @@
       >
     </div>
 
-    <!-- Helpful explanation for users -->
     <p class="small">
       <strong>Tip:</strong><br>
-      • <code>0</code> or blank = let HandBrake decide automatically.<br>
-      • A good starting point is your machine’s physical core count.
+      - <code>0</code> or blank = let HandBrake decide (auto).<br>
+      - A good starting point is the number of physical cores on the machine running this container.
     </p>
 
-    <!-- Save button + confirmation text -->
     <div class="row" style="margin-top:10px;">
       <button id="saveSettingsBtn">Save settings</button>
       <span id="settingsSaveStatus" class="small"></span>
@@ -70,52 +66,57 @@
   </div>
 
   <!-- ============================================================
-       SECTION 2 — UI SETTINGS (Reserved for future features)
-       Possible additions:
-       - Dark/light mode toggle
-       - UI scaling
-       - Bulk preset editor
-       ============================================================ -->
+       Preset Upload: allow users to upload their own JSON presets
+       ------------------------------------------------------------ -->
+  <div class="section-card">
+    <h2>Upload HandBrake Preset (.json)</h2>
+    <p class="small">
+      Upload your own HandBrake preset JSON files into the presets folder used by this app.
+      After uploading, they will appear in the preset dropdowns on the Jobs page.
+    </p>
+
+    <div class="row">
+      <input id="presetFileInput" type="file" accept=".json">
+      <button id="uploadPresetBtn">Upload preset</button>
+      <span id="presetUploadStatus" class="small"></span>
+    </div>
+
+    <div class="row">
+      <strong>Current preset files:</strong>
+      <ul id="presetFilesList" class="small"></ul>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       Placeholder for future UI settings (theme, etc.)
+       ------------------------------------------------------------ -->
   <div class="section-card">
     <h2>UI Settings (coming soon)</h2>
     <p class="small">
-      This area will eventually hold UI customization options like
-      theme switching (dark/light) and interface preferences.
+      This is where you’ll be able to switch between dark and light mode and tweak
+      other interface options.
     </p>
   </div>
 
   <!-- ============================================================
-       JAVASCRIPT LOGIC
-       Handles:
-       - Loading settings from Flask/Jinja into the form
-       - Saving settings to /api/settings
-       - Updating UI with success/error messages
-       ============================================================ -->
+       Page script: wiring up form + upload
+       ------------------------------------------------------------ -->
   <script>
-    /* ------------------------------------------------------------
-       INITIAL SETTINGS (From Python → Jinja → JS)
-       settings.py loads settings from disk
-       routes.py injects them into the template
-       We parse hb_threads to pre-fill the input box
-       ------------------------------------------------------------ */
-    const initialSettings = {{ settings | tojson | safe }};
-    const initialThreads = parseInt(initialSettings.hb_threads || 0, 10) || 0;
-
-    /* ------------------------------------------------------------
-       UI Initialization:
-       Set the input box to the current saved hb_threads value
-       ------------------------------------------------------------ */
-    function initForm() {
+    // -------------------------------
+    // Encoding settings: hb_threads
+    // -------------------------------
+    function initEncodingSettings() {
       const input = document.getElementById("hbThreadsInput");
-      input.value = initialThreads > 0 ? initialThreads : "";
+      const raw = initialSettings && initialSettings.hb_threads;
+      const val = parseInt(raw || 0, 10) || 0;
+
+      if (val > 0) {
+        input.value = val;
+      } else {
+        input.value = "";
+      }
     }
 
-    /* ------------------------------------------------------------
-       SAVE FUNCTION:
-       Sends updated settings to /api/settings (POST)
-       Expects JSON: { "hb_threads": <number> }
-       On success, updates the UI and shows "Saved."
-       ------------------------------------------------------------ */
     async function saveSettings() {
       const input = document.getElementById("hbThreadsInput");
       const statusEl = document.getElementById("settingsSaveStatus");
@@ -123,46 +124,127 @@
       let raw = (input.value || "").trim();
       let threads = parseInt(raw, 10);
 
-      // Normalize invalid values
-      if (isNaN(threads) || threads < 0) threads = 0;
+      if (isNaN(threads) || threads < 0) {
+        threads = 0;  // treat invalid values as "auto"
+      }
 
       try {
         statusEl.textContent = "Saving...";
-
-        // POST updated settings to backend
         const res = await fetch("/api/settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ hb_threads: threads })
         });
 
-        if (!res.ok) throw new Error("Save failed with status " + res.status);
+        if (!res.ok) {
+          throw new Error("Save failed with status " + res.status);
+        }
 
         const data = await res.json();
+        const saved = data.settings || {};
+        const savedThreads = parseInt(saved.hb_threads || 0, 10) || 0;
 
-        // Update form with saved value returned by backend
-        const savedThreads = parseInt((data.settings || {}).hb_threads || 0, 10) || 0;
-        input.value = savedThreads > 0 ? savedThreads : "";
+        if (savedThreads > 0) {
+          input.value = savedThreads;
+        } else {
+          input.value = "";
+        }
 
         statusEl.textContent = "Saved.";
+        setTimeout(() => { statusEl.textContent = ""; }, 3000);
       } catch (err) {
         console.error(err);
         statusEl.textContent = "Error saving settings";
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
       }
     }
 
-    /* ------------------------------------------------------------
-       EVENT HOOKS:
-       - Initialize form when page loads
-       - Save settings when user clicks button
-       ------------------------------------------------------------ */
+    // -------------------------------
+    // Preset upload + list rendering
+    // -------------------------------
+    function renderPresetFilesList(files) {
+      const ul = document.getElementById("presetFilesList");
+      ul.innerHTML = "";
+
+      if (!Array.isArray(files) || files.length === 0) {
+        const li = document.createElement("li");
+        li.textContent = "(no preset files found)";
+        ul.appendChild(li);
+        return;
+      }
+
+      files.forEach((path) => {
+        const li = document.createElement("li");
+        // Show only the basename for readability
+        const parts = String(path).split("/");
+        li.textContent = parts[parts.length - 1] || path;
+        ul.appendChild(li);
+      });
+    }
+
+    async function uploadPreset() {
+      const fileInput = document.getElementById("presetFileInput");
+      const statusEl = document.getElementById("presetUploadStatus");
+
+      const file = fileInput.files && fileInput.files[0];
+      if (!file) {
+        statusEl.textContent = "Pick a .json preset file first.";
+        return;
+      }
+
+      const formData = new FormData();
+      formData.append("preset_file", file);
+
+      try {
+        statusEl.textContent = "Uploading...";
+        const res = await fetch("/api/presets/upload", {
+          method: "POST",
+          body: formData
+        });
+
+        const data = await res.json();
+
+        if (!res.ok || data.error) {
+          statusEl.textContent = "Upload failed: " + (data.error || ("HTTP " + res.status));
+          return;
+        }
+
+        statusEl.textContent = "Uploaded: " + (data.filename || file.name);
+        // Refresh the list using what backend returns
+        if (Array.isArray(data.preset_files)) {
+          renderPresetFilesList(data.preset_files);
+        }
+
+        // Clear file input so it’s obvious upload is done
+        fileInput.value = "";
+
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "Error uploading preset";
+        setTimeout(() => { statusEl.textContent = ""; }, 4000);
+      }
+    }
+
+    // -------------------------------
+    // DOM Ready: hook everything up
+    // -------------------------------
     document.addEventListener("DOMContentLoaded", () => {
-      initForm();
+      // Init encoding settings from backend
+      initEncodingSettings();
+
+      // Render initial list of preset files
+      renderPresetFilesList(initialPresetFiles);
+
+      // Bind buttons
       document
         .getElementById("saveSettingsBtn")
         .addEventListener("click", saveSettings);
+
+      document
+        .getElementById("uploadPresetBtn")
+        .addEventListener("click", uploadPreset);
     });
   </script>
-
 </body>
 </html>

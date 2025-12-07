@@ -8,6 +8,7 @@ This module:
 """
 
 import os
+import json
 
 from flask import (
     request,
@@ -16,6 +17,7 @@ from flask import (
     send_file,
     abort,
 )
+from werkzeug.utils import secure_filename
 
 from .config import (
     ROOTS,
@@ -85,9 +87,11 @@ def register_routes(app):
         - HandBrake thread (CPU core) count (hb_threads)
         """
         settings = load_settings()
+        preset_files = list_preset_files() 
         return render_template(
             "settings.html",
             settings=settings,
+            preset_file=preset_files,
         )
 
     @app.route("/debug_config")
@@ -449,6 +453,71 @@ def register_routes(app):
             "4k": {"file": preset_config["4k"]["file"]},
         }
         return jsonify(config=exposed)
+
+
+
+    # ------------- preset uploads-------------
+
+    @app.route("/api/presets/upload", methods=["POST"])
+    def upload_preset_file():
+        """
+        Upload a HandBrake preset JSON file into PRESET_DIR.
+
+        Expects multipart/form-data with:
+          - field name: "preset_file"
+          - file name ending in .json
+
+        On success:
+          { "ok": true,
+            "filename": "<basename>.json",
+            "preset_files": [ "<full paths...>" ]
+          }
+        """
+        if "preset_file" not in request.files:
+            return jsonify(error="missing file field 'preset_file'"), 400
+
+        f = request.files["preset_file"]
+        if not f or f.filename == "":
+            return jsonify(error="no file selected"), 400
+
+        # Sanitize filename
+        filename = secure_filename(f.filename)
+        if not filename.lower().endswith(".json"):
+            return jsonify(error="only .json preset files are supported"), 400
+
+        # Read file content once (so we can both validate JSON and save it)
+        contents = f.read()
+        if not contents:
+            return jsonify(error="empty file"), 400
+
+        # Basic JSON validation – just make sure it's valid JSON.
+        try:
+            json.loads(contents.decode("utf-8") if isinstance(contents, bytes) else contents)
+        except Exception:
+            return jsonify(error="file is not valid JSON"), 400
+
+        # Ensure preset directory exists
+        os.makedirs(PRESET_DIR, exist_ok=True)
+
+        dest_path = os.path.join(PRESET_DIR, filename)
+        try:
+            with open(dest_path, "wb") as out:
+                out.write(contents)
+        except Exception as e:
+            return jsonify(error=f"failed to save preset: {e}"), 500
+
+        # Re-scan presets so UI can refresh if it wants to
+        updated_files = list_preset_files()
+
+        return jsonify(
+            ok=True,
+            filename=filename,
+            preset_files=updated_files,
+        )
+
+
+
+
 
     # ------------- Queue state (pause / resume) -------------
 
