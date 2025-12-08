@@ -269,6 +269,22 @@ def initialize_jobs_system():
     load_jobs()
     ensure_dispatcher()
 
+def _find_existing_active_job_for_src(src: str) -> str | None:
+    """
+    Check if there is already a job for this src that is either queued
+    or currently running.
+
+    We treat those as "active", so the same file should not be added
+    to the queue a second time while one of these is in-flight.
+
+    Returns:
+        job_id (str) if found, otherwise None.
+    """
+    for jid, j in jobs.items():
+        if j.get("src") == src and j.get("status") in ("queued", "running"):
+            return jid
+    return None
+
 
 # -------------------------------------------------------------------
 # Core job creation / lookup helpers (used by routes)
@@ -281,13 +297,24 @@ def create_job(src: str, preset: str) -> str:
     This does NOT validate src path or preset value — the web layer
     should do that before calling this function.
 
+    IMPORTANT:
+      - If there is already a job for this src with status "queued"
+        or "running", we do NOT create a duplicate. Instead, we just
+        return the existing job_id.
+
     Args:
         src (str): Absolute path to source video file.
         preset (str): "1080" or "4k"
 
     Returns:
-        str: job_id (UUID string)
+        str: job_id (UUID string, or existing one if already active)
     """
+    # Check for an already-active job for this src
+    existing_id = _find_existing_active_job_for_src(src)
+    if existing_id is not None:
+        # Do not enqueue a second job for the same src
+        return existing_id
+
     job_id = str(uuid.uuid4())
     jobs[job_id] = {
         "status": "queued",
@@ -297,7 +324,7 @@ def create_job(src: str, preset: str) -> str:
         "returncode": None,
         "pid": None,
         "progress": 0.0,
-        "eta_seconds": None,  # not known yet
+        "eta_seconds": None,  # if you already added ETA support
     }
     job_queue.append(job_id)
     save_jobs()
@@ -305,9 +332,15 @@ def create_job(src: str, preset: str) -> str:
     return job_id
 
 
+
 def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
     """
     Create a batch of jobs (used for folder / recursive batch encode).
+
+    For each (src, preset):
+      - If there is already an "active" job (queued/running) for src,
+        we skip creating a duplicate.
+      - We also skip duplicates within the same batch call.
 
     Args:
         files_and_presets (list[(src, preset)]):
@@ -316,10 +349,21 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
                 - preset: str ("1080" or "4k")
 
     Returns:
-        int: number of jobs created
+        int: number of NEW jobs created (duplicates skipped)
     """
     count = 0
+    seen_in_batch: set[str] = set()
+
     for src, preset in files_and_presets:
+        # Avoid duplicates within the same batch call
+        if src in seen_in_batch:
+            continue
+        seen_in_batch.add(src)
+
+        # Skip if there is already an active job for this src
+        if _find_existing_active_job_for_src(src) is not None:
+            continue
+
         job_id = str(uuid.uuid4())
         jobs[job_id] = {
             "status": "queued",
@@ -329,7 +373,7 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
             "returncode": None,
             "pid": None,
             "progress": 0.0,
-            "eta_seconds": None,
+            "eta_seconds": None,  # remove if you don't use ETA
         }
         job_queue.append(job_id)
         count += 1
@@ -339,6 +383,7 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
         ensure_dispatcher()
 
     return count
+
 
 
 def get_job(job_id: str) -> dict | None:
