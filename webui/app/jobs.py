@@ -5,6 +5,7 @@ This module is responsible for:
 - Keeping track of all jobs (in-memory + persisted to disk)
 - Running jobs one-at-a-time in a background dispatcher thread
 - Parsing HandBrake progress output to update job progress
+- Parsing ETA from HandBrake output to estimate remaining time
 - Canceling jobs, removing from queue, clearing finished jobs
 - Pause / resume queue state
 
@@ -34,7 +35,7 @@ from .config import (
     ALLOWED_PREFIXES,
 )
 from .presets import resolve_preset_file_and_name
-from .settings import load_settings  # <-- NEW: pull in global settings (hb_threads, etc.)
+from .settings import load_settings  # pull in global settings (hb_threads, etc.)
 
 # -------------------------------------------------------------------
 # Global in-memory job state
@@ -48,7 +49,8 @@ from .settings import load_settings  # <-- NEW: pull in global settings (hb_thre
 #       "log": "last few KB of HandBrake output",
 #       "returncode": int | None,
 #       "pid": int | None,
-#       "progress": float (0.0 - 100.0)
+#       "progress": float (0.0 - 100.0),
+#       "eta_seconds": float | None   # NEW: remaining time in seconds (if known)
 #   }
 #
 # job_queue: list of job_ids representing run order for "queued" jobs
@@ -62,8 +64,15 @@ queue_paused: bool = False
 dispatcher_started: bool = False
 
 # Regex to parse HandBrakeCLI progress lines:
-# e.g. "Encoding: task 1 of 1, 42.34 %"
-PROGRESS_RE = re.compile(r"Encoding:\s+task\s+\d+\s+of\s+\d+,\s*([\d\.]+)\s*%")
+# e.g. "Encoding: task 1 of 1, 42.34 % (118.19 fps, avg 118.40 fps, ETA 00h02m34s)"
+PROGRESS_RE = re.compile(
+    r"Encoding:\s+task\s+\d+\s+of\s+\d+,\s*([\d\.]+)\s*%"
+)
+
+# Regex to extract the ETA substring from a line.
+# It is intentionally loose: it just grabs the token after "ETA",
+# e.g. "00h02m34s", "03m21s", "00:03:21"
+ETA_RE = re.compile(r"ETA\s+([0-9hms:]+)")
 
 
 # -------------------------------------------------------------------
@@ -91,6 +100,65 @@ def is_allowed_path(path: str) -> bool:
 
 
 # -------------------------------------------------------------------
+# ETA parsing helper
+# -------------------------------------------------------------------
+
+def _parse_eta_to_seconds(eta_str: str) -> float | None:
+    """
+    Convert an ETA string from HandBrake into seconds.
+
+    Supports formats like:
+      - "00h02m34s"
+      - "03m21s"
+      - "00:03:21"
+      - "03:21"
+
+    Returns:
+        float | None: total seconds, or None if we can't parse.
+    """
+    if not eta_str:
+        return None
+
+    s = eta_str.strip()
+
+    # Case 1: colon-separated formats "HH:MM:SS" or "MM:SS"
+    if ":" in s:
+        parts = s.split(":")
+        try:
+            if len(parts) == 3:
+                h, m, sec = [int(p) for p in parts]
+            elif len(parts) == 2:
+                h = 0
+                m, sec = [int(p) for p in parts]
+            else:
+                return None
+        except ValueError:
+            return None
+        return float(h * 3600 + m * 60 + sec)
+
+    # Case 2: letter-based formats like "01h23m45s" or "03m21s"
+    # Grab all "<number><unit>" pairs.
+    matches = re.findall(r"(\d+)([hms])", s)
+    if not matches:
+        return None
+
+    total = 0
+    for value, unit in matches:
+        try:
+            v = int(value)
+        except ValueError:
+            continue
+        if unit == "h":
+            total += v * 3600
+        elif unit == "m":
+            total += v * 60
+        elif unit == "s":
+            total += v
+
+    return float(total) if total > 0 else None
+
+
+# -------------------------------------------------------------------
 # Persistence: saving / loading jobs.json
 # -------------------------------------------------------------------
 
@@ -114,6 +182,8 @@ def save_jobs():
                 "returncode": j.get("returncode"),
                 "pid": None,  # never persist the actual pid
                 "progress": float(j.get("progress") or 0.0),
+                # NEW: persist ETA if present
+                "eta_seconds": j.get("eta_seconds"),
             }
 
         state = {
@@ -171,6 +241,8 @@ def load_jobs():
                 "returncode": j.get("returncode"),
                 "pid": None,
                 "progress": float(j.get("progress") or 0.0),
+                # NEW: restore ETA if it was saved
+                "eta_seconds": j.get("eta_seconds"),
             }
 
         # rebuild queue, keeping only jobs that still exist and are queued
@@ -225,6 +297,7 @@ def create_job(src: str, preset: str) -> str:
         "returncode": None,
         "pid": None,
         "progress": 0.0,
+        "eta_seconds": None,  # not known yet
     }
     job_queue.append(job_id)
     save_jobs()
@@ -256,6 +329,7 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
             "returncode": None,
             "pid": None,
             "progress": 0.0,
+            "eta_seconds": None,
         }
         job_queue.append(job_id)
         count += 1
@@ -288,12 +362,21 @@ def list_jobs_for_api() -> list[dict]:
       - status
       - returncode
       - progress
+      - eta_seconds (float | None)
       - has_log (bool)
     """
     job_items = []
     for jid, j in jobs.items():
         log_path = os.path.join(LOG_DIR, f"{jid}.log")
         has_log = os.path.isfile(log_path)
+
+        eta_val = j.get("eta_seconds")
+        if eta_val is not None:
+            try:
+                eta_val = float(eta_val)
+            except (TypeError, ValueError):
+                eta_val = None
+
         job_items.append(
             {
                 "id": jid,
@@ -302,6 +385,7 @@ def list_jobs_for_api() -> list[dict]:
                 "status": j.get("status"),
                 "returncode": j.get("returncode"),
                 "progress": float(j.get("progress") or 0.0),
+                "eta_seconds": eta_val,
                 "has_log": has_log,
             }
         )
@@ -323,24 +407,26 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     - Spawns /worker/encode-one.sh with proper env vars
     - Streams output into a log file & memory
     - Parses progress using PROGRESS_RE
+    - Parses ETA using ETA_RE
     - Handles cancellation (if job["status"] is set to "canceled")
     - Updates final status to "done" or "error"
     """
     job = jobs[job_id]
     job["status"] = "running"
     job["progress"] = 0.0
+    job["eta_seconds"] = None  # reset ETA at the start
     save_jobs()
 
     # ------------------------------------------------------------
     # ENVIRONMENT SETUP FOR WORKER SCRIPT
     # - SRC: path to source video (always required)
     # - HB_PRESET_FILE / HB_PRESET_NAME: resolved from preset key
-    # - HB_THREADS: (NEW) optional override from settings.py (Settings page)
+    # - HB_THREADS: optional override from settings.py (Settings page)
     # ------------------------------------------------------------
     env = os.environ.copy()
     env["SRC"] = src_path  # encode-one.sh uses this
 
-    # --- NEW: CPU thread setting pulled from global Settings ---
+    # CPU thread setting pulled from global Settings:
     # Settings page stores hb_threads in settings.json.
     # If hb_threads > 0, we pass it down as HB_THREADS so encode-one.sh
     # can include "--encopts threads=<N>" when calling HandBrakeCLI.
@@ -383,7 +469,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     # STREAM OUTPUT:
     # - Write full log to file
     # - Keep in-memory tail for quick viewing in web UI
-    # - Update progress based on HandBrake output
+    # - Update progress and ETA based on HandBrake output
     # ------------------------------------------------------------
     with open(log_path, "w") as lf:
         for line in proc.stdout:
@@ -402,6 +488,13 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                 except ValueError:
                     pass
 
+            # Parse ETA from this line, if present
+            em = ETA_RE.search(line)
+            if em:
+                eta_str = em.group(1)
+                eta_seconds = _parse_eta_to_seconds(eta_str)
+                job["eta_seconds"] = eta_seconds
+
             # If the job was canceled externally, stop reading further
             if job.get("status") == "canceled":
                 break
@@ -415,6 +508,9 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
         job["status"] = "done" if ret == 0 else "error"
         if ret == 0:
             job["progress"] = 100.0
+
+    # Once finished (or canceled), ETA no longer makes sense
+    job["eta_seconds"] = None
 
     job["pid"] = None
     save_jobs()
@@ -554,6 +650,7 @@ def cancel_job(job_id: str) -> tuple[bool, str | None]:
         job["status"] = "canceled"
         job["returncode"] = None
         job["progress"] = 0.0
+        job["eta_seconds"] = None
         save_jobs()
         return True, None
 
@@ -568,6 +665,7 @@ def cancel_job(job_id: str) -> tuple[bool, str | None]:
     job["status"] = "canceled"
     job["returncode"] = None
     job["progress"] = 0.0
+    job["eta_seconds"] = None
     save_jobs()
 
     return True, None

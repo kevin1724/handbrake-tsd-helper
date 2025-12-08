@@ -156,6 +156,7 @@
           <th>Status</th>
           <th>Return</th>
           <th>Progress</th>
+          <th>ETA</th>
           <th>Log</th>
           <th>Actions</th>
         </tr>
@@ -176,7 +177,7 @@ console.log('DEBUG presetFiles from server:', presetFiles);
 let currentPath = null;
 let currentJobId = null;
 let statusTimer = null;
-let jobsTimer = null;
+let jobsTimer = null;     // <-- keep this one, remove the duplicate
 
 // --------------------------
 // Helpers for roots / paths
@@ -358,7 +359,6 @@ function renderSearchResults(results) {
   });
 }
 
-
 function searchMedia() {
   const input = document.getElementById('searchInput');
   const status = document.getElementById('searchStatus');
@@ -387,7 +387,6 @@ function searchMedia() {
       status.textContent = 'Search failed.';
     });
 }
-
 
 // --------------------------
 // Encode / cancel / status
@@ -490,6 +489,30 @@ function checkStatus() {
     });
 }
 
+// ----------------------------------------------------------
+// Helper: convert seconds → "1h 23m", "5m 10s", "32s", etc.
+// (currently unused, but kept for future ETA work)
+// ----------------------------------------------------------
+function formatEta(seconds) {
+  if (!isFinite(seconds) || seconds <= 0) {
+    return '';
+  }
+
+  let s = Math.round(seconds);
+  const hours = Math.floor(s / 3600);
+  s = s % 3600;
+  const mins = Math.floor(s / 60);
+  const secs = s % 60;
+
+  if (hours > 0) {
+    return `${hours}h ${mins}m`;
+  }
+  if (mins > 0) {
+    return `${mins}m ${secs}s`;
+  }
+  return `${secs}s`;
+}
+
 // --------------------------
 // Jobs table + queue state
 // --------------------------
@@ -519,25 +542,21 @@ function refreshJobs() {
         // -------- File column (show basename only, full path as tooltip) --------
         const tdSrc = document.createElement('td');
         const fullSrc = job.src || '';
-        // Extract just the filename from the full path (works for / and \)
         const baseName = fullSrc.split(/[\\/]/).pop();
-
         tdSrc.textContent = baseName || fullSrc;
         tdSrc.className = "small";
-        // Keep the full path on hover so we still have that info when needed
         tdSrc.title = fullSrc;
         tr.appendChild(tdSrc);
 
-        // -------- Preset column (1080 / 4k / auto-resolved) --------
+        // -------- Preset column --------
         const tdPreset = document.createElement('td');
         tdPreset.textContent = job.preset;
         tr.appendChild(tdPreset);
 
-        // -------- Status column (with color-coded classes) --------
+        // -------- Status column --------
         const tdStatus = document.createElement('td');
         tdStatus.textContent = job.status;
 
-        // Add a CSS class to color / style based on status
         if (job.status === 'done') {
           tdStatus.className = 'job-status-done';
         } else if (job.status === 'error') {
@@ -551,18 +570,27 @@ function refreshJobs() {
         }
         tr.appendChild(tdStatus);
 
-        // -------- Return code column (empty if null) --------
+        // -------- Return code column --------
         const tdRc = document.createElement('td');
         tdRc.textContent = job.returncode === null ? '' : job.returncode;
         tr.appendChild(tdRc);
 
-        // -------- Progress column (e.g. "42.3%") --------
+        // -------- Progress column --------
         const tdProg = document.createElement('td');
         tdProg.textContent =
           job.progress != null ? job.progress.toFixed(1) + '%' : '';
         tr.appendChild(tdProg);
 
-        // -------- Log column (download link if log exists) --------
+        // -------- ETA column (uses job.eta_seconds from backend) --------
+        const tdEta = document.createElement('td');
+        if (job.eta_seconds != null && job.status === 'running') {
+          tdEta.textContent = formatEta(job.eta_seconds);
+        } else {
+          tdEta.textContent = '';
+        }
+        tr.appendChild(tdEta);
+
+        // -------- Log column --------
         const tdLog = document.createElement('td');
         if (job.has_log) {
           const a = document.createElement('a');
@@ -575,10 +603,8 @@ function refreshJobs() {
         }
         tr.appendChild(tdLog);
 
-        // -------- Actions column (currently: remove queued job) --------
+        // -------- Actions column --------
         const tdActions = document.createElement('td');
-
-        // Only allow "Remove from queue" for jobs that are still queued
         if (job.status === 'queued') {
           const removeBtn = document.createElement('button');
           removeBtn.textContent = 'Remove from queue';
@@ -592,7 +618,6 @@ function refreshJobs() {
                   alert(data.error);
                   return;
                 }
-                // Re-render jobs after successful removal
                 refreshJobs();
               })
               .catch(err => {
@@ -602,13 +627,10 @@ function refreshJobs() {
           };
           tdActions.appendChild(removeBtn);
         } else {
-          // For non-queued jobs, no actions (for now)
           tdActions.textContent = '';
         }
-
         tr.appendChild(tdActions);
 
-        // Finally, append the completed row to the table body
         tbody.appendChild(tr);
       });
     })
@@ -616,6 +638,7 @@ function refreshJobs() {
       console.error(err);
     });
 }
+
 
 function batchRename() {
   if (!currentPath) {
@@ -885,6 +908,7 @@ document.addEventListener('DOMContentLoaded', () => {
   }, 5000);
 });
 </script>
+
 
 </body>
 </html>
