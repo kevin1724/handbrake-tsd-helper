@@ -494,48 +494,75 @@ function checkStatus() {
 // Jobs table + queue state
 // --------------------------
 function refreshJobs() {
+  // Fetch the latest list of jobs from the backend
   fetch('/jobs')
     .then(r => r.json())
     .then(data => {
+      // If the backend returned an error, just stop
       if (data.error) return;
 
+      // Grab the <tbody> where we render all job rows
       const tbody = document.getElementById('jobsTableBody');
+      // Clear any old rows before re-rendering
       tbody.innerHTML = '';
 
+      // Loop over each job returned by /jobs
       data.jobs.forEach(job => {
         const tr = document.createElement('tr');
 
+        // -------- Job ID column --------
         const tdId = document.createElement('td');
-        tdId.textContent = job.id;
-        tdId.className = "small";
+        tdId.textContent = job.id;     // full UUID
+        tdId.className = "small";      // smaller font so it doesn’t dominate
         tr.appendChild(tdId);
 
+        // -------- File column (show basename only, full path as tooltip) --------
         const tdSrc = document.createElement('td');
-        tdSrc.textContent = job.src;
+        const fullSrc = job.src || '';
+        // Extract just the filename from the full path (works for / and \)
+        const baseName = fullSrc.split(/[\\/]/).pop();
+
+        tdSrc.textContent = baseName || fullSrc;
         tdSrc.className = "small";
+        // Keep the full path on hover so we still have that info when needed
+        tdSrc.title = fullSrc;
         tr.appendChild(tdSrc);
 
+        // -------- Preset column (1080 / 4k / auto-resolved) --------
         const tdPreset = document.createElement('td');
         tdPreset.textContent = job.preset;
         tr.appendChild(tdPreset);
 
+        // -------- Status column (with color-coded classes) --------
         const tdStatus = document.createElement('td');
         tdStatus.textContent = job.status;
-        if (job.status === 'done') tdStatus.className = 'job-status-done';
-        else if (job.status === 'error') tdStatus.className = 'job-status-error';
-        else if (job.status === 'running') tdStatus.className = 'job-status-running';
-        else if (job.status === 'canceled') tdStatus.className = 'job-status-canceled';
-        else if (job.status === 'queued') tdStatus.className = 'job-status-queued';
+
+        // Add a CSS class to color / style based on status
+        if (job.status === 'done') {
+          tdStatus.className = 'job-status-done';
+        } else if (job.status === 'error') {
+          tdStatus.className = 'job-status-error';
+        } else if (job.status === 'running') {
+          tdStatus.className = 'job-status-running';
+        } else if (job.status === 'canceled') {
+          tdStatus.className = 'job-status-canceled';
+        } else if (job.status === 'queued') {
+          tdStatus.className = 'job-status-queued';
+        }
         tr.appendChild(tdStatus);
 
+        // -------- Return code column (empty if null) --------
         const tdRc = document.createElement('td');
         tdRc.textContent = job.returncode === null ? '' : job.returncode;
         tr.appendChild(tdRc);
 
+        // -------- Progress column (e.g. "42.3%") --------
         const tdProg = document.createElement('td');
-        tdProg.textContent = job.progress != null ? job.progress.toFixed(1) + '%' : '';
+        tdProg.textContent =
+          job.progress != null ? job.progress.toFixed(1) + '%' : '';
         tr.appendChild(tdProg);
 
+        // -------- Log column (download link if log exists) --------
         const tdLog = document.createElement('td');
         if (job.has_log) {
           const a = document.createElement('a');
@@ -548,12 +575,16 @@ function refreshJobs() {
         }
         tr.appendChild(tdLog);
 
+        // -------- Actions column (currently: remove queued job) --------
         const tdActions = document.createElement('td');
+
+        // Only allow "Remove from queue" for jobs that are still queued
         if (job.status === 'queued') {
           const removeBtn = document.createElement('button');
           removeBtn.textContent = 'Remove from queue';
           removeBtn.onclick = () => {
             if (!confirm('Remove this queued job?')) return;
+
             fetch('/remove/' + encodeURIComponent(job.id), { method: 'POST' })
               .then(r => r.json())
               .then(data => {
@@ -561,6 +592,7 @@ function refreshJobs() {
                   alert(data.error);
                   return;
                 }
+                // Re-render jobs after successful removal
                 refreshJobs();
               })
               .catch(err => {
@@ -570,10 +602,13 @@ function refreshJobs() {
           };
           tdActions.appendChild(removeBtn);
         } else {
+          // For non-queued jobs, no actions (for now)
           tdActions.textContent = '';
         }
+
         tr.appendChild(tdActions);
 
+        // Finally, append the completed row to the table body
         tbody.appendChild(tr);
       });
     })
