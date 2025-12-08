@@ -34,9 +34,11 @@ from .jobs import (
     cancel_job,
     remove_queued_job,
     clear_finished_jobs as clear_finished_jobs_core,
+    clear_queued_jobs,          
     get_queue_state,
     set_queue_paused,
 )
+
 from .presets import (
     list_preset_files,
     preset_config,
@@ -409,6 +411,20 @@ def register_routes(app):
         """
         removed = clear_finished_jobs_core()
         return jsonify(removed=removed)
+
+    # ------------- Clear queued jobs -------------
+
+    @app.route("/clear_queued_jobs", methods=["POST"])
+    def clear_queued_jobs_route():
+        """
+        Delete all jobs that are currently queued (status == 'queued').
+
+        - Running jobs are NOT touched
+        - Finished / error / canceled history is NOT touched
+        """
+        removed = clear_queued_jobs()
+        return jsonify(removed=removed)
+
 
     # ------------- Preset config (1080 / 4k mapping) -------------
 

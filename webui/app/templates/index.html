@@ -145,8 +145,13 @@
     <div class="row" style="display:flex; gap:10px; align-items:center;">
       <button id="pauseQueueBtn">Pause queue</button>
       <span id="queueStatusLabel" class="small"></span>
+
+      <!-- clear queued jobs button -->
+      <button id="clearQueuedBtn">Clear queued jobs</button>
+
       <button id="clearFinishedBtn" style="margin-left:auto;">Clear finished jobs (done/error)</button>
     </div>
+
     <table>
       <thead>
         <tr>
@@ -740,6 +745,31 @@ function clearFinishedJobs() {
     });
 }
 
+function clearQueuedJobs() {
+  if (!confirm("This will remove ALL jobs that are currently in 'queued' status.\n\nRunning jobs will NOT be touched.\n\nContinue?")) {
+    return;
+  }
+
+  fetch('/clear_queued_jobs', {
+    method: 'POST'
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        alert(data.error);
+        return;
+      }
+      // Optionally show how many were removed:
+      // alert("Removed " + (data.removed ?? 0) + " queued job(s).");
+      refreshJobs();
+    })
+    .catch(err => {
+      console.error(err);
+      alert('Failed to clear queued jobs');
+    });
+}
+
+
 function refreshQueueState() {
   fetch('/queue_state')
     .then(r => r.json())
@@ -749,7 +779,7 @@ function refreshQueueState() {
       if (!data || typeof data.paused === 'undefined') return;
 
       if (data.paused) {
-        label.textContent = 'Queue is paused – no new jobs will start.';
+        label.textContent = 'Queue is paused – no new jobs will start';
         btn.textContent = 'Resume queue';
       } else {
         label.textContent = 'Queue is running.';
@@ -887,6 +917,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('batchEncodeBtn').onclick = () => batchEncode(true);
   document.getElementById('batchEncodeRecursiveBtn').onclick = () => batchEncode(false);
   document.getElementById('clearFinishedBtn').onclick = clearFinishedJobs;
+  document.getElementById('clearQueuedBtn').onclick = clearQueuedJobs;
   document.getElementById('pauseQueueBtn').onclick = toggleQueuePause;
   document.getElementById('savePresetConfigBtn').onclick = savePresetConfigUI;
 

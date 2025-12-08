@@ -788,3 +788,49 @@ def clear_finished_jobs() -> int:
 
     save_jobs()
     return removed
+
+def clear_queued_jobs() -> int:
+    """
+    Remove all jobs that are currently queued (status == "queued").
+
+    - Does NOT touch running jobs
+    - Does NOT touch done / error / canceled jobs (those are history)
+    - Also removes them from job_queue
+    - Logs are removed if they exist (usually they won't for queued jobs)
+
+    Returns:
+        int: number of jobs removed
+    """
+    global jobs, job_queue
+
+    to_remove: list[str] = []
+    for jid, j in list(jobs.items()):
+        if j.get("status") == "queued":
+            to_remove.append(jid)
+
+    removed = 0
+    for jid in to_remove:
+        # Remove from jobs dict
+        jobs.pop(jid, None)
+        removed += 1
+
+        # Make sure it's not in the queue
+        if jid in job_queue:
+            try:
+                job_queue.remove(jid)
+            except ValueError:
+                pass
+
+        # Remove log file if present (probably rare for queued jobs)
+        log_path = os.path.join(LOG_DIR, f"{jid}.log")
+        try:
+            os.remove(log_path)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[WARN] Failed to remove log for queued job {jid}: {e}", flush=True)
+
+    save_jobs()
+    return removed
+
+
