@@ -178,6 +178,7 @@ def save_jobs():
                 "status": j.get("status"),
                 "src": j.get("src"),
                 "preset": j.get("preset"),
+                "extra_args": j.get("extra_args", ""),
                 "log": j.get("log", ""),
                 "returncode": j.get("returncode"),
                 "pid": None,  # never persist the actual pid
@@ -237,6 +238,7 @@ def load_jobs():
                 "status": status,
                 "src": j.get("src"),
                 "preset": j.get("preset"),
+                "extra_args": j.get("extra_args", ""),
                 "log": j.get("log", ""),
                 "returncode": j.get("returncode"),
                 "pid": None,
@@ -290,7 +292,7 @@ def _find_existing_active_job_for_src(src: str) -> str | None:
 # Core job creation / lookup helpers (used by routes)
 # -------------------------------------------------------------------
 
-def create_job(src: str, preset: str) -> str:
+def create_job(src: str, preset: str, extra_args: str = "") -> str:
     """
     Create a single job and append it to the queue.
 
@@ -320,6 +322,7 @@ def create_job(src: str, preset: str) -> str:
         "status": "queued",
         "src": src,
         "preset": preset,
+        "extra_args": extra_args or "",
         "log": "",
         "returncode": None,
         "pid": None,
@@ -491,6 +494,12 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     preset_file, preset_name = resolve_preset_file_and_name(preset_key)
     env["HB_PRESET_FILE"] = preset_file
     env["HB_PRESET_NAME"] = preset_name
+
+    # Optional extra HandBrakeCLI args (used by Size Wizard, etc.)
+    env["HB_EXTRA_ARGS"] = job.get("extra_args", "")
+
+    # Optional: additional HandBrakeCLI args (Size Wizard, etc.)
+    env["HB_EXTRA_ARGS"] = job.get("extra_args", "")
 
     # Log file location for this job
     log_path = os.path.join(LOG_DIR, f"{job_id}.log")

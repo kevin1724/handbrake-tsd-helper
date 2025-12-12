@@ -84,12 +84,16 @@ fi
 # ------------------------------------------------------------
 if [ -f "$PRESET_FILE" ]; then
   echo "Using preset file + preset name..."
-  HandBrakeCLI \
-    --preset-import-file "$PRESET_FILE" \
-    -Z "$PRESET_NAME" \
-    ${HB_THREAD_OPTS} \
-    -i "$SRC" \
-    -o "$OUT"
+EXTRA_ARGS="${HB_EXTRA_ARGS:-}"
+
+HandBrakeCLI \
+  --preset-import-file "$PRESET_FILE" \
+  -Z "$PRESET_NAME" \
+  ${HB_THREAD_OPTS} \
+  ${EXTRA_ARGS} \
+  -i "$SRC" \
+  -o "$OUT"
+
 else
   echo "WARNING: Preset file not found, using basic fallback settings..."
   HandBrakeCLI \

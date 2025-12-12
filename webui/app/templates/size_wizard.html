@@ -1,0 +1,111 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>HandBrake TSD Helper – Size Wizard</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+</head>
+<body>
+  <nav class="top-nav">
+    <a href="/" class="nav-link">Jobs</a>
+    <a href="/size_wizard" class="nav-link nav-link-active">Size Wizard</a>
+    <a href="/settings" class="nav-link">Settings</a>
+  </nav>
+
+  <h1>Size Wizard</h1>
+
+  <div class="section-card">
+    <h2>Pick size + quality, then queue the job</h2>
+
+    <div class="row">
+      <label>Selected file:</label>
+      <input id="src" type="text" style="width:80%;" readonly>
+    </div>
+
+    <div class="row">
+      <label for="preset">Preset base:</label>
+      <select id="preset">
+        <option value="auto">Auto by filename</option>
+        <option value="1080">Force 1080p preset</option>
+        <option value="4k">Force 4K preset</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <label>Target size:</label>
+      <input id="sizeValue" type="number" min="50" step="1" value="1500" style="width:120px;">
+      <select id="sizeUnit">
+        <option value="MB">MB</option>
+        <option value="GB">GB</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <label for="quality">Quality priority:</label>
+      <select id="quality">
+        <option value="high">High quality (slower)</option>
+        <option value="balanced" selected>Balanced</option>
+        <option value="small">Smallest possible (faster)</option>
+      </select>
+    </div>
+
+    <div class="row">
+      <button id="queueBtn">Queue Wizard Encode</button>
+      <span id="queueStatus" class="small"></span>
+    </div>
+
+    <div class="row">
+      <pre id="result" class="small"></pre>
+    </div>
+  </div>
+
+  <script>
+    function qs(name) {
+      const p = new URLSearchParams(window.location.search);
+      return p.get(name);
+    }
+
+    // Prefill from query string (coming from Jobs page)
+    const srcQ = qs('src');
+    const presetQ = qs('preset');
+    if (srcQ) document.getElementById('src').value = srcQ;
+    if (presetQ) document.getElementById('preset').value = presetQ;
+
+    async function queueWizard() {
+      const src = document.getElementById('src').value;
+      const preset = document.getElementById('preset').value;
+      const target_size_value = Number(document.getElementById('sizeValue').value);
+      const target_size_unit = document.getElementById('sizeUnit').value;
+      const quality = document.getElementById('quality').value;
+
+      if (!src) {
+        alert('No file selected. Go back to Jobs and pick a file first.');
+        return;
+      }
+
+      const payload = { src, preset, target_size_value, target_size_unit, quality };
+
+      document.getElementById('queueStatus').textContent = 'Queuing...';
+      document.getElementById('result').textContent = '';
+
+      const res = await fetch('/encode_wizard', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        document.getElementById('queueStatus').textContent = 'Error';
+        document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+        return;
+      }
+
+      document.getElementById('queueStatus').textContent = 'Queued!';
+      document.getElementById('result').textContent = JSON.stringify(data, null, 2);
+    }
+
+    document.getElementById('queueBtn').onclick = queueWizard;
+  </script>
+</body>
+</html>

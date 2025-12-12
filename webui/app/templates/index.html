@@ -14,6 +14,7 @@
   <!-- Simple top nav (matches settings.html) -->
   <nav class="top-nav">
     <a href="/" class="nav-link nav-link-active">Jobs</a>
+    <a href="/size_wizard" class="nav-link">Size Wizard</a>
     <a href="/settings" class="nav-link">Settings</a>
   </nav>
 
@@ -66,6 +67,11 @@
     <div class="row">
       <label>Selected file:</label>
       <input type="text" id="selectedFile" style="width:80%;" readonly>
+    </div>
+
+    <div class="row">
+      <button id="openWizardBtn" disabled>Open in Size Wizard</button>
+      <span class="small">(Sends the selected file + preset mode to the wizard)</span>
     </div>
 
     <div class="row">
@@ -185,6 +191,30 @@ let statusTimer = null;
 let jobsTimer = null;     // <-- keep this one, remove the duplicate
 
 // --------------------------
+// Size Wizard bridge
+// --------------------------
+function updateWizardBtn() {
+  const btn = document.getElementById('openWizardBtn');
+  const src = document.getElementById('selectedFile').value;
+  if (btn) btn.disabled = !src;
+}
+
+function setSelectedFile(path) {
+  document.getElementById('selectedFile').value = path || '';
+  updateWizardBtn();
+}
+
+function openSizeWizard() {
+  const src = document.getElementById('selectedFile').value;
+  if (!src) {
+    alert('Pick a video file first.');
+    return;
+  }
+  const preset = document.getElementById('presetSelect').value;
+  window.location.href = '/size_wizard?src=' + encodeURIComponent(src) + '&preset=' + encodeURIComponent(preset);
+}
+
+// --------------------------
 // Helpers for roots / paths
 // --------------------------
 function safeInitCurrentPath() {
@@ -274,7 +304,7 @@ function loadDir(path) {
           if (!base.startsWith('/')) base = '/' + base;
           if (base.endsWith('/')) base = base.slice(0, -1);
           const fullPath = base + '/' + name;
-          document.getElementById('selectedFile').value = fullPath;
+          setSelectedFile(fullPath);
         };
         filesUl.appendChild(li);
       });
@@ -349,11 +379,11 @@ function renderSearchResults(results) {
     li.onclick = () => {
       if (item.type === 'dir') {
         // For folders: navigate there and clear any selected file
-        document.getElementById('selectedFile').value = '';
+        setSelectedFile('');
         loadDir(item.path);
       } else {
         // For files: select the file and also load the folder it lives in
-        document.getElementById('selectedFile').value = item.path;
+        setSelectedFile(item.path);
         if (item.folder) {
           loadDir(item.folder);
         }
@@ -912,6 +942,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('upBtn').onclick = goUp;
   document.getElementById('startBtn').onclick = startEncode;
+  document.getElementById('openWizardBtn').onclick = openSizeWizard;
   document.getElementById('cancelBtn').onclick = cancelEncode;
   document.getElementById('batchRenameBtn').onclick = batchRename;
   document.getElementById('batchEncodeBtn').onclick = () => batchEncode(true);
@@ -930,6 +961,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   loadPresetConfigUI();
+  updateWizardBtn();
   refreshJobs();
   refreshQueueState();
 

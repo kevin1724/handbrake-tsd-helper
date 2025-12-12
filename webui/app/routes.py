@@ -80,6 +80,11 @@ def register_routes(app):
             preset_dir=PRESET_DIR,
         )
 
+    @app.route("/size_wizard")
+    def size_wizard_page():
+        """Render the Size Wizard page (prefill via query string)."""
+        return render_template("size_wizard.html")
+
     @app.route("/settings")
     def settings_page():
         """
@@ -197,6 +202,71 @@ def register_routes(app):
 
         job_id = create_job(src, preset)
         return jsonify(job_id=job_id)
+
+
+  # ---------- size wizard -----------------------
+
+    @app.route("/encode_wizard", methods=["POST"])
+    def encode_wizard():
+        """Queue an encode with "target size" + simple quality tweaks.
+
+        Body JSON:
+        {
+          "src": "/full/path/to/file.mkv",
+          "preset": "1080" | "4k" | "auto",
+          "target_size_value": 1500,
+          "target_size_unit": "MB" | "GB",
+          "quality": "high" | "balanced" | "small"
+        }
+        """
+        data = request.get_json(force=True)
+
+        src = data.get("src")
+        preset = data.get("preset") or "auto"
+        size_value = data.get("target_size_value")
+        size_unit = (data.get("target_size_unit") or "MB").upper()
+        quality = data.get("quality") or "balanced"
+
+        if not src or not os.path.isfile(src):
+            return jsonify(error="invalid src"), 400
+        if not is_allowed_path(src):
+            return jsonify(error="path not allowed"), 400
+        if preset not in ("1080", "4k", "auto"):
+            return jsonify(error="invalid preset"), 400
+        if size_unit not in ("MB", "GB"):
+            return jsonify(error="invalid target_size_unit"), 400
+        if quality not in ("high", "balanced", "small"):
+            return jsonify(error="invalid quality"), 400
+        try:
+            size_value_f = float(size_value)
+        except Exception:
+            return jsonify(error="invalid target_size_value"), 400
+        if size_value_f <= 0:
+            return jsonify(error="invalid target_size_value"), 400
+
+        # Prevent duplicates: same behavior as normal create_job.
+        base = os.path.basename(src)
+        name_only, _ext = os.path.splitext(base)
+        if name_only.lower().endswith("-tsd"):
+            return jsonify(error="file already tagged -TSD, not queuing"), 400
+
+        if preset == "auto":
+            preset = guess_preset_from_filename(base)
+
+        # HandBrakeCLI --target-size expects MB
+        target_mb = size_value_f * (1024.0 if size_unit == "GB" else 1.0)
+
+        # Simple quality→speed mapping (we'll evolve this later)
+        extra_args = [f"--target-size {int(target_mb)}"]
+        if quality == "high":
+            extra_args.append("--encoder-preset slow")
+        elif quality == "balanced":
+            extra_args.append("--encoder-preset medium")
+        else:
+            extra_args.append("--encoder-preset fast")
+
+        job_id = create_job(src, preset, extra_args=" ".join(extra_args))
+        return jsonify(job_id=job_id, preset=preset, extra_args=extra_args)
 
     # ------------- Job status -------------
 
