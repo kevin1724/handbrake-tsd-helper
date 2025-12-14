@@ -1,5 +1,4 @@
 <!doctype html>
-
 <html>
 <head>
   <meta charset="utf-8">
@@ -18,55 +17,53 @@
   <div class="section-card">
     <h2>Pick size + quality, then queue the job</h2>
 
-```
-<div class="row">
-  <label>Selected file:</label>
-  <input id="src" type="text" style="width:80%;" readonly>
-</div>
+    <div class="row">
+      <label>Selected file:</label>
+      <input id="src" type="text" style="width:80%;" readonly>
+    </div>
 
-<div class="row">
-  <label for="preset">Preset base:</label>
-  <select id="preset">
-    <option value="auto">Auto by filename</option>
-    <option value="1080">Force 1080p preset</option>
-    <option value="4k">Force 4K preset</option>
-  </select>
-</div>
+    <div class="row">
+      <label for="preset">Preset base:</label>
+      <select id="preset">
+        <option value="auto">Auto by filename</option>
+        <option value="1080">Force 1080p preset</option>
+        <option value="4k">Force 4K preset</option>
+      </select>
+    </div>
 
-<div class="row">
-  <label>Target size:</label>
-  <input id="sizeValue" type="number" min="1" step="0.1" value="5" style="width:120px;">
-  <select id="sizeUnit">
-    <option value="GB" selected>GB</option>
-  </select>
-</div>
+    <div class="row">
+      <label>Target size:</label>
+      <input id="sizeValue" type="number" min="1" step="0.1" value="5" style="width:120px;">
+      <select id="sizeUnit">
+        <option value="GB" selected>GB</option>
+        <option value="MB">MB</option>
+      </select>
+    </div>
 
-<div class="row">
-  <label for="quality">Quality priority:</label>
-  <select id="quality">
-    <option value="high">High quality (slower)</option>
-    <option value="balanced" selected>Balanced</option>
-    <option value="small">Smallest possible (faster)</option>
-  </select>
-</div>
+    <div class="row">
+      <label for="quality">Quality priority:</label>
+      <select id="quality">
+        <option value="high">High quality (slower)</option>
+        <option value="balanced" selected>Balanced</option>
+        <option value="small">Smallest possible (faster)</option>
+      </select>
+    </div>
 
-<div class="row">
-  <label style="min-width: 160px;">Resolution behavior:</label>
-  <label style="margin-right: 16px;"><input id="allowDownscale" type="checkbox" checked> Allow downscale if needed</label>
-  <label><input id="force4k" type="checkbox"> Force keep original resolution</label>
-</div>
+    <div class="row">
+      <label style="min-width: 160px;">Resolution behavior:</label>
+      <label style="margin-right: 16px;"><input id="allowDownscale" type="checkbox" checked> Allow downscale if needed</label>
+      <label><input id="force4k" type="checkbox"> Force keep original resolution</label>
+    </div>
 
-<div class="row">
-  <button id="queueBtn">Queue Wizard Encode</button>
-  <span id="queueStatus" class="small"></span>
-</div>
+    <div class="row">
+      <button id="queueBtn">Queue Wizard Encode</button>
+      <span id="queueStatus" class="small"></span>
+    </div>
 
-<hr>
+    <hr>
 
-<h3>Live Preview</h3>
-<div id="previewBox" class="small" style="white-space: pre-wrap;"></div>
-```
-
+    <h3>Live Preview</h3>
+    <div id="previewBox" class="small" style="white-space: pre-wrap;"></div>
   </div>
 
   <script>
@@ -85,23 +82,31 @@
       return `${s}s`;
     }
 
+    function fmtTargetSize(value, unit) {
+      const v = Number(value || 0);
+      const u = String(unit || "GB").toUpperCase();
+      if (!v || v <= 0) return "";
+      if (u === "MB") return `${v.toFixed(v < 10 ? 1 : 0)} MB`;
+      return `${v.toFixed(v < 10 ? 1 : 0)} GB`;
+    }
+
     // Prefill from query string (coming from Jobs page)
-    const srcQ = qs('src');
-    const presetQ = qs('preset');
-    if (srcQ) document.getElementById('src').value = srcQ;
-    if (presetQ) document.getElementById('preset').value = presetQ;
+    const srcQ = qs("src");
+    const presetQ = qs("preset");
+    if (srcQ) document.getElementById("src").value = srcQ;
+    if (presetQ) document.getElementById("preset").value = presetQ;
 
     let previewTimer = null;
 
     async function refreshPreview() {
-      const src = document.getElementById('src').value;
-      const target_size_value = Number(document.getElementById('sizeValue').value);
-      const target_size_unit = document.getElementById('sizeUnit').value; // always GB now
-      const quality = document.getElementById('quality').value;
-      const allow_downscale = document.getElementById('allowDownscale').checked;
-      const force_4k = document.getElementById('force4k').checked;
+      const src = document.getElementById("src").value;
+      const target_size_value = Number(document.getElementById("sizeValue").value);
+      const target_size_unit = document.getElementById("sizeUnit").value;
+      const quality = document.getElementById("quality").value;
+      const allow_downscale = document.getElementById("allowDownscale").checked;
+      const force_4k = document.getElementById("force4k").checked;
 
-      const previewEl = document.getElementById('previewBox');
+      const previewEl = document.getElementById("previewBox");
 
       if (!src) {
         previewEl.textContent = "No file selected. Go back to Jobs and pick a file first.";
@@ -112,33 +117,64 @@
 
       const payload = { src, target_size_value, target_size_unit, quality, allow_downscale, force_4k };
 
-      const res = await fetch('/wizard_preview', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      let res, data;
+      try {
+        res = await fetch("/wizard_preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        data = await res.json();
+      } catch (err) {
+        console.error(err);
+        previewEl.textContent = "Preview error: failed to reach server.";
+        return;
+      }
 
-      const data = await res.json();
       if (!res.ok) {
         previewEl.textContent = "Preview error:\n" + JSON.stringify(data, null, 2);
         return;
       }
 
-      const p = data.probe;
-      const e = data.estimates;
+      const p = data.probe || {};
+      const e = data.estimates || {};
 
       const lines = [];
       lines.push(`Source: ${src}`);
-      lines.push(`Duration: ${fmtSeconds(p.duration_sec)}  |  Video: ${p.width}x${p.height} @ ${(p.fps || 0).toFixed(2)} fps`);
+      lines.push(
+        `Duration: ${fmtSeconds(p.duration_sec)}  |  Video: ${p.width}x${p.height} @ ${Number(p.fps || 0).toFixed(2)} fps`
+      );
       lines.push("");
-      lines.push(`Target size: ${data.inputs.target_mb.toFixed(0)} MB`);
-      lines.push(`Bitrate plan: total ~${e.total_bitrate_kbps} kbps (video ~${e.video_bitrate_kbps} kbps, audio ${e.audio_bitrate_kbps} kbps)`);
+
+      // Target size display (use what user entered, not MB-only)
+      lines.push(`Target size: ${fmtTargetSize(target_size_value, target_size_unit)} (${Number(data.inputs?.target_mb || 0).toFixed(0)} MB)`);
+
+      lines.push(
+        `Bitrate plan: total ~${e.total_bitrate_kbps} kbps (video ~${e.video_bitrate_kbps} kbps, audio ${e.audio_bitrate_kbps} kbps)`
+      );
       lines.push(`Quality: ${e.quality_label}  (bpp=${e.bpp})`);
+
+      // CPU-aware ETA display (graceful fallback)
+      const cpuLineParts = [];
+      if (e.cpu_label) cpuLineParts.push(e.cpu_label);
+      if (typeof e.cpu_speed_index !== "undefined") cpuLineParts.push(`x${Number(e.cpu_speed_index).toFixed(2)}`);
+      if (typeof e.cpu_speed_override !== "undefined" && Number(e.cpu_speed_override) !== 1.0) {
+        cpuLineParts.push(`override x${Number(e.cpu_speed_override).toFixed(2)}`);
+      }
+
+      if (cpuLineParts.length > 0) {
+        lines.push(`CPU used for ETA: ${cpuLineParts.join("  ")}`);
+      } else {
+        lines.push(`CPU used for ETA: (not provided by server)`);
+      }
+
       lines.push(`ETA: ${e.eta_human}  (~${e.est_fps} fps est)`);
       lines.push("");
-      lines.push(`Resolution: ${e.output_resolution.width}x${e.output_resolution.height}  (${e.decision})`);
+
+      lines.push(`Resolution: ${e.output_resolution?.width}x${e.output_resolution?.height}  (${e.decision})`);
       if (e.decision_note) lines.push(`Note: ${e.decision_note}`);
       lines.push("");
+
       lines.push("Suggested args:");
       lines.push("  " + (data.suggested_extra_args || []).join(" "));
 
@@ -147,56 +183,63 @@
 
     function schedulePreview() {
       clearTimeout(previewTimer);
-      previewTimer = setTimeout(async () => {
-        await refreshPreview();
-      }, 350);
+      previewTimer = setTimeout(() => refreshPreview(), 350);
     }
 
     async function queueWizard() {
-      const src = document.getElementById('src').value;
-      const preset = document.getElementById('preset').value;
-      const target_size_value = Number(document.getElementById('sizeValue').value);
-      const target_size_unit = document.getElementById('sizeUnit').value; // always GB
-      const quality = document.getElementById('quality').value;
-      const allow_downscale = document.getElementById('allowDownscale').checked;
-      const force_4k = document.getElementById('force4k').checked;
+      const src = document.getElementById("src").value;
+      const preset = document.getElementById("preset").value;
+      const target_size_value = Number(document.getElementById("sizeValue").value);
+      const target_size_unit = document.getElementById("sizeUnit").value;
+      const quality = document.getElementById("quality").value;
+      const allow_downscale = document.getElementById("allowDownscale").checked;
+      const force_4k = document.getElementById("force4k").checked;
 
       if (!src) {
-        alert('No file selected. Go back to Jobs and pick a file first.');
+        alert("No file selected. Go back to Jobs and pick a file first.");
         return;
       }
 
       const payload = { src, preset, target_size_value, target_size_unit, quality, allow_downscale, force_4k };
 
-      document.getElementById('queueStatus').textContent = 'Queuing...';
+      const statusEl = document.getElementById("queueStatus");
+      statusEl.textContent = "Queuing...";
 
-      const res = await fetch('/encode_wizard', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
+      let res, data;
+      try {
+        res = await fetch("/encode_wizard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        data = await res.json();
+      } catch (err) {
+        console.error(err);
+        statusEl.textContent = "Error";
+        alert("Failed to reach server.");
+        return;
+      }
 
-      const data = await res.json();
       if (!res.ok) {
-        document.getElementById('queueStatus').textContent = 'Error';
+        statusEl.textContent = "Error";
         alert(JSON.stringify(data, null, 2));
         return;
       }
 
-      document.getElementById('queueStatus').textContent = 'Queued!';
+      statusEl.textContent = "Queued!";
+      setTimeout(() => statusEl.textContent = "", 2500);
     }
 
     // Hook up events
-    document.getElementById('sizeValue').addEventListener('input', schedulePreview);
-    document.getElementById('sizeUnit').addEventListener('change', schedulePreview);
-    document.getElementById('quality').addEventListener('change', schedulePreview);
-    document.getElementById('allowDownscale').addEventListener('change', schedulePreview);
-    document.getElementById('force4k').addEventListener('change', schedulePreview);
-    document.getElementById('queueBtn').onclick = queueWizard;
+    document.getElementById("sizeValue").addEventListener("input", schedulePreview);
+    document.getElementById("sizeUnit").addEventListener("change", schedulePreview);
+    document.getElementById("quality").addEventListener("change", schedulePreview);
+    document.getElementById("allowDownscale").addEventListener("change", schedulePreview);
+    document.getElementById("force4k").addEventListener("change", schedulePreview);
+    document.getElementById("queueBtn").onclick = queueWizard;
 
     // initial preview
     schedulePreview();
   </script>
-
 </body>
 </html>

@@ -24,8 +24,6 @@
 
   <!-- ============================================================
        DATA PASSED FROM BACKEND
-       - settings: current global settings (hb_threads, etc.)
-       - preset_files: list of preset file paths in PRESET_DIR
        ------------------------------------------------------------ -->
   <script>
     const initialSettings = {{ settings | tojson | safe }};
@@ -33,14 +31,13 @@
   </script>
 
   <!-- ============================================================
-       Encoding Settings: CPU threads / cores
+       Encoding Settings
        ------------------------------------------------------------ -->
   <div class="section-card">
     <h2>Encoding Settings</h2>
+
     <p class="small">
       Control how many CPU threads HandBrake can use during encoding.
-      Setting this higher lets the encoder use more of your CPU (faster encodes,
-      but more system load).
     </p>
 
     <div class="row">
@@ -54,10 +51,23 @@
       >
     </div>
 
+    <div class="row">
+      <label for="cpuProfileSelect">CPU model (for ETA estimates):</label>
+      <select id="cpuProfileSelect" style="min-width: 360px;">
+        <option value="">Loading CPU list…</option>
+      </select>
+    </div>
+
     <p class="small">
-      <strong>Tip:</strong><br>
-      - <code>0</code> or blank = let HandBrake decide (auto).<br>
-      - A good starting point is the number of physical cores on the machine running this container.
+      This only affects <strong>Size Wizard ETA estimates</strong>.
+      It does <strong>not</strong> change HandBrake quality or presets.
+    </p>
+
+    <p class="small">
+      <strong>Tips:</strong><br>
+      - <code>0</code> threads = let HandBrake decide automatically<br>
+      - Pick the CPU closest to the machine running this container<br>
+      - Small OptiPlex / Tiny PCs may run slightly slower due to thermals
     </p>
 
     <div class="row" style="margin-top:10px;">
@@ -71,10 +81,6 @@
        ------------------------------------------------------------ -->
   <div class="section-card">
     <h2>Upload HandBrake Preset (.json)</h2>
-    <p class="small">
-      Upload your own HandBrake preset JSON files into the presets folder used by this app.
-      After uploading, they will appear in the preset dropdowns on the Jobs page.
-    </p>
 
     <div class="row">
       <input id="presetFileInput" type="file" accept=".json">
@@ -89,231 +95,164 @@
   </div>
 
   <!-- ============================================================
-       Placeholder for future UI settings (theme, etc.)
+       Future settings placeholder
        ------------------------------------------------------------ -->
   <div class="section-card">
     <h2>UI Settings (coming soon)</h2>
     <p class="small">
-      This is where you’ll be able to switch between dark and light mode and tweak
-      other interface options.
+      Theme, layout, and UI preferences will live here later.
     </p>
   </div>
 
   <!-- ============================================================
-       Page script: wiring up form + upload + delete + download
+       Page script
        ------------------------------------------------------------ -->
   <script>
     // -------------------------------
-    // Encoding settings: hb_threads
+    // Init encoding settings
     // -------------------------------
     function initEncodingSettings() {
       const input = document.getElementById("hbThreadsInput");
-      const raw = initialSettings && initialSettings.hb_threads;
-      const val = parseInt(raw || 0, 10) || 0;
+      const val = parseInt(initialSettings?.hb_threads || 0, 10) || 0;
+      input.value = val > 0 ? val : "";
+    }
 
-      if (val > 0) {
-        input.value = val;
-      } else {
-        input.value = "";
+    async function loadCpuProfiles() {
+      const select = document.getElementById("cpuProfileSelect");
+      const current = (initialSettings?.cpu_profile || "").toLowerCase();
+
+      try {
+        const res = await fetch("/api/cpu_profiles");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+
+        const data = await res.json();
+        const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+
+        select.innerHTML = "";
+
+        profiles.forEach(p => {
+          const opt = document.createElement("option");
+          opt.value = p.id;
+          opt.textContent = p.label;
+          if (p.id === current) opt.selected = true;
+          select.appendChild(opt);
+        });
+
+        if (current && !select.value) {
+          const opt = document.createElement("option");
+          opt.value = current;
+          opt.textContent = current + " (unknown)";
+          opt.selected = true;
+          select.appendChild(opt);
+        }
+
+      } catch (err) {
+        console.error(err);
+        select.innerHTML = "<option value=''>Failed to load CPU list</option>";
       }
     }
 
     async function saveSettings() {
-      const input = document.getElementById("hbThreadsInput");
       const statusEl = document.getElementById("settingsSaveStatus");
+      const threadsRaw = document.getElementById("hbThreadsInput").value.trim();
+      const cpuProfile = document.getElementById("cpuProfileSelect").value || "";
 
-      let raw = (input.value || "").trim();
-      let threads = parseInt(raw, 10);
-
-      if (isNaN(threads) || threads < 0) {
-        threads = 0;  // treat invalid values as "auto"
-      }
+      let threads = parseInt(threadsRaw, 10);
+      if (isNaN(threads) || threads < 0) threads = 0;
 
       try {
-        statusEl.textContent = "Saving...";
+        statusEl.textContent = "Saving…";
         const res = await fetch("/api/settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ hb_threads: threads })
+          body: JSON.stringify({
+            hb_threads: threads,
+            cpu_profile: cpuProfile
+          })
         });
 
-        if (!res.ok) {
-          throw new Error("Save failed with status " + res.status);
-        }
-
-        const data = await res.json();
-        const saved = data.settings || {};
-        const savedThreads = parseInt(saved.hb_threads || 0, 10) || 0;
-
-        if (savedThreads > 0) {
-          input.value = savedThreads;
-        } else {
-          input.value = "";
-        }
+        if (!res.ok) throw new Error("HTTP " + res.status);
 
         statusEl.textContent = "Saved.";
-        setTimeout(() => { statusEl.textContent = ""; }, 3000);
+        setTimeout(() => statusEl.textContent = "", 3000);
       } catch (err) {
         console.error(err);
         statusEl.textContent = "Error saving settings";
-        setTimeout(() => { statusEl.textContent = ""; }, 4000);
       }
     }
 
     // -------------------------------
-    // Preset upload + list rendering
+    // Preset handling
     // -------------------------------
     function renderPresetFilesList(files) {
       const ul = document.getElementById("presetFilesList");
       ul.innerHTML = "";
 
-      if (!Array.isArray(files) || files.length === 0) {
-        const li = document.createElement("li");
-        li.textContent = "(no preset files found)";
-        ul.appendChild(li);
+      if (!files || files.length === 0) {
+        ul.innerHTML = "<li>(no preset files)</li>";
         return;
       }
 
-      files.forEach((path) => {
+      files.forEach(path => {
+        const name = path.split("/").pop();
         const li = document.createElement("li");
 
-        // Show only the basename for readability
-        const parts = String(path).split("/");
-        const name = parts[parts.length - 1] || path;
-
-        const nameSpan = document.createElement("span");
-        nameSpan.textContent = name;
-
-        // Download link – uses query param with encoded full path
         const dl = document.createElement("a");
         dl.textContent = "Download";
         dl.href = "/api/presets/download?path=" + encodeURIComponent(path);
         dl.target = "_blank";
-        dl.className = "preset-download-link";
 
-        // Delete button
-        const btn = document.createElement("button");
-        btn.textContent = "Delete";
-        btn.className = "preset-delete-btn";
-        btn.onclick = () => deletePreset(path);
+        const del = document.createElement("button");
+        del.textContent = "Delete";
+        del.onclick = () => deletePreset(path);
 
-        // Layout: [name] [Download] [Delete]
-        li.appendChild(nameSpan);
-        li.appendChild(document.createTextNode(" "));
+        li.textContent = name + " ";
         li.appendChild(dl);
         li.appendChild(document.createTextNode(" "));
-        li.appendChild(btn);
-
+        li.appendChild(del);
         ul.appendChild(li);
       });
     }
 
     async function uploadPreset() {
-      const fileInput = document.getElementById("presetFileInput");
-      const statusEl = document.getElementById("presetUploadStatus");
+      const file = document.getElementById("presetFileInput").files[0];
+      const status = document.getElementById("presetUploadStatus");
+      if (!file) return;
 
-      const file = fileInput.files && fileInput.files[0];
-      if (!file) {
-        statusEl.textContent = "Pick a .json preset file first.";
-        return;
-      }
+      const form = new FormData();
+      form.append("preset_file", file);
 
-      const formData = new FormData();
-      formData.append("preset_file", file);
+      const res = await fetch("/api/presets/upload", { method: "POST", body: form });
+      const data = await res.json();
 
-      try {
-        statusEl.textContent = "Uploading...";
-        const res = await fetch("/api/presets/upload", {
-          method: "POST",
-          body: formData
-        });
-
-        const data = await res.json();
-
-        if (!res.ok || data.error) {
-          statusEl.textContent = "Upload failed: " + (data.error || ("HTTP " + res.status));
-          return;
-        }
-
-        statusEl.textContent = "Uploaded: " + (data.filename || file.name);
-
-        // Refresh the list using what backend returns
-        if (Array.isArray(data.preset_files)) {
-          renderPresetFilesList(data.preset_files);
-        }
-
-        // Clear file input so it’s obvious upload is done
-        fileInput.value = "";
-
-        setTimeout(() => { statusEl.textContent = ""; }, 4000);
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = "Error uploading preset";
-        setTimeout(() => { statusEl.textContent = ""; }, 4000);
-      }
+      if (data.preset_files) renderPresetFilesList(data.preset_files);
+      status.textContent = data.error ? data.error : "Uploaded";
+      setTimeout(() => status.textContent = "", 3000);
     }
 
-    // -------------------------------
-    // Delete preset via /api/presets/delete
-    // -------------------------------
     async function deletePreset(path) {
-      const statusEl = document.getElementById("presetUploadStatus");
+      if (!confirm("Delete preset?\n\n" + path)) return;
 
-      if (!path) {
-        statusEl.textContent = "Error: no preset path provided.";
-        return;
-      }
+      const res = await fetch("/api/presets/delete", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path })
+      });
 
-      if (!confirm("Delete preset file?\n\n" + path)) {
-        return;
-      }
-
-      try {
-        statusEl.textContent = "Deleting...";
-        const res = await fetch("/api/presets/delete", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ path })
-        });
-
-        const data = await res.json();
-
-        if (!res.ok || data.error) {
-          statusEl.textContent = "Delete failed: " + (data.error || ("HTTP " + res.status));
-          return;
-        }
-
-        statusEl.textContent = "Preset deleted.";
-        if (Array.isArray(data.preset_files)) {
-          renderPresetFilesList(data.preset_files);
-        }
-
-        setTimeout(() => { statusEl.textContent = ""; }, 4000);
-      } catch (err) {
-        console.error(err);
-        statusEl.textContent = "Error deleting preset";
-        setTimeout(() => { statusEl.textContent = ""; }, 4000);
-      }
+      const data = await res.json();
+      if (data.preset_files) renderPresetFilesList(data.preset_files);
     }
 
     // -------------------------------
-    // DOM Ready: hook everything up
+    // DOM ready
     // -------------------------------
     document.addEventListener("DOMContentLoaded", () => {
-      // Init encoding settings from backend
       initEncodingSettings();
-
-      // Render initial list of preset files (this is what makes existing presets show)
+      loadCpuProfiles();
       renderPresetFilesList(initialPresetFiles);
 
-      // Bind buttons
-      document
-        .getElementById("saveSettingsBtn")
-        .addEventListener("click", saveSettings);
-
-      document
-        .getElementById("uploadPresetBtn")
-        .addEventListener("click", uploadPreset);
+      document.getElementById("saveSettingsBtn").onclick = saveSettings;
+      document.getElementById("uploadPresetBtn").onclick = uploadPreset;
     });
   </script>
 </body>

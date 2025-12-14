@@ -75,6 +75,10 @@ from .settings import (
     save_settings,
 )
 
+from .cpu_profiles import (
+    list_cpu_profiles,
+    get_cpu_profile,
+)
 
 # -------------------------------------------------------------------
 # Media probing + preview estimation helpers
@@ -653,6 +657,14 @@ def register_routes(app):
         new_settings = save_settings(data)
         return jsonify(settings=new_settings)
 
+    # ------------- CPU profiles (JSON API) -------------
+
+    @app.route("/api/cpu_profiles", methods=["GET"])
+    def cpu_profiles_api():
+        """Return CPU profiles for the Settings dropdown / ETA estimation."""
+        return jsonify(profiles=list_cpu_profiles())
+
+
     # ------------- Directory listing -------------
 
     @app.route("/list")
@@ -885,9 +897,34 @@ def register_routes(app):
         bpp_final = _bpp(video_kbps, out_w, out_h, fps)
         q_code, q_label = _quality_label_from_bpp(bpp_final)
 
-        est_fps = _estimate_encode_fps(out_w, out_h, enc_preset)
+        # -------------------------------
+        # CPU-aware ETA estimation
+        # -------------------------------
+        settings = load_settings()
+        cpu_id = settings.get("cpu_profile")
+        cpu_override = settings.get("cpu_speed_override", 1.0)
+
+        cpu = get_cpu_profile(cpu_id)
+
+        try:
+            cpu_override_f = float(cpu_override)
+        except Exception:
+            cpu_override_f = 1.0
+        if cpu_override_f <= 0:
+            cpu_override_f = 1.0
+
+        # Base encode fps estimate (generic baseline CPU)
+        base_est_fps = _estimate_encode_fps(out_w, out_h, enc_preset)
+
+        # Scale by CPU speed index (relative) and optional user override
+        est_fps = base_est_fps * float(cpu.speed_index) * cpu_override_f
+
+        # Avoid absurd values
+        est_fps = max(1.0, min(est_fps, 500.0))
+
         total_frames = duration_sec * fps
         eta_sec = total_frames / est_fps if est_fps > 0 else 0.0
+
 
         extra_args = [f"--target-size {int(target_mb)}", f"--encoder-preset {enc_preset}"]
         if decision == "downscale":
@@ -911,6 +948,10 @@ def register_routes(app):
                 "quality_label": q_label,
                 "eta_seconds": int(round(eta_sec)),
                 "eta_human": f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m" if eta_sec >= 3600 else f"{int(eta_sec//60)}m",
+                "cpu_profile": cpu.id,
+                "cpu_label": cpu.label,
+                "cpu_speed_index": float(cpu.speed_index),
+                "cpu_speed_override": float(cpu_override_f),
                 "est_fps": round(est_fps, 1),
                 "decision": decision,
                 "decision_note": note,
