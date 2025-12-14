@@ -21,10 +21,12 @@ So we:
 4) choose the best title (valid geometry + longest duration)
 5) if JSON still lacks geometry/duration, fall back to parsing text scan output
 
-If you change _probe_media(), re-test:
-- /probe?src=...
-- POST /wizard_preview
-- POST /encode_wizard
+
+Implementation notes:
+- We run a short HandBrakeCLI encode (e.g., 8–12 seconds) into a temp file,
+  using the same preset base (1080/4k/auto -> preset_config mapping) plus
+  wizard args (--target-size, --encoder-preset, optional downscale).
+- We return base64 JPEGs so the web UI can render them directly.
 """
 
 import os
@@ -441,6 +443,7 @@ def _probe_media(src_path):
     - /probe
     - /wizard_preview
     - /encode_wizard
+    - /wizard_preview_images
 
     Strategy:
     1) Run --scan --json and capture stdout+stderr
@@ -588,6 +591,10 @@ def _quality_label_from_bpp(bpp):
 
 
 # -------------------------------------------------------------------
+# Side-by-side preview helpers
+# -------------------------------------------------------------------
+
+# -------------------------------------------------------------------
 # Route registration
 # -------------------------------------------------------------------
 
@@ -694,7 +701,7 @@ def register_routes(app):
             return jsonify(error="invalid preset"), 400
 
         base = os.path.basename(src)
-        name_only, ext = os.path.splitext(base)
+        name_only, _ext = os.path.splitext(base)
         if name_only.lower().endswith("-tsd"):
             return jsonify(error="file already tagged -TSD, not queuing"), 400
 
@@ -712,7 +719,9 @@ def register_routes(app):
         src = data.get("src")
         preset = data.get("preset") or "auto"
         size_value = data.get("target_size_value")
-        size_unit = (data.get("target_size_unit") or "MB").upper()
+        if size_value in (None, "", 0):
+            size_value = 5
+        size_unit = (data.get("target_size_unit") or "GB").upper()
         quality = data.get("quality") or "balanced"
         allow_downscale = bool(data.get("allow_downscale", True))
         force_4k = bool(data.get("force_4k", False))
@@ -799,7 +808,6 @@ def register_routes(app):
             return jsonify(src=src, info=info)
         except Exception as e:
             return jsonify(error=str(e)), 500
-
     @app.route("/wizard_preview", methods=["POST"])
     def wizard_preview():
         """Return an estimated outcome for Size Wizard inputs."""
@@ -811,11 +819,11 @@ def register_routes(app):
             return jsonify(error="path not allowed"), 400
 
         try:
-            size_value = float(data.get("target_size_value") or 0.0)
+            size_value = float(data.get("target_size_value") or 5.0)
         except Exception:
             return jsonify(error="invalid target_size_value"), 400
-        unit = (data.get("target_size_unit") or "MB").upper()
-        if unit not in ("MB", "GB"):
+        unit = (data.get("target_size_unit") or "GB").upper()
+        if unit not in ("GB", "MB"):
             return jsonify(error="invalid target_size_unit"), 400
         if size_value <= 0:
             return jsonify(error="invalid target_size_value"), 400
@@ -910,6 +918,7 @@ def register_routes(app):
             },
             suggested_extra_args=extra_args,
         )
+
 
     # ------------- Job status -------------
 
@@ -1060,12 +1069,12 @@ def register_routes(app):
             return jsonify(error="invalid preset"), 400
 
         to_create = []
-        for root, dirs, files in os.walk(path):
+        for root, _dirs, files in os.walk(path):
             for entry in files:
                 if not entry.lower().endswith(VIDEO_EXTS):
                     continue
 
-                name, ext = os.path.splitext(entry)
+                name, _ext = os.path.splitext(entry)
                 if name.lower().endswith("-tsd"):
                     continue
 

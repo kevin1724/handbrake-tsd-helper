@@ -1,4 +1,5 @@
 <!doctype html>
+
 <html>
 <head>
   <meta charset="utf-8">
@@ -17,53 +18,55 @@
   <div class="section-card">
     <h2>Pick size + quality, then queue the job</h2>
 
-    <div class="row">
-      <label>Selected file:</label>
-      <input id="src" type="text" style="width:80%;" readonly>
-    </div>
+```
+<div class="row">
+  <label>Selected file:</label>
+  <input id="src" type="text" style="width:80%;" readonly>
+</div>
 
-    <div class="row">
-      <label for="preset">Preset base:</label>
-      <select id="preset">
-        <option value="auto">Auto by filename</option>
-        <option value="1080">Force 1080p preset</option>
-        <option value="4k">Force 4K preset</option>
-      </select>
-    </div>
+<div class="row">
+  <label for="preset">Preset base:</label>
+  <select id="preset">
+    <option value="auto">Auto by filename</option>
+    <option value="1080">Force 1080p preset</option>
+    <option value="4k">Force 4K preset</option>
+  </select>
+</div>
 
-    <div class="row">
-      <label>Target size:</label>
-      <input id="sizeValue" type="number" min="50" step="1" value="1500" style="width:120px;">
-      <select id="sizeUnit">
-        <option value="MB">MB</option>
-        <option value="GB">GB</option>
-      </select>
-    </div>
+<div class="row">
+  <label>Target size:</label>
+  <input id="sizeValue" type="number" min="1" step="0.1" value="5" style="width:120px;">
+  <select id="sizeUnit">
+    <option value="GB" selected>GB</option>
+  </select>
+</div>
 
-    <div class="row">
-      <label for="quality">Quality priority:</label>
-      <select id="quality">
-        <option value="high">High quality (slower)</option>
-        <option value="balanced" selected>Balanced</option>
-        <option value="small">Smallest possible (faster)</option>
-      </select>
-    </div>
+<div class="row">
+  <label for="quality">Quality priority:</label>
+  <select id="quality">
+    <option value="high">High quality (slower)</option>
+    <option value="balanced" selected>Balanced</option>
+    <option value="small">Smallest possible (faster)</option>
+  </select>
+</div>
 
-    <div class="row">
-      <label style="min-width: 160px;">Resolution behavior:</label>
-      <label style="margin-right: 16px;"><input id="allowDownscale" type="checkbox" checked> Allow downscale if needed</label>
-      <label><input id="force4k" type="checkbox"> Force keep original resolution</label>
-    </div>
+<div class="row">
+  <label style="min-width: 160px;">Resolution behavior:</label>
+  <label style="margin-right: 16px;"><input id="allowDownscale" type="checkbox" checked> Allow downscale if needed</label>
+  <label><input id="force4k" type="checkbox"> Force keep original resolution</label>
+</div>
 
-    <div class="row">
-      <button id="queueBtn">Queue Wizard Encode</button>
-      <span id="queueStatus" class="small"></span>
-    </div>
+<div class="row">
+  <button id="queueBtn">Queue Wizard Encode</button>
+  <span id="queueStatus" class="small"></span>
+</div>
 
-    <hr>
+<hr>
 
-    <h3>Live Preview</h3>
-    <div id="previewBox" class="small" style="white-space: pre-wrap;"></div>
+<h3>Live Preview</h3>
+<div id="previewBox" class="small" style="white-space: pre-wrap;"></div>
+```
+
   </div>
 
   <script>
@@ -93,7 +96,7 @@
     async function refreshPreview() {
       const src = document.getElementById('src').value;
       const target_size_value = Number(document.getElementById('sizeValue').value);
-      const target_size_unit = document.getElementById('sizeUnit').value;
+      const target_size_unit = document.getElementById('sizeUnit').value; // always GB now
       const quality = document.getElementById('quality').value;
       const allow_downscale = document.getElementById('allowDownscale').checked;
       const force_4k = document.getElementById('force4k').checked;
@@ -109,7 +112,6 @@
 
       const payload = { src, target_size_value, target_size_unit, quality, allow_downscale, force_4k };
 
-      // ✅ FIX: assign fetch() result to `res`
       const res = await fetch('/wizard_preview', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -145,14 +147,16 @@
 
     function schedulePreview() {
       clearTimeout(previewTimer);
-      previewTimer = setTimeout(refreshPreview, 250);
+      previewTimer = setTimeout(async () => {
+        await refreshPreview();
+      }, 350);
     }
 
     async function queueWizard() {
       const src = document.getElementById('src').value;
       const preset = document.getElementById('preset').value;
       const target_size_value = Number(document.getElementById('sizeValue').value);
-      const target_size_unit = document.getElementById('sizeUnit').value;
+      const target_size_unit = document.getElementById('sizeUnit').value; // always GB
       const quality = document.getElementById('quality').value;
       const allow_downscale = document.getElementById('allowDownscale').checked;
       const force_4k = document.getElementById('force4k').checked;
@@ -193,5 +197,6 @@
     // initial preview
     schedulePreview();
   </script>
+
 </body>
 </html>
