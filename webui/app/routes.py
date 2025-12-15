@@ -37,6 +37,8 @@ import subprocess
 import base64
 import tempfile
 import uuid
+import signal
+import time
 
 
 from flask import (
@@ -103,6 +105,46 @@ def _run_cmd(cmd):
         return (False, "", f"not found: {cmd[0]}")
     except Exception as e:
         return (False, "", str(e))
+
+PREVIEW_PID_DIR = "/tmp"
+
+def _preview_pidfile(preview_id: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_-]", "", (preview_id or ""))
+    return os.path.join(PREVIEW_PID_DIR, f"hbwiz_{safe}.pgid")
+
+def _kill_preview_by_id(preview_id: str) -> bool:
+    """Kill a running HandBrake preview process group by preview_id."""
+    path = _preview_pidfile(preview_id)
+    if not preview_id or not os.path.isfile(path):
+        return False
+
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            pgid = int((f.read() or "").strip() or "0")
+        if pgid <= 0:
+            return False
+
+        # Try graceful, then hard kill
+        try:
+            os.killpg(pgid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+
+        time.sleep(0.25)
+
+        try:
+            os.killpg(pgid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+
+        return True
+    except Exception:
+        return False
+    finally:
+        try:
+            os.remove(path)
+        except Exception:
+            pass
 
 
 def _extract_all_json_values(text: str):
@@ -383,6 +425,59 @@ def _extract_title_video_info(title: dict):
                 break
 
     return dur, w, h, fps, codec
+
+
+
+def _ffprobe_media_fast(src_path: str):
+    """
+    Fast probe using ffprobe (much faster than HandBrake scan).
+    Returns: dict with duration_sec, width, height, fps
+    """
+    cmd = [
+        "ffprobe",
+        "-v", "error",
+        "-select_streams", "v:0",
+        "-show_entries", "format=duration:stream=width,height,r_frame_rate",
+        "-of", "json",
+        src_path,
+    ]
+    ok, out, err = _run_cmd(cmd)
+    if not ok or not out.strip():
+        raise RuntimeError(f"ffprobe failed: {(err or out or '').strip()[:400]}")
+
+    j = json.loads(out)
+    fmt = (j.get("format") or {})
+    streams = (j.get("streams") or [])
+    v0 = streams[0] if streams else {}
+
+    duration_sec = float(fmt.get("duration") or 0.0)
+    width = int(v0.get("width") or 0)
+    height = int(v0.get("height") or 0)
+
+    # r_frame_rate like "24000/1001"
+    fps = 0.0
+    rfr = v0.get("r_frame_rate") or ""
+    if isinstance(rfr, str) and "/" in rfr:
+        num, den = rfr.split("/", 1)
+        try:
+            fps = float(num) / float(den)
+        except Exception:
+            fps = 0.0
+    else:
+        try:
+            fps = float(rfr or 0.0)
+        except Exception:
+            fps = 0.0
+
+    if duration_sec <= 0 or width <= 0 or height <= 0:
+        raise RuntimeError("ffprobe returned incomplete video info")
+
+    return {
+        "duration_sec": duration_sec,
+        "width": width,
+        "height": height,
+        "fps": fps or 24.0,
+    }
 
 
 def _probe_media_text_fallback(src_path: str):
@@ -786,6 +881,17 @@ def _flatten_args(arg_list):
 def register_routes(app):
     """Attach all routes to the given Flask app."""
 
+    # -------------- cancel preview -----------
+
+    @app.route("/wizard_preview_cancel", methods=["POST"])
+    def wizard_preview_cancel():
+        data = request.get_json(silent=True) or {}
+        preview_id = (data.get("preview_id") or "").strip()
+        killed = _kill_preview_by_id(preview_id)
+        return jsonify(ok=True, killed=killed)
+
+
+
     # ------------- UI -------------
 
     @app.route("/")
@@ -1022,11 +1128,17 @@ def register_routes(app):
         """
         Return two still frames as base64 JPEG:
         - old_b64: extracted from source (OLD)
-        - new_b64: extracted from a short wizard-encoded clip (NEW)
+        - new_b64: extracted from a tiny wizard-encoded output (NEW)
+
+        Also supports canceling long-running HandBrake previews via preview_id.
         """
         data = request.get_json(force=True) or {}
         src = data.get("src")
         preset_base = (data.get("preset") or "auto").lower()
+
+        # NEW: preview session id (frontend should generate one per Size Wizard session)
+        preview_id = (data.get("preview_id") or "").strip() or uuid.uuid4().hex
+        pidfile = _preview_pidfile(preview_id)
 
         if not src or not os.path.isfile(src):
             return jsonify(error="invalid src"), 400
@@ -1051,14 +1163,18 @@ def register_routes(app):
         allow_downscale = bool(data.get("allow_downscale", True))
         force_4k = bool(data.get("force_4k", False))
 
-        # Make sure ffmpeg exists
+        # Make sure ffmpeg + ffprobe exist
         ok_ff, _o, _e = _run_cmd(["ffmpeg", "-version"])
         if not ok_ff:
             return jsonify(error="ffmpeg not found in container (needed for image previews)"), 500
 
-        # Probe source
+        ok_fp, _o2, _e2 = _run_cmd(["ffprobe", "-version"])
+        if not ok_fp:
+            return jsonify(error="ffprobe not found in container (needed for fast probing)"), 500
+
+        # FAST probe (replaces slow HandBrake --scan)
         try:
-            info = _probe_media(src)
+            info = _ffprobe_media_fast(src)
         except Exception as e:
             return jsonify(error=str(e)), 500
 
@@ -1066,11 +1182,18 @@ def register_routes(app):
         src_w = int(info.get("width") or 0)
         src_h = int(info.get("height") or 0)
         fps = float(info.get("fps") or 0.0) or 24.0
+
         if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
             return jsonify(error="probe incomplete"), 500
 
-        # Choose a frame timestamp: ~25% in, but avoid super early/late
-        t = max(5.0, min(duration_sec * 0.25, max(5.0, duration_sec - 8.0)))
+        # ✅ MUCH faster timestamp choice:
+        # Use ~60s in (or 10% for short clips), and force INTEGER seconds so HB/ffmpeg match.
+        if duration_sec < 120:
+            t = max(2.0, min(duration_sec * 0.10, duration_sec - 2.0))
+        else:
+            t = min(60.0, duration_sec - 2.0)
+
+        t_int = int(max(0.0, t))  # integer seconds for consistent matching
 
         target_mb = _size_to_mb(size_value, unit)
         target_bytes = target_mb * 1024.0 * 1024.0
@@ -1079,7 +1202,7 @@ def register_routes(app):
         video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
         enc_preset = _preset_from_quality(quality)
 
-        # Downscale decision (same logic as wizard_preview)
+        # Downscale decision
         out_w, out_h = src_w, src_h
         decision = "keep"
 
@@ -1104,16 +1227,13 @@ def register_routes(app):
                 out_w, out_h = cand_w, cand_h
                 decision = "downscale"
 
-        # Wizard args -> argv tokens
+        # Preview wizard args (keep fast)
         wizard_args = [
-            "-b", str(int(video_kbps)),          # video kbps
+            "-b", str(int(video_kbps)),
             "--encoder-preset", enc_preset,
-            "--audio", "1",                      # pick first audio track
-            "-E", "av_aac",
-            "-B", str(int(audio_kbps)),
-            "--mixdown", "stereo",
+            "-a", "none",
+            "--subtitle", "none",
         ]
-
         if decision == "downscale":
             wizard_args += ["--width", str(out_w), "--height", str(out_h)]
 
@@ -1131,42 +1251,76 @@ def register_routes(app):
         old_jpg = os.path.join(tmpdir, f"old_{token}.jpg")
         new_jpg = os.path.join(tmpdir, f"new_{token}.jpg")
 
-        # 1) Extract OLD still from source
+        # 1) Extract OLD still at t_int
         try:
-            _ffmpeg_extract_jpg(src, t, old_jpg)
+            _ffmpeg_extract_jpg(src, t_int, old_jpg)
         except Exception as e:
             return jsonify(error=f"failed extracting source frame: {e}"), 500
 
-        # 2) Encode a short clip around t
-        start_t = max(0.0, t - 1.0)
-        stop_len = 8  # seconds
-
+        # 2) Encode ONLY ONE FRAME at the SAME integer time
         hb_cmd = [
             "HandBrakeCLI",
             "-i", src,
             "-o", out_clip,
-            "--start-at", f"seconds:{int(start_t)}",
-            "--stop-at", f"seconds:{int(stop_len)}",
+            "--start-at", f"seconds:{t_int}",
+            "--stop-at", "frames:1",
         ]
-
-        # IMPORTANT: preset import + -Z must come before wizard flags generally
         hb_cmd += preset_args
         hb_cmd += _flatten_args(wizard_args)
 
-        ok, out, err = _run_cmd(hb_cmd)
+        # NEW: kill any previous preview for this preview_id before starting a new one
+        _kill_preview_by_id(preview_id)
+
+        # NEW: run HandBrake as its own process group so cancel can kill it + its children
+        p = subprocess.Popen(
+            hb_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            start_new_session=True,  # <- makes a new process group (PGID = p.pid)
+        )
+
+        # Save PGID so /wizard_preview_cancel can kill it later
+        try:
+            with open(pidfile, "w", encoding="utf-8") as f:
+                f.write(str(p.pid))
+        except Exception:
+            pass
+
+        try:
+            out, err = p.communicate(timeout=90)  # keep sane; adjust if needed
+            ok = (p.returncode == 0)
+        except subprocess.TimeoutExpired:
+            # timed out -> kill it hard and return error
+            try:
+                os.killpg(p.pid, signal.SIGTERM)
+                time.sleep(0.25)
+                os.killpg(p.pid, signal.SIGKILL)
+            except Exception:
+                pass
+            ok = False
+            out, err = "", "preview encode timed out"
+        finally:
+            # Cleanup pidfile (if cancel already removed it, ignore)
+            try:
+                os.remove(pidfile)
+            except Exception:
+                pass
+
         if not ok or not os.path.isfile(out_clip):
             snippet = ((err or out) or "").strip().replace("\n", "\\n")[:900]
-            return jsonify(error=f"HandBrake preview encode failed: {snippet}"), 500
+            return jsonify(error=f"HandBrake preview encode failed: {snippet}", preview_id=preview_id), 500
 
-        # 3) Extract NEW still from encoded clip near middle (~3s in)
+        # 3) Extract NEW still from the 1-frame output
         try:
-            _ffmpeg_extract_jpg(out_clip, 3.0, new_jpg)
+            _ffmpeg_extract_jpg(out_clip, 0.0, new_jpg)
         except Exception as e:
-            return jsonify(error=f"failed extracting encoded frame: {e}"), 500
+            return jsonify(error=f"failed extracting encoded frame: {e}", preview_id=preview_id), 500
 
         return jsonify(
             ok=True,
-            when_seconds=float(t),
+            preview_id=preview_id,
+            when_seconds=float(t_int),
             preset=effective_preset,
             old_b64=_b64_jpg(old_jpg),
             new_b64=_b64_jpg(new_jpg),

@@ -1,5 +1,4 @@
 <!doctype html>
-
 <html>
 <head>
   <meta charset="utf-8">
@@ -8,7 +7,6 @@
     ============================================================
     Size Wizard – HandBrake TSD Helper
     ------------------------------------------------------------
-    Maintainer notes:
     - Text preview is fast (no encode)
     - Image preview is expensive (HandBrake short encode + ffmpeg)
       So we:
@@ -27,20 +25,16 @@
       width: 100%;
       max-width: 960px;
       margin-top: 10px;
-      border-radius: 10px;
+      border-radius: 12px;
       overflow: hidden;
       border: 1px solid rgba(255,255,255,0.08);
       background: rgba(0,0,0,0.25);
-
-      /* stable height before images load */
-      aspect-ratio: 16 / 9;
-
+      aspect-ratio: 16 / 9; /* stable height before images load */
       user-select: none;
-      touch-action: none; /* allow touch dragging without scrolling */
     }
 
-    /* OLD image: full area */
-    .compare-base{
+    /* Both images must fill the box identically */
+    .compare-img{
       position: absolute;
       inset: 0;
       width: 100%;
@@ -49,62 +43,46 @@
       object-position: center;
       user-select: none;
       -webkit-user-drag: none;
-      z-index: 1;
+      pointer-events: none;
     }
 
-    /* NEW image: full area but clipped to bottom region, width controlled by handle */
-    .compare-new{
-      position: absolute;
-      inset: 0;
-      width: 100%;
-      height: 100%;
-      object-fit: cover;
-      object-position: center;
-      user-select: none;
-      -webkit-user-drag: none;
+    /* NEW = bottom layer (full image) */
+    #imgNew { z-index: 1; }
+
+    /* OLD = top layer that we "wipe away" from bottom */
+    #imgOld {
       z-index: 2;
-
-      /* default clip: bottom half, 50% width (bottom-left area) */
-      clip-path: polygon(0% 50%, 50% 50%, 50% 100%, 0% 100%);
+      /* clip-path is updated live in JS */
+      clip-path: inset(0 0 50% 0);
     }
 
-    /* draggable white bar */
-    .compare-handle{
+    /* White draggable bar */
+    .wipe-handle{
       position: absolute;
-      top: 0;
+      left: 0;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 3px;
       height: 100%;
-      width: 4px;
-      background: rgba(255,255,255,0.95);
+      background: rgba(255,255,255,0.9);
       box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
-      z-index: 5;
+      z-index: 3;
       cursor: ew-resize;
-      border-radius: 2px;
     }
 
-    /* grab knob */
-    .compare-handle::after{
+    /* Center “grip” */
+    .wipe-handle::after{
       content: "";
       position: absolute;
       left: 50%;
       top: 50%;
-      transform: translate(-50%, -50%);
+      transform: translate(-50%,-50%);
       width: 18px;
-      height: 44px;
-      border-radius: 10px;
+      height: 42px;
+      border-radius: 999px;
       background: rgba(0,0,0,0.35);
-      border: 1px solid rgba(255,255,255,0.35);
-      box-shadow: 0 1px 6px rgba(0,0,0,0.35);
-    }
-    .compare-handle::before{
-      content: "";
-      position: absolute;
-      left: 50%;
-      top: 50%;
-      transform: translate(-50%, -50%);
-      width: 10px;
-      height: 26px;
-      border-radius: 8px;
-      background: rgba(255,255,255,0.15);
+      border: 1px solid rgba(255,255,255,0.18);
+      backdrop-filter: blur(4px);
     }
 
     .compare-label{
@@ -116,13 +94,13 @@
       background: rgba(0,0,0,0.55);
       color: #fff;
       pointer-events: none;
-      z-index: 6;
+      z-index: 4;
     }
     .label-old { left: 10px; }
     .label-new { right: 10px; }
 
     .img-status{
-      margin-top: 6px;
+      margin-top: 8px;
       max-width: 960px;
       white-space: pre-wrap;
     }
@@ -134,7 +112,6 @@
       margin-top: 10px;
     }
   </style>
-
 </head>
 
 <body>
@@ -149,94 +126,97 @@
   <div class="section-card">
     <h2>Pick size + quality, then queue the job</h2>
 
-```
-<div class="row">
-  <label>Selected file:</label>
-  <input id="src" type="text" style="width:80%;" readonly>
-</div>
+    <div class="row">
+      <label>Selected file:</label>
+      <input id="src" type="text" style="width:80%;" readonly>
+    </div>
 
-<div class="row">
-  <label for="preset">Preset base:</label>
-  <select id="preset">
-    <option value="auto">Auto by filename</option>
-    <option value="1080">Force 1080p preset</option>
-    <option value="4k">Force 4K preset</option>
-  </select>
-</div>
+    <div class="row">
+      <label for="preset">Preset base:</label>
+      <select id="preset">
+        <option value="auto">Auto by filename</option>
+        <option value="1080">Force 1080p preset</option>
+        <option value="4k">Force 4K preset</option>
+      </select>
+    </div>
 
-<div class="row">
-  <label>Target size:</label>
-  <input id="sizeValue" type="number" min="1" step="0.1" value="5" style="width:120px;">
-  <select id="sizeUnit">
-    <option value="GB" selected>GB</option>
-    <option value="MB">MB</option>
-  </select>
-</div>
+    <div class="row">
+      <label>Target size:</label>
+      <input id="sizeValue" type="number" min="1" step="0.1" value="5" style="width:120px;">
+      <select id="sizeUnit">
+        <option value="GB" selected>GB</option>
+        <option value="MB">MB</option>
+      </select>
+    </div>
 
-<div class="row">
-  <label for="quality">Quality priority:</label>
-  <select id="quality">
-    <option value="high">High quality (slower)</option>
-    <option value="balanced" selected>Balanced</option>
-    <option value="small">Smallest possible (faster)</option>
-  </select>
-</div>
+    <div class="row">
+      <label for="quality">Quality priority:</label>
+      <select id="quality">
+        <option value="high">High quality (slower)</option>
+        <option value="balanced" selected>Balanced</option>
+        <option value="small">Smallest possible (faster)</option>
+      </select>
+    </div>
 
-<div class="row">
-  <label style="min-width:160px;">Resolution behavior:</label>
-  <label style="margin-right:16px;">
-    <input id="allowDownscale" type="checkbox" checked>
-    Allow downscale if needed
-  </label>
-  <label>
-    <input id="force4k" type="checkbox">
-    Force keep original resolution
-  </label>
-</div>
+    <div class="row">
+      <label style="min-width:160px;">Resolution behavior:</label>
+      <label style="margin-right:16px;">
+        <input id="allowDownscale" type="checkbox" checked>
+        Allow downscale if needed
+      </label>
+      <label>
+        <input id="force4k" type="checkbox">
+        Force keep original resolution
+      </label>
+    </div>
 
-<div class="row">
-  <button id="queueBtn">Queue Wizard Encode</button>
-  <span id="queueStatus" class="small"></span>
-</div>
+    <div class="row">
+      <button id="queueBtn">Queue Wizard Encode</button>
+      <span id="queueStatus" class="small"></span>
+    </div>
 
-<hr>
+    <hr>
 
-<h3>Live Preview</h3>
-<div id="previewBox" class="small" style="white-space: pre-wrap;"></div>
+    <h3>Live Preview</h3>
+    <div id="previewBox" class="small" style="white-space: pre-wrap;"></div>
 
-<hr>
+    <hr>
 
-<h3>Visual Compare</h3>
-<p class="small">
-  OLD is the full image. NEW is revealed from the bottom as you drag the white bar.
-  Drag left → more NEW. Drag right → more OLD.
-</p>
+    <h3>Visual Compare</h3>
+    <p class="small">
+      OLD is on top. NEW is underneath.
+      Drag the white bar: right → reveal more NEW, left → show more OLD.
+    </p>
 
-<div class="btn-row">
-  <button id="genImagesBtn">Generate Visual Compare</button>
-  <span class="small" style="opacity:0.85;">(this runs a short encode + ffmpeg extract)</span>
-</div>
+    <div class="btn-row">
+      <button id="genImagesBtn">Generate Visual Compare</button>
+      <span class="small" style="opacity:0.85;">(this runs a short encode + ffmpeg extract)</span>
+    </div>
 
-<div id="compareWrap" class="compare-wrap" style="display:none;">
-  <img id="imgOld" class="compare-base" alt="Original frame (OLD)">
-  <img id="imgNew" class="compare-new" alt="Wizard frame (NEW)">
-  <div id="handle" class="compare-handle" style="left:50%;"></div>
-  <div class="compare-label label-old">OLD</div>
-  <div class="compare-label label-new">NEW</div>
-</div>
+    <div id="compareWrap" class="compare-wrap" style="display:none;">
+      <!-- NEW underneath -->
+      <img id="imgNew" class="compare-img" alt="Wizard frame (NEW)">
+      <!-- OLD on top (we clip it) -->
+      <img id="imgOld" class="compare-img" alt="Original frame (OLD)">
 
-<div id="imgStatus" class="small img-status"></div>
-```
+      <div id="handle" class="wipe-handle" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></div>
 
+      <div class="compare-label label-old">OLD</div>
+      <div class="compare-label label-new">NEW</div>
+    </div>
+
+    <div id="imgStatus" class="small img-status"></div>
   </div>
 
   <script>
+    // -----------------------------
+    // Helpers
+    // -----------------------------
     async function fetchWithTimeout(url, options, timeoutMs) {
       const controller = new AbortController();
       const id = setTimeout(() => controller.abort(), timeoutMs);
       try {
-        const res = await fetch(url, { ...options, signal: controller.signal });
-        return res;
+        return await fetch(url, { ...options, signal: controller.signal });
       } finally {
         clearTimeout(id);
       }
@@ -256,13 +236,63 @@
       return `${s}s`;
     }
 
+    // -----------------------------
     // Prefill from query string
+    // -----------------------------
     const srcQ = qs("src");
     const presetQ = qs("preset");
     if (srcQ) document.getElementById("src").value = srcQ;
     if (presetQ) document.getElementById("preset").value = presetQ;
 
     let previewTimer = null;
+
+    // -----------------------------
+    // NEW: preview session id + cancel support
+    // -----------------------------
+    const PREVIEW_ID_KEY = "hbwiz_preview_id";
+
+    function newPreviewId() {
+      // stable enough, no deps
+      return (Date.now().toString(16) + Math.random().toString(16).slice(2));
+    }
+
+    // One preview_id per Size Wizard visit/session
+    let previewId = sessionStorage.getItem(PREVIEW_ID_KEY);
+    if (!previewId) {
+      previewId = newPreviewId();
+      sessionStorage.setItem(PREVIEW_ID_KEY, previewId);
+    }
+
+    // Track an in-flight image request so we can abort it on navigation
+    let imgFetchController = null;
+
+    function cancelPreviewOnServer() {
+      // cancel in-flight fetch (client side)
+      try { imgFetchController?.abort(); } catch (e) {}
+      imgFetchController = null;
+
+      // tell server to kill HandBrake preview for this preview_id
+      // use sendBeacon so it still fires during unload/navigation
+      const payload = JSON.stringify({ preview_id: previewId });
+
+      if (navigator.sendBeacon) {
+        const blob = new Blob([payload], { type: "application/json" });
+        navigator.sendBeacon("/wizard_preview_cancel", blob);
+        return;
+      }
+
+      // fallback if sendBeacon not available
+      fetch("/wizard_preview_cancel", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: payload,
+        keepalive: true
+      }).catch(() => {});
+    }
+
+    // Fire cancel when leaving Size Wizard
+    window.addEventListener("pagehide", cancelPreviewOnServer);
+    window.addEventListener("beforeunload", cancelPreviewOnServer);
 
     function currentPayload() {
       return {
@@ -276,6 +306,9 @@
       };
     }
 
+    // -----------------------------
+    // Text preview
+    // -----------------------------
     async function refreshPreviewText() {
       const payload = currentPayload();
       const box = document.getElementById("previewBox");
@@ -324,60 +357,63 @@
       previewTimer = setTimeout(refreshPreviewText, 350);
     }
 
-    // ----------------------------
-    // Visual compare behavior:
-    // - OLD fills full area
-    // - NEW is clipped to bottom half, from left to some width
-    // - The white handle controls the width
-    // - Drag LEFT => more NEW (so we invert)
-    // ----------------------------
-    let dragActive = false;
+    // -----------------------------
+    // Visual compare (bar drag)
+    // -----------------------------
+    const wrap = document.getElementById("compareWrap");
+    const imgOld = document.getElementById("imgOld");
+    const imgNew = document.getElementById("imgNew");
+    const handle = document.getElementById("handle");
 
-    function setCompareFromX(x01) {
-      const wrap = document.getElementById("compareWrap");
-      const newImg = document.getElementById("imgNew");
-      const handle = document.getElementById("handle");
+    let isDragging = false;
+    let pos01 = 0.5; // 0..1
 
-      const x = Math.max(0, Math.min(1, x01));
-
-      // handle position follows x
-      handle.style.left = (x * 100) + "%";
-
-      // invert so LEFT => more NEW
-      const reveal = 1 - x;        // 1 at far-left, 0 at far-right
-      const rightPct = reveal * 100;
-
-      // NEW shown in bottom half (50%->100%), width 0->rightPct
-      newImg.style.clipPath = `polygon(0% 50%, ${rightPct}% 50%, ${rightPct}% 100%, 0% 100%)`;
+    function applyWipe(p01) {
+      pos01 = Math.max(0, Math.min(1, p01));
+      const revealPct = pos01 * 100;
+      imgOld.style.clipPath = `inset(0 0 ${revealPct}% 0)`;
+      handle.style.left = `${revealPct}%`;
+      handle.setAttribute("aria-valuenow", String(Math.round(revealPct)));
     }
 
-    function pointerX01(evt) {
-      const wrap = document.getElementById("compareWrap");
-      const rect = wrap.getBoundingClientRect();
-      const clientX = (evt.touches && evt.touches[0]) ? evt.touches[0].clientX : evt.clientX;
-      return (clientX - rect.left) / rect.width;
+    function pointerToPos01(ev) {
+      const r = wrap.getBoundingClientRect();
+      const x = (ev.clientX - r.left) / r.width;
+      return x;
     }
 
-    function startDrag(evt) {
-      dragActive = true;
-      setCompareFromX(pointerX01(evt));
-      evt.preventDefault();
+    function startDrag(ev) {
+      if (wrap.style.display === "none") return;
+      isDragging = true;
+      wrap.setPointerCapture?.(ev.pointerId);
+      applyWipe(pointerToPos01(ev));
     }
 
-    function moveDrag(evt) {
-      if (!dragActive) return;
-      setCompareFromX(pointerX01(evt));
-      evt.preventDefault();
+    function moveDrag(ev) {
+      if (!isDragging) return;
+      applyWipe(pointerToPos01(ev));
     }
 
-    function endDrag() {
-      dragActive = false;
+    function endDrag(ev) {
+      isDragging = false;
+      try { wrap.releasePointerCapture?.(ev.pointerId); } catch(e) {}
     }
 
+    wrap.addEventListener("pointerdown", startDrag);
+    wrap.addEventListener("pointermove", moveDrag);
+    window.addEventListener("pointerup", endDrag);
+
+    handle.addEventListener("keydown", (e) => {
+      if (e.key === "ArrowLeft") { e.preventDefault(); applyWipe(pos01 - 0.03); }
+      if (e.key === "ArrowRight"){ e.preventDefault(); applyWipe(pos01 + 0.03); }
+    });
+
+    // -----------------------------
+    // Image preview (expensive)
+    // -----------------------------
     async function refreshPreviewImages() {
       const payload = currentPayload();
       const status = document.getElementById("imgStatus");
-      const wrap = document.getElementById("compareWrap");
 
       if (!payload.src) {
         status.textContent = "Pick a file first (go back to Jobs).";
@@ -386,18 +422,30 @@
 
       status.textContent = "Generating image preview (short encode)…";
 
+      // NEW: include preview_id so server can kill the right HandBrake run
+      payload.preview_id = previewId;
+
+      // NEW: cancel any previous server preview before starting a new one
+      cancelPreviewOnServer();
+
+      // NEW: use our own abort controller so leaving page stops the wait
+      imgFetchController = new AbortController();
+
       let res, data;
       try {
-        res = await fetchWithTimeout("/wizard_preview_images", {
+        res = await fetch("/wizard_preview_images", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        }, 380000);
+          body: JSON.stringify(payload),
+          signal: imgFetchController.signal
+        });
         data = await res.json();
       } catch (e) {
-        status.textContent = "Image preview error: server unreachable or timed out (encode may be hanging).";
+        status.textContent = "Image preview canceled / unreachable / timed out.";
         wrap.style.display = "none";
         return;
+      } finally {
+        imgFetchController = null;
       }
 
       if (!res.ok) {
@@ -411,27 +459,25 @@
         return;
       }
 
-      // Success + set aspect ratio from OLD image dimensions
-      const wrapEl = document.getElementById("compareWrap");
-      const oldImg = document.getElementById("imgOld");
-
-      oldImg.onload = () => {
-        if (oldImg.naturalWidth && oldImg.naturalHeight) {
-          wrapEl.style.aspectRatio = `${oldImg.naturalWidth} / ${oldImg.naturalHeight}`;
+      // Keep layout stable
+      imgOld.onload = () => {
+        if (imgOld.naturalWidth && imgOld.naturalHeight) {
+          wrap.style.aspectRatio = `${imgOld.naturalWidth} / ${imgOld.naturalHeight}`;
         }
       };
 
-      oldImg.src = "data:image/jpeg;base64," + data.old_b64;
-      document.getElementById("imgNew").src = "data:image/jpeg;base64," + data.new_b64;
+      imgNew.src = "data:image/jpeg;base64," + data.new_b64;
+      imgOld.src = "data:image/jpeg;base64," + data.old_b64;
 
       wrap.style.display = "";
-
-      // Reset compare to center
-      setCompareFromX(0.5);
+      applyWipe(0.5);
 
       status.textContent = `Frame at ~${fmtSeconds(data.when_seconds)} (drag the white bar)`;
     }
 
+    // -----------------------------
+    // Queue
+    // -----------------------------
     async function queueWizard() {
       const payload = currentPayload();
       if (!payload.src) return alert("No file selected.");
@@ -462,24 +508,9 @@
       setTimeout(() => statusEl.textContent = "", 2500);
     }
 
-    // Bind drag events to both handle + whole compare box
-    const compareWrap = document.getElementById("compareWrap");
-    const handle = document.getElementById("handle");
-
-    function bindDrag(el) {
-      el.addEventListener("mousedown", startDrag);
-      el.addEventListener("touchstart", startDrag, { passive: false });
-    }
-    bindDrag(handle);
-    bindDrag(compareWrap);
-
-    window.addEventListener("mousemove", moveDrag);
-    window.addEventListener("touchmove", moveDrag, { passive: false });
-    window.addEventListener("mouseup", endDrag);
-    window.addEventListener("touchend", endDrag);
-    window.addEventListener("touchcancel", endDrag);
-
-    // Control events
+    // -----------------------------
+    // Events
+    // -----------------------------
     ["preset","sizeValue","sizeUnit","quality","allowDownscale","force4k"].forEach(id => {
       document.getElementById(id).addEventListener("change", schedulePreview);
       document.getElementById(id).addEventListener("input", schedulePreview);
