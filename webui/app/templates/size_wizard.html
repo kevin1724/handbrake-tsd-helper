@@ -1,10 +1,142 @@
 <!doctype html>
+
 <html>
 <head>
   <meta charset="utf-8">
+
+  <!--
+    ============================================================
+    Size Wizard – HandBrake TSD Helper
+    ------------------------------------------------------------
+    Maintainer notes:
+    - Text preview is fast (no encode)
+    - Image preview is expensive (HandBrake short encode + ffmpeg)
+      So we:
+        • DO NOT run it automatically on page load
+        • Add timeout + error handling
+        • Provide a button to request it explicitly
+    ============================================================
+  -->
+
   <title>HandBrake TSD Helper – Size Wizard</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+
+  <style>
+    .compare-wrap{
+      position: relative;
+      width: 100%;
+      max-width: 960px;
+      margin-top: 10px;
+      border-radius: 10px;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.08);
+      background: rgba(0,0,0,0.25);
+
+      /* stable height before images load */
+      aspect-ratio: 16 / 9;
+
+      user-select: none;
+      touch-action: none; /* allow touch dragging without scrolling */
+    }
+
+    /* OLD image: full area */
+    .compare-base{
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center;
+      user-select: none;
+      -webkit-user-drag: none;
+      z-index: 1;
+    }
+
+    /* NEW image: full area but clipped to bottom region, width controlled by handle */
+    .compare-new{
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      object-position: center;
+      user-select: none;
+      -webkit-user-drag: none;
+      z-index: 2;
+
+      /* default clip: bottom half, 50% width (bottom-left area) */
+      clip-path: polygon(0% 50%, 50% 50%, 50% 100%, 0% 100%);
+    }
+
+    /* draggable white bar */
+    .compare-handle{
+      position: absolute;
+      top: 0;
+      height: 100%;
+      width: 4px;
+      background: rgba(255,255,255,0.95);
+      box-shadow: 0 0 0 1px rgba(0,0,0,0.35);
+      z-index: 5;
+      cursor: ew-resize;
+      border-radius: 2px;
+    }
+
+    /* grab knob */
+    .compare-handle::after{
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 18px;
+      height: 44px;
+      border-radius: 10px;
+      background: rgba(0,0,0,0.35);
+      border: 1px solid rgba(255,255,255,0.35);
+      box-shadow: 0 1px 6px rgba(0,0,0,0.35);
+    }
+    .compare-handle::before{
+      content: "";
+      position: absolute;
+      left: 50%;
+      top: 50%;
+      transform: translate(-50%, -50%);
+      width: 10px;
+      height: 26px;
+      border-radius: 8px;
+      background: rgba(255,255,255,0.15);
+    }
+
+    .compare-label{
+      position: absolute;
+      top: 10px;
+      padding: 6px 10px;
+      font-size: 12px;
+      border-radius: 999px;
+      background: rgba(0,0,0,0.55);
+      color: #fff;
+      pointer-events: none;
+      z-index: 6;
+    }
+    .label-old { left: 10px; }
+    .label-new { right: 10px; }
+
+    .img-status{
+      margin-top: 6px;
+      max-width: 960px;
+      white-space: pre-wrap;
+    }
+
+    .btn-row{
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      margin-top: 10px;
+    }
+  </style>
+
 </head>
+
 <body>
   <nav class="top-nav">
     <a href="/" class="nav-link">Jobs</a>
@@ -17,59 +149,101 @@
   <div class="section-card">
     <h2>Pick size + quality, then queue the job</h2>
 
-    <div class="row">
-      <label>Selected file:</label>
-      <input id="src" type="text" style="width:80%;" readonly>
-    </div>
+```
+<div class="row">
+  <label>Selected file:</label>
+  <input id="src" type="text" style="width:80%;" readonly>
+</div>
 
-    <div class="row">
-      <label for="preset">Preset base:</label>
-      <select id="preset">
-        <option value="auto">Auto by filename</option>
-        <option value="1080">Force 1080p preset</option>
-        <option value="4k">Force 4K preset</option>
-      </select>
-    </div>
+<div class="row">
+  <label for="preset">Preset base:</label>
+  <select id="preset">
+    <option value="auto">Auto by filename</option>
+    <option value="1080">Force 1080p preset</option>
+    <option value="4k">Force 4K preset</option>
+  </select>
+</div>
 
-    <div class="row">
-      <label>Target size:</label>
-      <input id="sizeValue" type="number" min="1" step="0.1" value="5" style="width:120px;">
-      <select id="sizeUnit">
-        <option value="GB" selected>GB</option>
-        <option value="MB">MB</option>
-      </select>
-    </div>
+<div class="row">
+  <label>Target size:</label>
+  <input id="sizeValue" type="number" min="1" step="0.1" value="5" style="width:120px;">
+  <select id="sizeUnit">
+    <option value="GB" selected>GB</option>
+    <option value="MB">MB</option>
+  </select>
+</div>
 
-    <div class="row">
-      <label for="quality">Quality priority:</label>
-      <select id="quality">
-        <option value="high">High quality (slower)</option>
-        <option value="balanced" selected>Balanced</option>
-        <option value="small">Smallest possible (faster)</option>
-      </select>
-    </div>
+<div class="row">
+  <label for="quality">Quality priority:</label>
+  <select id="quality">
+    <option value="high">High quality (slower)</option>
+    <option value="balanced" selected>Balanced</option>
+    <option value="small">Smallest possible (faster)</option>
+  </select>
+</div>
 
-    <div class="row">
-      <label style="min-width: 160px;">Resolution behavior:</label>
-      <label style="margin-right: 16px;"><input id="allowDownscale" type="checkbox" checked> Allow downscale if needed</label>
-      <label><input id="force4k" type="checkbox"> Force keep original resolution</label>
-    </div>
+<div class="row">
+  <label style="min-width:160px;">Resolution behavior:</label>
+  <label style="margin-right:16px;">
+    <input id="allowDownscale" type="checkbox" checked>
+    Allow downscale if needed
+  </label>
+  <label>
+    <input id="force4k" type="checkbox">
+    Force keep original resolution
+  </label>
+</div>
 
-    <div class="row">
-      <button id="queueBtn">Queue Wizard Encode</button>
-      <span id="queueStatus" class="small"></span>
-    </div>
+<div class="row">
+  <button id="queueBtn">Queue Wizard Encode</button>
+  <span id="queueStatus" class="small"></span>
+</div>
 
-    <hr>
+<hr>
 
-    <h3>Live Preview</h3>
-    <div id="previewBox" class="small" style="white-space: pre-wrap;"></div>
+<h3>Live Preview</h3>
+<div id="previewBox" class="small" style="white-space: pre-wrap;"></div>
+
+<hr>
+
+<h3>Visual Compare</h3>
+<p class="small">
+  OLD is the full image. NEW is revealed from the bottom as you drag the white bar.
+  Drag left → more NEW. Drag right → more OLD.
+</p>
+
+<div class="btn-row">
+  <button id="genImagesBtn">Generate Visual Compare</button>
+  <span class="small" style="opacity:0.85;">(this runs a short encode + ffmpeg extract)</span>
+</div>
+
+<div id="compareWrap" class="compare-wrap" style="display:none;">
+  <img id="imgOld" class="compare-base" alt="Original frame (OLD)">
+  <img id="imgNew" class="compare-new" alt="Wizard frame (NEW)">
+  <div id="handle" class="compare-handle" style="left:50%;"></div>
+  <div class="compare-label label-old">OLD</div>
+  <div class="compare-label label-new">NEW</div>
+</div>
+
+<div id="imgStatus" class="small img-status"></div>
+```
+
   </div>
 
   <script>
+    async function fetchWithTimeout(url, options, timeoutMs) {
+      const controller = new AbortController();
+      const id = setTimeout(() => controller.abort(), timeoutMs);
+      try {
+        const res = await fetch(url, { ...options, signal: controller.signal });
+        return res;
+      } finally {
+        clearTimeout(id);
+      }
+    }
+
     function qs(name) {
-      const p = new URLSearchParams(window.location.search);
-      return p.get(name);
+      return new URLSearchParams(window.location.search).get(name);
     }
 
     function fmtSeconds(sec) {
@@ -82,15 +256,7 @@
       return `${s}s`;
     }
 
-    function fmtTargetSize(value, unit) {
-      const v = Number(value || 0);
-      const u = String(unit || "GB").toUpperCase();
-      if (!v || v <= 0) return "";
-      if (u === "MB") return `${v.toFixed(v < 10 ? 1 : 0)} MB`;
-      return `${v.toFixed(v < 10 ? 1 : 0)} GB`;
-    }
-
-    // Prefill from query string (coming from Jobs page)
+    // Prefill from query string
     const srcQ = qs("src");
     const presetQ = qs("preset");
     if (srcQ) document.getElementById("src").value = srcQ;
@@ -98,131 +264,197 @@
 
     let previewTimer = null;
 
-    async function refreshPreview() {
-      const src = document.getElementById("src").value;
-      const target_size_value = Number(document.getElementById("sizeValue").value);
-      const target_size_unit = document.getElementById("sizeUnit").value;
-      const quality = document.getElementById("quality").value;
-      const allow_downscale = document.getElementById("allowDownscale").checked;
-      const force_4k = document.getElementById("force4k").checked;
+    function currentPayload() {
+      return {
+        src: document.getElementById("src").value,
+        preset: document.getElementById("preset").value,
+        target_size_value: Number(document.getElementById("sizeValue").value),
+        target_size_unit: document.getElementById("sizeUnit").value,
+        quality: document.getElementById("quality").value,
+        allow_downscale: document.getElementById("allowDownscale").checked,
+        force_4k: document.getElementById("force4k").checked
+      };
+    }
 
-      const previewEl = document.getElementById("previewBox");
+    async function refreshPreviewText() {
+      const payload = currentPayload();
+      const box = document.getElementById("previewBox");
 
-      if (!src) {
-        previewEl.textContent = "No file selected. Go back to Jobs and pick a file first.";
+      if (!payload.src) {
+        box.textContent = "No file selected.";
         return;
       }
 
-      previewEl.textContent = "Calculating preview...";
-
-      const payload = { src, target_size_value, target_size_unit, quality, allow_downscale, force_4k };
+      box.textContent = "Calculating preview…";
 
       let res, data;
       try {
-        res = await fetch("/wizard_preview", {
+        res = await fetchWithTimeout("/wizard_preview", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
-        });
+        }, 15000);
         data = await res.json();
-      } catch (err) {
-        console.error(err);
-        previewEl.textContent = "Preview error: failed to reach server.";
+      } catch (e) {
+        box.textContent = "Preview error: server unreachable or timed out.";
         return;
       }
 
       if (!res.ok) {
-        previewEl.textContent = "Preview error:\n" + JSON.stringify(data, null, 2);
+        box.textContent = JSON.stringify(data, null, 2);
         return;
       }
 
       const p = data.probe || {};
       const e = data.estimates || {};
 
-      const lines = [];
-      lines.push(`Source: ${src}`);
-      lines.push(
-        `Duration: ${fmtSeconds(p.duration_sec)}  |  Video: ${p.width}x${p.height} @ ${Number(p.fps || 0).toFixed(2)} fps`
-      );
-      lines.push("");
-
-      // Target size display (use what user entered, not MB-only)
-      lines.push(`Target size: ${fmtTargetSize(target_size_value, target_size_unit)} (${Number(data.inputs?.target_mb || 0).toFixed(0)} MB)`);
-
-      lines.push(
-        `Bitrate plan: total ~${e.total_bitrate_kbps} kbps (video ~${e.video_bitrate_kbps} kbps, audio ${e.audio_bitrate_kbps} kbps)`
-      );
-      lines.push(`Quality: ${e.quality_label}  (bpp=${e.bpp})`);
-
-      // CPU-aware ETA display (graceful fallback)
-      const cpuLineParts = [];
-      if (e.cpu_label) cpuLineParts.push(e.cpu_label);
-      if (typeof e.cpu_speed_index !== "undefined") cpuLineParts.push(`x${Number(e.cpu_speed_index).toFixed(2)}`);
-      if (typeof e.cpu_speed_override !== "undefined" && Number(e.cpu_speed_override) !== 1.0) {
-        cpuLineParts.push(`override x${Number(e.cpu_speed_override).toFixed(2)}`);
-      }
-
-      if (cpuLineParts.length > 0) {
-        lines.push(`CPU used for ETA: ${cpuLineParts.join("  ")}`);
-      } else {
-        lines.push(`CPU used for ETA: (not provided by server)`);
-      }
-
-      lines.push(`ETA: ${e.eta_human}  (~${e.est_fps} fps est)`);
-      lines.push("");
-
-      lines.push(`Resolution: ${e.output_resolution?.width}x${e.output_resolution?.height}  (${e.decision})`);
-      if (e.decision_note) lines.push(`Note: ${e.decision_note}`);
-      lines.push("");
-
-      lines.push("Suggested args:");
-      lines.push("  " + (data.suggested_extra_args || []).join(" "));
-
-      previewEl.textContent = lines.join("\n");
+      box.textContent =
+        `Source: ${payload.src}\n` +
+        `Duration: ${fmtSeconds(p.duration_sec)} | ${p.width}x${p.height} @ ${Number(p.fps || 0).toFixed(2)} fps\n\n` +
+        `Target size: ${Number(data.inputs?.target_mb || 0).toFixed(0)} MB\n` +
+        `Bitrate: video ${e.video_bitrate_kbps} kbps / audio ${e.audio_bitrate_kbps} kbps\n` +
+        `Quality: ${e.quality_label} (bpp=${e.bpp})\n\n` +
+        `CPU: ${e.cpu_label} (x${e.cpu_speed_index})\n` +
+        `ETA: ${e.eta_human} (~${e.est_fps} fps)\n\n` +
+        `Output: ${e.output_resolution?.width}x${e.output_resolution?.height} (${e.decision})`;
     }
 
     function schedulePreview() {
       clearTimeout(previewTimer);
-      previewTimer = setTimeout(() => refreshPreview(), 350);
+      previewTimer = setTimeout(refreshPreviewText, 350);
     }
 
-    async function queueWizard() {
-      const src = document.getElementById("src").value;
-      const preset = document.getElementById("preset").value;
-      const target_size_value = Number(document.getElementById("sizeValue").value);
-      const target_size_unit = document.getElementById("sizeUnit").value;
-      const quality = document.getElementById("quality").value;
-      const allow_downscale = document.getElementById("allowDownscale").checked;
-      const force_4k = document.getElementById("force4k").checked;
+    // ----------------------------
+    // Visual compare behavior:
+    // - OLD fills full area
+    // - NEW is clipped to bottom half, from left to some width
+    // - The white handle controls the width
+    // - Drag LEFT => more NEW (so we invert)
+    // ----------------------------
+    let dragActive = false;
 
-      if (!src) {
-        alert("No file selected. Go back to Jobs and pick a file first.");
+    function setCompareFromX(x01) {
+      const wrap = document.getElementById("compareWrap");
+      const newImg = document.getElementById("imgNew");
+      const handle = document.getElementById("handle");
+
+      const x = Math.max(0, Math.min(1, x01));
+
+      // handle position follows x
+      handle.style.left = (x * 100) + "%";
+
+      // invert so LEFT => more NEW
+      const reveal = 1 - x;        // 1 at far-left, 0 at far-right
+      const rightPct = reveal * 100;
+
+      // NEW shown in bottom half (50%->100%), width 0->rightPct
+      newImg.style.clipPath = `polygon(0% 50%, ${rightPct}% 50%, ${rightPct}% 100%, 0% 100%)`;
+    }
+
+    function pointerX01(evt) {
+      const wrap = document.getElementById("compareWrap");
+      const rect = wrap.getBoundingClientRect();
+      const clientX = (evt.touches && evt.touches[0]) ? evt.touches[0].clientX : evt.clientX;
+      return (clientX - rect.left) / rect.width;
+    }
+
+    function startDrag(evt) {
+      dragActive = true;
+      setCompareFromX(pointerX01(evt));
+      evt.preventDefault();
+    }
+
+    function moveDrag(evt) {
+      if (!dragActive) return;
+      setCompareFromX(pointerX01(evt));
+      evt.preventDefault();
+    }
+
+    function endDrag() {
+      dragActive = false;
+    }
+
+    async function refreshPreviewImages() {
+      const payload = currentPayload();
+      const status = document.getElementById("imgStatus");
+      const wrap = document.getElementById("compareWrap");
+
+      if (!payload.src) {
+        status.textContent = "Pick a file first (go back to Jobs).";
         return;
       }
 
-      const payload = { src, preset, target_size_value, target_size_unit, quality, allow_downscale, force_4k };
-
-      const statusEl = document.getElementById("queueStatus");
-      statusEl.textContent = "Queuing...";
+      status.textContent = "Generating image preview (short encode)…";
 
       let res, data;
       try {
-        res = await fetch("/encode_wizard", {
+        res = await fetchWithTimeout("/wizard_preview_images", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
-        });
+        }, 380000);
         data = await res.json();
-      } catch (err) {
-        console.error(err);
+      } catch (e) {
+        status.textContent = "Image preview error: server unreachable or timed out (encode may be hanging).";
+        wrap.style.display = "none";
+        return;
+      }
+
+      if (!res.ok) {
+        const msg = (data && data.error) ? String(data.error) : "";
+        if (msg.toLowerCase().includes("ffmpeg not found")) {
+          status.textContent = "Image preview needs ffmpeg inside the container. Install ffmpeg in the Dockerfile.";
+        } else {
+          status.textContent = "Image preview error:\n" + JSON.stringify(data, null, 2);
+        }
+        wrap.style.display = "none";
+        return;
+      }
+
+      // Success + set aspect ratio from OLD image dimensions
+      const wrapEl = document.getElementById("compareWrap");
+      const oldImg = document.getElementById("imgOld");
+
+      oldImg.onload = () => {
+        if (oldImg.naturalWidth && oldImg.naturalHeight) {
+          wrapEl.style.aspectRatio = `${oldImg.naturalWidth} / ${oldImg.naturalHeight}`;
+        }
+      };
+
+      oldImg.src = "data:image/jpeg;base64," + data.old_b64;
+      document.getElementById("imgNew").src = "data:image/jpeg;base64," + data.new_b64;
+
+      wrap.style.display = "";
+
+      // Reset compare to center
+      setCompareFromX(0.5);
+
+      status.textContent = `Frame at ~${fmtSeconds(data.when_seconds)} (drag the white bar)`;
+    }
+
+    async function queueWizard() {
+      const payload = currentPayload();
+      if (!payload.src) return alert("No file selected.");
+
+      const statusEl = document.getElementById("queueStatus");
+      statusEl.textContent = "Queuing…";
+
+      let res;
+      try {
+        res = await fetchWithTimeout("/encode_wizard", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }, 15000);
+      } catch (e) {
         statusEl.textContent = "Error";
-        alert("Failed to reach server.");
+        alert("Queue failed: server unreachable or timed out.");
         return;
       }
 
       if (!res.ok) {
         statusEl.textContent = "Error";
-        alert(JSON.stringify(data, null, 2));
+        alert(await res.text());
         return;
       }
 
@@ -230,16 +462,35 @@
       setTimeout(() => statusEl.textContent = "", 2500);
     }
 
-    // Hook up events
-    document.getElementById("sizeValue").addEventListener("input", schedulePreview);
-    document.getElementById("sizeUnit").addEventListener("change", schedulePreview);
-    document.getElementById("quality").addEventListener("change", schedulePreview);
-    document.getElementById("allowDownscale").addEventListener("change", schedulePreview);
-    document.getElementById("force4k").addEventListener("change", schedulePreview);
-    document.getElementById("queueBtn").onclick = queueWizard;
+    // Bind drag events to both handle + whole compare box
+    const compareWrap = document.getElementById("compareWrap");
+    const handle = document.getElementById("handle");
 
-    // initial preview
+    function bindDrag(el) {
+      el.addEventListener("mousedown", startDrag);
+      el.addEventListener("touchstart", startDrag, { passive: false });
+    }
+    bindDrag(handle);
+    bindDrag(compareWrap);
+
+    window.addEventListener("mousemove", moveDrag);
+    window.addEventListener("touchmove", moveDrag, { passive: false });
+    window.addEventListener("mouseup", endDrag);
+    window.addEventListener("touchend", endDrag);
+    window.addEventListener("touchcancel", endDrag);
+
+    // Control events
+    ["preset","sizeValue","sizeUnit","quality","allowDownscale","force4k"].forEach(id => {
+      document.getElementById(id).addEventListener("change", schedulePreview);
+      document.getElementById(id).addEventListener("input", schedulePreview);
+    });
+
+    document.getElementById("queueBtn").onclick = queueWizard;
+    document.getElementById("genImagesBtn").onclick = refreshPreviewImages;
+
+    // Initial: ONLY text preview
     schedulePreview();
   </script>
+
 </body>
 </html>

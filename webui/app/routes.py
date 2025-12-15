@@ -34,6 +34,10 @@ import json
 import math
 import re
 import subprocess
+import base64
+import tempfile
+import uuid
+
 
 from flask import (
     request,
@@ -598,6 +602,183 @@ def _quality_label_from_bpp(bpp):
 # Side-by-side preview helpers
 # -------------------------------------------------------------------
 
+def _b64_jpg(path: str) -> str:
+    with open(path, "rb") as f:
+        return base64.b64encode(f.read()).decode("utf-8")
+
+
+def _ffmpeg_extract_jpg(input_path: str, t_sec: float, out_path: str) -> None:
+    # -ss before -i is fast seek (good enough for preview)
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-y",
+        "-ss", str(max(0.0, float(t_sec))),
+        "-i", input_path,
+        "-frames:v", "1",
+        "-q:v", "2",
+        out_path,
+    ]
+    ok, out, err = _run_cmd(cmd)
+    if not ok or not os.path.isfile(out_path):
+        raise RuntimeError(f"ffmpeg frame extract failed: {(err or out or '').strip()[:400]}")
+
+def _collect_preset_names(obj):
+    """Recursively collect all PresetName strings from a HandBrake preset JSON structure."""
+    names = []
+
+    if isinstance(obj, dict):
+        # direct hit
+        if isinstance(obj.get("PresetName"), str) and obj["PresetName"].strip():
+            names.append(obj["PresetName"].strip())
+
+        # common structures
+        for k, v in obj.items():
+            names.extend(_collect_preset_names(v))
+
+    elif isinstance(obj, list):
+        for item in obj:
+            names.extend(_collect_preset_names(item))
+
+    return names
+
+
+def _preset_names_from_file(preset_file: str):
+    """Load preset JSON and return a de-duped list of PresetName values in order."""
+    with open(preset_file, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    raw = _collect_preset_names(data)
+
+    # de-dupe while preserving order
+    seen = set()
+    out = []
+    for n in raw:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _pick_best_preset_name(names, base_hint: str):
+    """
+    If there are multiple presets in one file, pick a reasonable one.
+    - If base_hint includes '4k', prefer names containing '4k' or '2160'
+    - If base_hint includes '1080', prefer names containing '1080'
+    Otherwise pick the first.
+    """
+    if not names:
+        return None
+
+    hint = (base_hint or "").lower()
+
+    if "4k" in hint:
+        for n in names:
+            nl = n.lower()
+            if "4k" in nl or "2160" in nl:
+                return n
+
+    if "1080" in hint:
+        for n in names:
+            nl = n.lower()
+            if "1080" in nl:
+                return n
+
+    return names[0]
+
+
+
+def _hb_preset_args_for_base(base: str, src_basename: str):
+    """
+    Convert preset base selection (1080/4k/auto) into HandBrakeCLI preset args.
+    Uses preset_config mapping, but if the configured preset name is wrong,
+    auto-picks the correct PresetName from the preset JSON and saves it.
+    """
+    base = (base or "auto").lower()
+    effective = base
+    if effective == "auto":
+        effective = guess_preset_from_filename(src_basename)
+
+    cfg = preset_config.get(effective)
+    if not cfg:
+        raise RuntimeError(f"Unknown preset base: {effective}")
+
+    preset_file = cfg.get("file")
+    preset_name = cfg.get("name")
+
+    if not preset_file or not os.path.isfile(preset_file):
+        raise RuntimeError(f"Preset file missing: {preset_file}")
+
+    # Auto-pick preset name from the JSON if missing or incorrect
+    try:
+        names = _preset_names_from_file(preset_file)
+        if not names:
+            raise RuntimeError("No PresetName found inside preset JSON")
+
+        # If current name is not in the JSON, pick a valid one and persist it
+        if (not preset_name) or (preset_name not in names):
+            picked = _pick_best_preset_name(names, effective) or names[0]
+            preset_config[effective]["name"] = picked
+            save_preset_config()
+            preset_name = picked
+
+    except Exception as e:
+        # If JSON parsing fails, keep old behavior but with a clearer error
+        if not preset_name:
+            raise RuntimeError(f"Preset name missing and could not auto-detect from JSON: {e}")
+
+    # HandBrakeCLI preset usage:
+    # --preset-import-file <file>  and  -Z "<preset name>"
+    return effective, ["--preset-import-file", preset_file, "-Z", preset_name]
+
+def _preset_names_in_file(preset_file: str):
+    try:
+        with open(preset_file, "r", encoding="utf-8") as f:
+            j = json.load(f)
+    except Exception:
+        return []
+
+    names = []
+
+    def walk(x):
+        if isinstance(x, dict):
+            if isinstance(x.get("PresetName"), str):
+                names.append(x["PresetName"])
+            for v in x.values():
+                walk(v)
+        elif isinstance(x, list):
+            for v in x:
+                walk(v)
+
+    walk(j)
+
+    # de-dupe preserve order
+    out, seen = [], set()
+    for n in names:
+        if n not in seen:
+            seen.add(n)
+            out.append(n)
+    return out
+
+
+def _flatten_args(arg_list):
+    """
+    Turn a list that may contain combined strings into a clean argv list.
+    e.g. ["--width 1920 --height 1080", "--encoder-preset", "slow"]
+      -> ["--width","1920","--height","1080","--encoder-preset","slow"]
+    """
+    out = []
+    for a in (arg_list or []):
+        if a is None:
+            continue
+        if isinstance(a, (list, tuple)):
+            out.extend([str(x) for x in a if x is not None])
+        else:
+            out.extend(str(a).split())
+    return out
+
+
 # -------------------------------------------------------------------
 # Route registration
 # -------------------------------------------------------------------
@@ -763,15 +944,29 @@ def register_routes(app):
         if preset == "auto":
             preset = guess_preset_from_filename(base)
 
+        # target MB
         target_mb = size_value_f * (1024.0 if size_unit == "GB" else 1.0)
 
-        extra_args = [f"--target-size {int(target_mb)}"]
-        if quality == "high":
-            extra_args.append("--encoder-preset slow")
-        elif quality == "balanced":
-            extra_args.append("--encoder-preset medium")
-        else:
-            extra_args.append("--encoder-preset fast")
+        # probe duration to convert size -> bitrate
+        info = _probe_media(src)
+        duration_sec = float(info.get("duration_sec") or 0.0)
+        if duration_sec <= 0:
+            return jsonify(error="probe failed (duration)"), 500
+
+        target_bytes = target_mb * 1024.0 * 1024.0
+        total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
+
+        audio_kbps = _quality_audio_kbps(quality)
+        video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
+
+        enc_preset = _preset_from_quality(quality)
+
+        # HandBrakeCLI flags (baseline preset still applies via your preset import)
+        extra_args = [
+            f"-b {int(video_kbps)}",
+            f"--encoder-preset {enc_preset}",
+        ]
+
 
         # Optional downscale logic (same heuristic as wizard_preview)
         try:
@@ -820,6 +1015,164 @@ def register_routes(app):
             return jsonify(src=src, info=info)
         except Exception as e:
             return jsonify(error=str(e)), 500
+
+
+    @app.route("/wizard_preview_images", methods=["POST"])
+    def wizard_preview_images():
+        """
+        Return two still frames as base64 JPEG:
+        - old_b64: extracted from source (OLD)
+        - new_b64: extracted from a short wizard-encoded clip (NEW)
+        """
+        data = request.get_json(force=True) or {}
+        src = data.get("src")
+        preset_base = (data.get("preset") or "auto").lower()
+
+        if not src or not os.path.isfile(src):
+            return jsonify(error="invalid src"), 400
+        if not is_allowed_path(src):
+            return jsonify(error="path not allowed"), 400
+
+        try:
+            size_value = float(data.get("target_size_value") or 5.0)
+        except Exception:
+            return jsonify(error="invalid target_size_value"), 400
+
+        unit = (data.get("target_size_unit") or "GB").upper()
+        if unit not in ("GB", "MB"):
+            return jsonify(error="invalid target_size_unit"), 400
+        if size_value <= 0:
+            return jsonify(error="invalid target_size_value"), 400
+
+        quality = (data.get("quality") or "balanced").lower()
+        if quality not in ("high", "balanced", "small"):
+            return jsonify(error="invalid quality"), 400
+
+        allow_downscale = bool(data.get("allow_downscale", True))
+        force_4k = bool(data.get("force_4k", False))
+
+        # Make sure ffmpeg exists
+        ok_ff, _o, _e = _run_cmd(["ffmpeg", "-version"])
+        if not ok_ff:
+            return jsonify(error="ffmpeg not found in container (needed for image previews)"), 500
+
+        # Probe source
+        try:
+            info = _probe_media(src)
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+
+        duration_sec = float(info.get("duration_sec") or 0.0)
+        src_w = int(info.get("width") or 0)
+        src_h = int(info.get("height") or 0)
+        fps = float(info.get("fps") or 0.0) or 24.0
+        if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
+            return jsonify(error="probe incomplete"), 500
+
+        # Choose a frame timestamp: ~25% in, but avoid super early/late
+        t = max(5.0, min(duration_sec * 0.25, max(5.0, duration_sec - 8.0)))
+
+        target_mb = _size_to_mb(size_value, unit)
+        target_bytes = target_mb * 1024.0 * 1024.0
+        total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
+        audio_kbps = _quality_audio_kbps(quality)
+        video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
+        enc_preset = _preset_from_quality(quality)
+
+        # Downscale decision (same logic as wizard_preview)
+        out_w, out_h = src_w, src_h
+        decision = "keep"
+
+        bpp_src = _bpp(video_kbps, src_w, src_h, fps)
+
+        def pick_downscale(w, h):
+            if w <= 0 or h <= 0:
+                return (w, h)
+            target_h = 1080
+            if h <= target_h:
+                return (w, h)
+            scale = target_h / float(h)
+            nw = int((w * scale) // 2 * 2)
+            nh = int((h * scale) // 2 * 2)
+            return (max(2, nw), max(2, nh))
+
+        cand_w, cand_h = pick_downscale(src_w, src_h)
+        bpp_1080 = _bpp(video_kbps, cand_w, cand_h, fps) if (cand_w, cand_h) != (src_w, src_h) else bpp_src
+
+        if (not force_4k) and allow_downscale:
+            if src_h > 1080 and bpp_src < 0.045 and bpp_1080 >= bpp_src * 1.6:
+                out_w, out_h = cand_w, cand_h
+                decision = "downscale"
+
+        # Wizard args -> argv tokens
+        wizard_args = [
+            "-b", str(int(video_kbps)),          # video kbps
+            "--encoder-preset", enc_preset,
+            "--audio", "1",                      # pick first audio track
+            "-E", "av_aac",
+            "-B", str(int(audio_kbps)),
+            "--mixdown", "stereo",
+        ]
+
+        if decision == "downscale":
+            wizard_args += ["--width", str(out_w), "--height", str(out_h)]
+
+        # Preset args for base selection
+        try:
+            base_name = os.path.basename(src)
+            effective_preset, preset_args = _hb_preset_args_for_base(preset_base, base_name)
+        except Exception as e:
+            return jsonify(error=f"preset mapping failed: {e}"), 500
+
+        # Temp files
+        tmpdir = tempfile.mkdtemp(prefix="hbwiz_")
+        token = uuid.uuid4().hex
+        out_clip = os.path.join(tmpdir, f"wiz_{token}.mp4")
+        old_jpg = os.path.join(tmpdir, f"old_{token}.jpg")
+        new_jpg = os.path.join(tmpdir, f"new_{token}.jpg")
+
+        # 1) Extract OLD still from source
+        try:
+            _ffmpeg_extract_jpg(src, t, old_jpg)
+        except Exception as e:
+            return jsonify(error=f"failed extracting source frame: {e}"), 500
+
+        # 2) Encode a short clip around t
+        start_t = max(0.0, t - 1.0)
+        stop_len = 8  # seconds
+
+        hb_cmd = [
+            "HandBrakeCLI",
+            "-i", src,
+            "-o", out_clip,
+            "--start-at", f"seconds:{int(start_t)}",
+            "--stop-at", f"seconds:{int(stop_len)}",
+        ]
+
+        # IMPORTANT: preset import + -Z must come before wizard flags generally
+        hb_cmd += preset_args
+        hb_cmd += _flatten_args(wizard_args)
+
+        ok, out, err = _run_cmd(hb_cmd)
+        if not ok or not os.path.isfile(out_clip):
+            snippet = ((err or out) or "").strip().replace("\n", "\\n")[:900]
+            return jsonify(error=f"HandBrake preview encode failed: {snippet}"), 500
+
+        # 3) Extract NEW still from encoded clip near middle (~3s in)
+        try:
+            _ffmpeg_extract_jpg(out_clip, 3.0, new_jpg)
+        except Exception as e:
+            return jsonify(error=f"failed extracting encoded frame: {e}"), 500
+
+        return jsonify(
+            ok=True,
+            when_seconds=float(t),
+            preset=effective_preset,
+            old_b64=_b64_jpg(old_jpg),
+            new_b64=_b64_jpg(new_jpg),
+        )
+
+
     @app.route("/wizard_preview", methods=["POST"])
     def wizard_preview():
         """Return an estimated outcome for Size Wizard inputs."""
