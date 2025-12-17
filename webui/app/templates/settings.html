@@ -1,86 +1,52 @@
-<!-- -------------------------------------------------------------------
-     Settings page (global app settings)
---------------------------------------------------------------------- -->
-
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <title>HandBrake TSD Helper – Settings</title>
-  <!-- Reuse the same CSS as the main UI -->
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
 </head>
 <body>
-  <!-- ============================================================
-       Top navigation (matches index.html)
-       ------------------------------------------------------------ -->
+
   <nav class="top-nav">
     <a href="/" class="nav-link">Jobs</a>
     <a href="/size_wizard" class="nav-link">Size Wizard</a>
     <a href="/settings" class="nav-link nav-link-active">Settings</a>
   </nav>
 
-  <h1>Settings – HandBrake TSD Helper</h1>
+  <h1>Settings</h1>
 
   <!-- ============================================================
-       DATA PASSED FROM BACKEND
-       ------------------------------------------------------------ -->
-  <script>
-    const initialSettings = {{ settings | tojson | safe }};
-    const initialPresetFiles = {{ preset_files | default([], true) | tojson | safe }};
-  </script>
-
-  <!-- ============================================================
-       Encoding Settings
+       Global encoding settings
        ------------------------------------------------------------ -->
   <div class="section-card">
-    <h2>Encoding Settings</h2>
-
-    <p class="small">
-      Control how many CPU threads HandBrake can use during encoding.
-    </p>
+    <h2>Encoding settings</h2>
 
     <div class="row">
-      <label for="hbThreadsInput">HandBrake threads (CPU cores):</label>
-      <input
-        id="hbThreadsInput"
-        type="number"
-        min="0"
-        step="1"
-        style="width:120px;"
-      >
+      <label for="hbThreadsInput"><strong>HandBrake threads</strong> (0 = auto):</label>
+      <input id="hbThreadsInput" type="number" min="0" step="1" style="width:120px;">
     </div>
 
-    <div class="row">
-      <label for="cpuProfileSelect">CPU model (for ETA estimates):</label>
-      <select id="cpuProfileSelect" style="min-width: 360px;">
-        <option value="">Loading CPU list…</option>
+    <div class="row" style="margin-top:10px;">
+      <label for="cpuProfileSelect"><strong>CPU profile</strong> (for ETA / estimation):</label>
+      <select id="cpuProfileSelect" style="min-width:260px;">
+        <option value="">Loading…</option>
       </select>
     </div>
 
-    <p class="small">
-      This only affects <strong>Size Wizard ETA estimates</strong>.
-      It does <strong>not</strong> change HandBrake quality or presets.
-    </p>
-
-    <p class="small">
-      <strong>Tips:</strong><br>
-      - <code>0</code> threads = let HandBrake decide automatically<br>
-      - Pick the CPU closest to the machine running this container<br>
-      - Small OptiPlex / Tiny PCs may run slightly slower due to thermals
-    </p>
-
-    <div class="row" style="margin-top:10px;">
+    <div class="row" style="margin-top:12px;">
       <button id="saveSettingsBtn">Save settings</button>
       <span id="settingsSaveStatus" class="small"></span>
     </div>
   </div>
 
   <!-- ============================================================
-       Preset Upload + Manage
+       Preset files management
        ------------------------------------------------------------ -->
   <div class="section-card">
-    <h2>Upload HandBrake Preset (.json)</h2>
+    <h2>Preset files</h2>
+    <p class="small">
+      Upload HandBrake <code>.json</code> preset files here. Stored in: <code>{{ preset_dir }}</code>
+    </p>
 
     <div class="row">
       <input id="presetFileInput" type="file" accept=".json">
@@ -91,6 +57,40 @@
     <div class="row">
       <strong>Current preset files:</strong>
       <ul id="presetFilesList" class="small"></ul>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       Preset Settings (saved defaults for Auto mode)
+       ------------------------------------------------------------ -->
+  <div class="section-card">
+    <h2>Preset Settings (saved defaults for Auto mode)</h2>
+    <p class="small">
+      These control which HandBrake <code>.json</code> preset file is used when a job is tagged
+      as 1080p or 4K/2160p. The preset <strong>name</strong> is auto-detected from inside
+      the JSON file; you only have to pick the file.
+      The dropdowns are populated from the <code>{{ preset_dir }}</code> folder.
+    </p>
+
+    <div class="row">
+      <h3 style="margin-bottom:4px;">Default 1080p preset file</h3>
+      <div class="inline-input-group">
+        <label>HB_PRESET_FILE:</label>
+        <select id="preset1080FileSelect"></select>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <h3 style="margin-bottom:4px;">Default 4K / 2160p preset file</h3>
+      <div class="inline-input-group">
+        <label>HB_PRESET_FILE:</label>
+        <select id="preset4kFileSelect"></select>
+      </div>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <button id="savePresetConfigBtn">Save preset settings</button>
+      <span id="presetSaveStatus" class="small"></span>
     </div>
   </div>
 
@@ -108,6 +108,14 @@
        Page script
        ------------------------------------------------------------ -->
   <script>
+    // Data injected from Flask
+    const initialSettings = {{ settings|tojson }};
+    const initialPresetFiles = {{ preset_files|tojson }};
+
+    // ✅ Keep an up-to-date list of available preset JSON files.
+    // Used for both the preset file list and the Auto-mode default selectors.
+    let presetFiles = Array.isArray(initialPresetFiles) ? initialPresetFiles.slice() : [];
+
     // -------------------------------
     // Init encoding settings
     // -------------------------------
@@ -126,7 +134,9 @@
         if (!res.ok) throw new Error("HTTP " + res.status);
 
         const data = await res.json();
-        const profiles = Array.isArray(data.profiles) ? data.profiles : [];
+        const profiles = Array.isArray(data.profiles)
+          ? data.profiles
+          : (Array.isArray(data.cpu_profiles) ? data.cpu_profiles : []);
 
         select.innerHTML = "";
 
@@ -134,7 +144,7 @@
           const opt = document.createElement("option");
           opt.value = p.id;
           opt.textContent = p.label;
-          if (p.id === current) opt.selected = true;
+          if ((p.id || "").toLowerCase() === current) opt.selected = true;
           select.appendChild(opt);
         });
 
@@ -225,7 +235,11 @@
       const res = await fetch("/api/presets/upload", { method: "POST", body: form });
       const data = await res.json();
 
-      if (data.preset_files) renderPresetFilesList(data.preset_files);
+      if (data.preset_files) {
+        presetFiles = data.preset_files;
+        renderPresetFilesList(presetFiles);
+        loadPresetConfigUI();
+      }
       status.textContent = data.error ? data.error : "Uploaded";
       setTimeout(() => status.textContent = "", 3000);
     }
@@ -240,7 +254,94 @@
       });
 
       const data = await res.json();
-      if (data.preset_files) renderPresetFilesList(data.preset_files);
+      if (data.preset_files) {
+        presetFiles = data.preset_files;
+        renderPresetFilesList(presetFiles);
+        loadPresetConfigUI();
+      }
+    }
+
+    // -------------------------------
+    // Preset defaults (Auto mode)
+    // -------------------------------
+    function loadPresetConfigUI() {
+      fetch("/preset_config")
+        .then(r => r.json())
+        .then(data => {
+          if (data.error) return;
+          const cfg = data.config || {};
+          const p1080 = cfg["1080"] || {};
+          const p4k = cfg["4k"] || {};
+
+          populatePresetFileSelect("preset1080FileSelect", p1080.file || "");
+          populatePresetFileSelect("preset4kFileSelect", p4k.file || "");
+        })
+        .catch(err => console.error(err));
+    }
+
+    function populatePresetFileSelect(selectId, currentFile) {
+      const select = document.getElementById(selectId);
+      if (!select) return;
+      select.innerHTML = "";
+
+      if (!Array.isArray(presetFiles) || presetFiles.length === 0) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "No preset files found";
+        select.appendChild(opt);
+        return;
+      }
+
+      let hasCurrent = false;
+      presetFiles.forEach(path => {
+        const opt = document.createElement("option");
+        opt.value = path;
+        opt.textContent = path.split("/").pop();
+        if (currentFile && path === currentFile) {
+          opt.selected = true;
+          hasCurrent = true;
+        }
+        select.appendChild(opt);
+      });
+
+      if (currentFile && !hasCurrent) {
+        const opt = document.createElement("option");
+        opt.value = currentFile;
+        opt.textContent = currentFile + " (custom / not found)";
+        opt.selected = true;
+        select.appendChild(opt);
+      }
+    }
+
+    function savePresetConfigUI() {
+      const statusEl = document.getElementById("presetSaveStatus");
+
+      const body = {
+        "1080": { "file": document.getElementById("preset1080FileSelect")?.value || "" },
+        "4k":   { "file": document.getElementById("preset4kFileSelect")?.value || "" }
+      };
+
+      fetch("/preset_config", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body)
+      })
+        .then(r => r.json())
+        .then(data => {
+          if (!statusEl) return;
+          if (data.error) {
+            statusEl.textContent = "Failed to save preset settings: " + data.error;
+            return;
+          }
+          statusEl.textContent = "Preset settings saved.";
+          setTimeout(() => { statusEl.textContent = ""; }, 4000);
+        })
+        .catch(err => {
+          console.error(err);
+          if (!statusEl) return;
+          statusEl.textContent = "Failed to save preset settings.";
+          setTimeout(() => { statusEl.textContent = ""; }, 4000);
+        });
     }
 
     // -------------------------------
@@ -249,10 +350,12 @@
     document.addEventListener("DOMContentLoaded", () => {
       initEncodingSettings();
       loadCpuProfiles();
-      renderPresetFilesList(initialPresetFiles);
+      renderPresetFilesList(presetFiles);
+      loadPresetConfigUI();
 
       document.getElementById("saveSettingsBtn").onclick = saveSettings;
       document.getElementById("uploadPresetBtn").onclick = uploadPreset;
+      document.getElementById("savePresetConfigBtn").onclick = savePresetConfigUI;
     });
   </script>
 </body>

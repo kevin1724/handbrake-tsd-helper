@@ -890,19 +890,15 @@ def register_routes(app):
         killed = _kill_preview_by_id(preview_id)
         return jsonify(ok=True, killed=killed)
 
-
-
     # ------------- UI -------------
 
     @app.route("/")
     def index():
         """Render the main single-page web UI."""
-        preset_files = list_preset_files()
+        # ✅ Presets intentionally NOT loaded/passed here anymore
         return render_template(
             "index.html",
             roots=ROOTS,
-            preset_files=preset_files,
-            preset_dir=PRESET_DIR,
         )
 
     @app.route("/size_wizard")
@@ -914,11 +910,13 @@ def register_routes(app):
     def settings_page():
         """Render the settings page (global app settings)."""
         settings = load_settings()
+        # ✅ Presets live on Settings page now
         preset_files = list_preset_files()
         return render_template(
             "settings.html",
             settings=settings,
             preset_files=preset_files,
+            preset_dir=PRESET_DIR,
         )
 
     @app.route("/debug_config")
@@ -949,8 +947,9 @@ def register_routes(app):
     @app.route("/api/cpu_profiles", methods=["GET"])
     def cpu_profiles_api():
         """Return CPU profiles for the Settings dropdown / ETA estimation."""
-        return jsonify(profiles=list_cpu_profiles())
-
+        prof = list_cpu_profiles()
+        # ✅ Return under both keys so any frontend expectation works
+        return jsonify(profiles=prof, cpu_profiles=prof)
 
     # ------------- Directory listing -------------
 
@@ -1188,19 +1187,21 @@ def register_routes(app):
 
         # ✅ MUCH faster timestamp choice:
         # Use ~60s in (or 10% for short clips), and force INTEGER seconds so HB/ffmpeg match.
-        if duration_sec < 120:
-            t = max(2.0, min(duration_sec * 0.10, duration_sec - 2.0))
-        else:
-            t = min(60.0, duration_sec - 2.0)
 
-        t_int = int(max(0.0, t))  # integer seconds for consistent matching
+        #if duration_sec < 120:
+            #t = max(2.0, min(duration_sec * 0.10, duration_sec - 2.0))
+        #else:
+            #t = min(60.0, duration_sec - 2.0)
+
+        #t_int = int(max(0.0, t))  # integer seconds for consistent matching
+
+        t_int = 1
 
         target_mb = _size_to_mb(size_value, unit)
         target_bytes = target_mb * 1024.0 * 1024.0
         total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
         audio_kbps = _quality_audio_kbps(quality)
         video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
-        enc_preset = _preset_from_quality(quality)
 
         # Downscale decision
         out_w, out_h = src_w, src_h
@@ -1227,17 +1228,8 @@ def register_routes(app):
                 out_w, out_h = cand_w, cand_h
                 decision = "downscale"
 
-        # Preview wizard args (keep fast)
-        wizard_args = [
-            "-b", str(int(video_kbps)),
-            "--encoder-preset", enc_preset,
-            "-a", "none",
-            "--subtitle", "none",
-        ]
-        if decision == "downscale":
-            wizard_args += ["--width", str(out_w), "--height", str(out_h)]
-
-        # Preset args for base selection
+        # Preset args for base selection (we still return effective_preset for UI,
+        # but we do NOT use preset_args for preview encoding, because that can be AV1 and very slow).
         try:
             base_name = os.path.basename(src)
             effective_preset, preset_args = _hb_preset_args_for_base(preset_base, base_name)
@@ -1258,15 +1250,34 @@ def register_routes(app):
             return jsonify(error=f"failed extracting source frame: {e}"), 500
 
         # 2) Encode ONLY ONE FRAME at the SAME integer time
+        #
+        # IMPORTANT CHANGE:
+        # - Do NOT use preset_args here (those may select AV1/SVT/QSV/NVENC etc and are slow to init)
+        # - Use a FAST preview encoder (x264 ultrafast) so visual compare loads quickly
         hb_cmd = [
             "HandBrakeCLI",
             "-i", src,
             "-o", out_clip,
             "--start-at", f"seconds:{t_int}",
             "--stop-at", "frames:1",
+
+            # Fast preview-only settings
+            "--encoder", "x264",
+            "--encoder-preset", "ultrafast",
+            "-b", str(int(video_kbps)),
+
+            # No audio/subs for speed
+            "-a", "none",
+            "--subtitle", "none",
+
+            # Keep behavior consistent
+            "--crop", "0:0:0:0",
+            "--cfr",
         ]
-        hb_cmd += preset_args
-        hb_cmd += _flatten_args(wizard_args)
+
+        # Apply ONLY the downscale decision for the preview
+        if decision == "downscale":
+            hb_cmd += ["--width", str(out_w), "--height", str(out_h)]
 
         # NEW: kill any previous preview for this preview_id before starting a new one
         _kill_preview_by_id(preview_id)
@@ -1321,7 +1332,8 @@ def register_routes(app):
             ok=True,
             preview_id=preview_id,
             when_seconds=float(t_int),
-            preset=effective_preset,
+            preset=effective_preset,  # still shown in UI
+            decision=decision,
             old_b64=_b64_jpg(old_jpg),
             new_b64=_b64_jpg(new_jpg),
         )

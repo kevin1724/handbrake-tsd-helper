@@ -212,13 +212,31 @@
     // -----------------------------
     // Helpers
     // -----------------------------
-    async function fetchWithTimeout(url, options, timeoutMs) {
-      const controller = new AbortController();
-      const id = setTimeout(() => controller.abort(), timeoutMs);
+    async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
+      const timeoutController = new AbortController();
+      const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
+
+      // If caller provided a signal, combine it with the timeout signal
+      let signal = timeoutController.signal;
+
+      if (options.signal) {
+        if (typeof AbortSignal !== "undefined" && AbortSignal.any) {
+          signal = AbortSignal.any([timeoutController.signal, options.signal]);
+        } else {
+          // Fallback for browsers without AbortSignal.any:
+          // If caller aborts, also abort our timeout controller
+          try {
+            options.signal.addEventListener("abort", () => timeoutController.abort(), { once: true });
+          } catch (e) {}
+          signal = timeoutController.signal;
+        }
+      }
+
       try {
-        return await fetch(url, { ...options, signal: controller.signal });
+        // IMPORTANT: spread options, but override signal with our combined signal
+        return await fetch(url, { ...options, signal });
       } finally {
-        clearTimeout(id);
+        clearTimeout(timeoutId);
       }
     }
 
@@ -414,18 +432,35 @@
     async function refreshPreviewImages() {
       const payload = currentPayload();
       const status = document.getElementById("imgStatus");
+      const btn = document.getElementById("genImagesBtn");
 
       if (!payload.src) {
         status.textContent = "Pick a file first (go back to Jobs).";
         return;
       }
 
+      // If a request is already running, treat button click as "Cancel"
+      if (btn.dataset.busy === "1") {
+        status.textContent = "Canceling preview…";
+        cancelPreviewOnServer();
+        btn.dataset.busy = "0";
+        btn.textContent = "Generate Visual Compare";
+        btn.disabled = false;
+        wrap.style.display = "none";
+        return;
+      }
+
+      // UI -> busy
+      btn.dataset.busy = "1";
+      btn.textContent = "Cancel Preview";
+      btn.disabled = false;
+
       status.textContent = "Generating image preview (short encode)…";
 
-      // NEW: include preview_id so server can kill the right HandBrake run
+      // include preview_id so server can kill the right HandBrake run
       payload.preview_id = previewId;
 
-      // NEW: cancel any previous server preview before starting a new one
+      // cancel any previous server preview before starting a new one
       cancelPreviewOnServer();
 
       // NEW: use our own abort controller so leaving page stops the wait
@@ -433,12 +468,15 @@
 
       let res, data;
       try {
-        res = await fetch("/wizard_preview_images", {
+        // IMPORTANT: timeout so it doesn't hang forever
+        // (backend uses timeout=90s, so we pick 95s)
+        res = await fetchWithTimeout("/wizard_preview_images", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
           signal: imgFetchController.signal
-        });
+        }, 195000);
+
         data = await res.json();
       } catch (e) {
         status.textContent = "Image preview canceled / unreachable / timed out.";
@@ -446,12 +484,18 @@
         return;
       } finally {
         imgFetchController = null;
+        // UI -> not busy
+        btn.dataset.busy = "0";
+        btn.textContent = "Generate Visual Compare";
+        btn.disabled = false;
       }
 
       if (!res.ok) {
         const msg = (data && data.error) ? String(data.error) : "";
         if (msg.toLowerCase().includes("ffmpeg not found")) {
           status.textContent = "Image preview needs ffmpeg inside the container. Install ffmpeg in the Dockerfile.";
+        } else if (msg.toLowerCase().includes("timed out")) {
+          status.textContent = "Image preview timed out. Try again, or pick a shorter / easier file.";
         } else {
           status.textContent = "Image preview error:\n" + JSON.stringify(data, null, 2);
         }

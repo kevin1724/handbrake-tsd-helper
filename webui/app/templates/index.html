@@ -116,37 +116,6 @@
   </div>
 
   <div class="section-card">
-    <h2>Preset Settings (saved defaults for Auto mode)</h2>
-    <p class="small">
-      These control which HandBrake <code>.json</code> preset file is used when a job is tagged
-      as 1080p or 4K/2160p. The preset <strong>name</strong> is auto-detected from inside
-      the JSON file; you only have to pick the file.
-      The dropdowns are populated from the <code>{{ preset_dir }}</code> folder.
-    </p>
-
-    <div class="row">
-      <h3 style="margin-bottom:4px;">Default 1080p preset file</h3>
-      <div class="inline-input-group">
-        <label>HB_PRESET_FILE:</label>
-        <select id="preset1080FileSelect"></select>
-      </div>
-    </div>
-
-    <div class="row" style="margin-top:10px;">
-      <h3 style="margin-bottom:4px;">Default 4K / 2160p preset file</h3>
-      <div class="inline-input-group">
-        <label>HB_PRESET_FILE:</label>
-        <select id="preset4kFileSelect"></select>
-      </div>
-    </div>
-
-    <div class="row" style="margin-top:10px;">
-      <button id="savePresetConfigBtn">Save preset settings</button>
-      <span id="presetSaveStatus" class="small"></span>
-    </div>
-  </div>
-
-  <div class="section-card">
     <h2>Job History (persists across restarts, queued)</h2>
     <div class="row" style="display:flex; gap:10px; align-items:center;">
       <button id="pauseQueueBtn">Pause queue</button>
@@ -180,10 +149,7 @@
 <script>
 // Server-side data injected by Flask/Jinja.
 const roots = {{ roots|default([], true)|tojson|safe }};
-const presetFiles = {{ preset_files|default([], true)|tojson|safe }};
-
 console.log('DEBUG roots from server:', roots);
-console.log('DEBUG presetFiles from server:', presetFiles);
 
 let currentPath = null;
 let currentJobId = null;
@@ -837,88 +803,6 @@ function toggleQueuePause() {
     });
 }
 
-function loadPresetConfigUI() {
-  fetch('/preset_config')
-    .then(r => r.json())
-    .then(data => {
-      if (data.error) return;
-      const cfg = data.config || {};
-      const p1080 = cfg["1080"] || {};
-      const p4k = cfg["4k"] || {};
-
-      populatePresetFileSelect('preset1080FileSelect', p1080.file || '');
-      populatePresetFileSelect('preset4kFileSelect', p4k.file || '');
-    })
-    .catch(err => {
-      console.error(err);
-    });
-}
-
-function populatePresetFileSelect(selectId, currentFile) {
-  const select = document.getElementById(selectId);
-  select.innerHTML = '';
-
-  if (!Array.isArray(presetFiles) || presetFiles.length === 0) {
-    const opt = document.createElement('option');
-    opt.value = '';
-    opt.textContent = 'No preset files found';
-    select.appendChild(opt);
-    return;
-  }
-
-  let hasCurrent = false;
-  presetFiles.forEach(path => {
-    const opt = document.createElement('option');
-    opt.value = path;
-    opt.textContent = path.split('/').pop();
-    if (currentFile && path === currentFile) {
-      opt.selected = true;
-      hasCurrent = true;
-    }
-    select.appendChild(opt);
-  });
-
-  if (currentFile && !hasCurrent) {
-    const opt = document.createElement('option');
-    opt.value = currentFile;
-    opt.textContent = currentFile + ' (custom / not found)';
-    opt.selected = true;
-    select.appendChild(opt);
-  }
-}
-
-function savePresetConfigUI() {
-  const body = {
-    "1080": {
-      "file": document.getElementById('preset1080FileSelect').value
-    },
-    "4k": {
-      "file": document.getElementById('preset4kFileSelect').value
-    }
-  };
-
-  fetch('/preset_config', {
-    method: 'POST',
-    headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify(body)
-  })
-    .then(r => r.json())
-    .then(data => {
-      const statusEl = document.getElementById('presetSaveStatus');
-      if (data.error) {
-        statusEl.textContent = 'Failed to save preset settings: ' + data.error;
-        return;
-      }
-      statusEl.textContent = 'Preset settings saved.';
-      setTimeout(() => { statusEl.textContent = ''; }, 4000);
-    })
-    .catch(err => {
-      console.error(err);
-      const statusEl = document.getElementById('presetSaveStatus');
-      statusEl.textContent = 'Failed to save preset settings.';
-      setTimeout(() => { statusEl.textContent = ''; }, 4000);
-    });
-}
 
 // --------------------------
 // DOMContentLoaded init
@@ -950,7 +834,6 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('clearFinishedBtn').onclick = clearFinishedJobs;
   document.getElementById('clearQueuedBtn').onclick = clearQueuedJobs;
   document.getElementById('pauseQueueBtn').onclick = toggleQueuePause;
-  document.getElementById('savePresetConfigBtn').onclick = savePresetConfigUI;
 
   // NEW: bind search
   document.getElementById('searchBtn').onclick = searchMedia;
@@ -960,7 +843,6 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
-  loadPresetConfigUI();
   updateWizardBtn();
   refreshJobs();
   refreshQueueState();
