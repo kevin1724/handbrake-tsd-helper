@@ -189,8 +189,10 @@
     </p>
 
     <div class="btn-row">
-      <button id="genImagesBtn">Generate Visual Compare</button>
-      <span class="small" style="opacity:0.85;">(this runs a short encode + ffmpeg extract)</span>
+      <button id="genFastBtn">Preview (Fast)</button>
+      <span class="small" style="opacity:0.85;">(instant: scale/crop sanity check)</span>
+      <button id="genAccurateBtn" style="margin-left:8px;">Preview (Accurate)</button>
+      <span class="small" style="opacity:0.85;">(6–10s HandBrake encode)</span>
     </div>
 
     <div id="compareWrap" class="compare-wrap" style="display:none;">
@@ -208,7 +210,14 @@
     <div id="imgStatus" class="small img-status"></div>
   </div>
 
-  <script>
+  
+    <div id="accurateVideoWrap" style="display:none; margin-top:14px; max-width:960px;">
+      <h4 style="margin:10px 0 6px 0;">Accurate Preview Clip</h4>
+      <video id="accurateVideo" controls playsinline style="width:100%; border-radius:12px; background:#000;"></video>
+      <div id="accurateVideoHint" class="small" style="opacity:0.85; margin-top:6px;"></div>
+    </div>
+
+<script>
     // -----------------------------
     // Helpers
     // -----------------------------
@@ -432,7 +441,7 @@
     async function refreshPreviewImages() {
       const payload = currentPayload();
       const status = document.getElementById("imgStatus");
-      const btn = document.getElementById("genImagesBtn");
+      const btn = document.getElementById("genFastBtn");
 
       if (!payload.src) {
         status.textContent = "Pick a file first (go back to Jobs).";
@@ -444,7 +453,7 @@
         status.textContent = "Canceling preview…";
         cancelPreviewOnServer();
         btn.dataset.busy = "0";
-        btn.textContent = "Generate Visual Compare";
+        btn.textContent = "Preview (Fast)";
         btn.disabled = false;
         wrap.style.display = "none";
         return;
@@ -470,7 +479,7 @@
       try {
         // IMPORTANT: timeout so it doesn't hang forever
         // (backend uses timeout=90s, so we pick 95s)
-        res = await fetchWithTimeout("/wizard_preview_images", {
+        res = await fetchWithTimeout("/wizard_preview_fast_images", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
@@ -486,7 +495,7 @@
         imgFetchController = null;
         // UI -> not busy
         btn.dataset.busy = "0";
-        btn.textContent = "Generate Visual Compare";
+        btn.textContent = "Preview (Fast)";
         btn.disabled = false;
       }
 
@@ -516,8 +525,105 @@
       wrap.style.display = "";
       applyWipe(0.5);
 
-      status.textContent = `Frame at ~${fmtSeconds(data.when_seconds)} (drag the white bar)`;
+      status.textContent = `Frame at ~${fmtSeconds((data.t_seconds ?? data.when_seconds))} (drag the white bar)`;
     }
+
+    async function refreshAccuratePreview() {
+      const payload = currentPayload();
+      const status = document.getElementById("imgStatus");
+      const btn = document.getElementById("genAccurateBtn");
+      const wrap = document.getElementById("compareWrap");
+      const vwrap = document.getElementById("accurateVideoWrap");
+      const video = document.getElementById("accurateVideo");
+      const vhint = document.getElementById("accurateVideoHint");
+
+      if (!payload.src) {
+        status.textContent = "Pick a file first (go back to Jobs).";
+        return;
+      }
+
+      // If a request is already running, treat click as cancel
+      if (btn.dataset.busy === "1") {
+        status.textContent = "Canceling accurate preview…";
+        cancelPreviewOnServer();
+        btn.dataset.busy = "0";
+        btn.textContent = "Preview (Accurate)";
+        btn.disabled = false;
+        vwrap.style.display = "none";
+        video.removeAttribute("src");
+        video.load();
+        return;
+      }
+
+      // Give this request a preview_id so server-side cancel can find it
+      if (!payload.preview_id) payload.preview_id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
+      // Keep the global previewId in sync so Cancel works
+      previewId = payload.preview_id;
+      try { sessionStorage.setItem(PREVIEW_ID_KEY, previewId); } catch (e) {}
+
+      // UI -> busy
+      btn.dataset.busy = "1";
+      btn.textContent = "Cancel Accurate Preview";
+      btn.disabled = false;
+
+      status.textContent = "Generating accurate preview clip… (HandBrake short encode)";
+      vwrap.style.display = "none";
+      video.removeAttribute("src");
+      video.load();
+
+      // cancel any previous server preview before starting a new one
+      cancelPreviewOnServer();
+
+      imgFetchController = new AbortController();
+
+      let res, data;
+      try {
+        res = await fetchWithTimeout("/wizard_preview_accurate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          signal: imgFetchController.signal
+        }, 195000);
+
+        data = await res.json();
+      } catch (e) {
+        status.textContent = "Accurate preview canceled / unreachable / timed out.";
+        btn.dataset.busy = "0";
+        btn.textContent = "Preview (Accurate)";
+        btn.disabled = false;
+        return;
+      }
+
+      // UI reset
+      btn.dataset.busy = "0";
+      btn.textContent = "Preview (Accurate)";
+      btn.disabled = false;
+
+      if (!res.ok || data.error) {
+        status.textContent = "Accurate preview error: " + (data.error || ("HTTP " + res.status));
+        return;
+      }
+
+      // Update compare images too (so the slider still works)
+      const imgOld = document.getElementById("imgOld");
+      const imgNew = document.getElementById("imgNew");
+      imgOld.src = "data:image/jpeg;base64," + data.old_b64;
+      imgNew.src = "data:image/jpeg;base64," + data.new_b64;
+      wrap.style.display = "block";
+      applyWipe(0.5);
+
+      // Show video clip
+      if (data.clip_url) {
+        video.src = data.clip_url;
+        vwrap.style.display = "block";
+        const secs = data.preview_seconds ? `${data.preview_seconds}s` : "";
+        const ts = data.t_seconds != null ? `@ ~${fmtSeconds(data.t_seconds)}` : "";
+        vhint.textContent = `Clip ${secs} ${ts} using preset “${data.preset || "auto"}”`;
+      }
+
+      status.textContent = `Accurate preview ready (drag the white bar; play the clip below)`;
+    }
+
 
     // -----------------------------
     // Queue
@@ -561,7 +667,8 @@
     });
 
     document.getElementById("queueBtn").onclick = queueWizard;
-    document.getElementById("genImagesBtn").onclick = refreshPreviewImages;
+    document.getElementById("genFastBtn").onclick = refreshPreviewImages;
+    document.getElementById("genAccurateBtn").onclick = refreshAccuratePreview;
 
     // Initial: ONLY text preview
     schedulePreview();

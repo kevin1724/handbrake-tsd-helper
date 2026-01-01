@@ -890,15 +890,19 @@ def register_routes(app):
         killed = _kill_preview_by_id(preview_id)
         return jsonify(ok=True, killed=killed)
 
+
+
     # ------------- UI -------------
 
     @app.route("/")
     def index():
         """Render the main single-page web UI."""
-        # ✅ Presets intentionally NOT loaded/passed here anymore
+        preset_files = list_preset_files()
         return render_template(
             "index.html",
             roots=ROOTS,
+            preset_files=preset_files,
+            preset_dir=PRESET_DIR,
         )
 
     @app.route("/size_wizard")
@@ -910,7 +914,6 @@ def register_routes(app):
     def settings_page():
         """Render the settings page (global app settings)."""
         settings = load_settings()
-        # ✅ Presets live on Settings page now
         preset_files = list_preset_files()
         return render_template(
             "settings.html",
@@ -947,9 +950,8 @@ def register_routes(app):
     @app.route("/api/cpu_profiles", methods=["GET"])
     def cpu_profiles_api():
         """Return CPU profiles for the Settings dropdown / ETA estimation."""
-        prof = list_cpu_profiles()
-        # ✅ Return under both keys so any frontend expectation works
-        return jsonify(profiles=prof, cpu_profiles=prof)
+        return jsonify(profiles=list_cpu_profiles())
+
 
     # ------------- Directory listing -------------
 
@@ -1122,56 +1124,82 @@ def register_routes(app):
             return jsonify(error=str(e)), 500
 
 
-    @app.route("/wizard_preview_images", methods=["POST"])
-    def wizard_preview_images():
-        """
-        Return two still frames as base64 JPEG:
-        - old_b64: extracted from source (OLD)
-        - new_b64: extracted from a tiny wizard-encoded output (NEW)
+    
+    def _ffmpeg_extract_jpg_scaled(src_path: str, t_sec: int, out_jpg: str, w: int, h: int):
+        """Extract a single JPEG frame at integer second t_sec, optionally scaled."""
+        # Use integer seconds to avoid keyframe seek surprises.
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-ss", str(int(t_sec)),
+            "-i", src_path,
+            "-frames:v", "1",
+            "-vf", f"scale={int(w)}:{int(h)}:flags=bicubic",
+            "-q:v", "2",
+            "-y", out_jpg,
+        ]
+        ok, out, err = _run_cmd(cmd)
+        if not ok or not os.path.isfile(out_jpg):
+            raise RuntimeError((err or out or "ffmpeg failed").strip())
 
-        Also supports canceling long-running HandBrake previews via preview_id.
-        """
+
+    def _register_preview_clip(token: str, path: str):
+        # Keep a small in-memory registry so we can serve clips by token.
+        # Clips are cleaned up lazily on new preview requests.
+        now = time.time()
+        PREVIEW_CLIPS[token] = (path, now)
+
+        # Lazy cleanup (keep up to 30 clips or 30 minutes)
+        try:
+            if len(PREVIEW_CLIPS) > 30:
+                # Remove oldest
+                for tok, (p, ts) in sorted(PREVIEW_CLIPS.items(), key=lambda kv: kv[1][1])[:-30]:
+                    PREVIEW_CLIPS.pop(tok, None)
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+            cutoff = now - (30 * 60)
+            for tok, (p, ts) in list(PREVIEW_CLIPS.items()):
+                if ts < cutoff:
+                    PREVIEW_CLIPS.pop(tok, None)
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+
+
+    @app.route("/wizard_preview_clip/<token>", methods=["GET"])
+    def wizard_preview_clip(token):
+        """Serve a previously generated preview MP4 clip."""
+        item = PREVIEW_CLIPS.get(token)
+        if not item:
+            abort(404)
+        path, _ts = item
+        if not os.path.isfile(path):
+            abort(404)
+        return send_file(path, mimetype="video/mp4", as_attachment=False)
+
+
+    @app.route("/wizard_preview_fast_images", methods=["POST"])
+    def wizard_preview_fast_images():
+        """Fast visual compare: OLD frame vs NEW (scaled) frame. No HandBrake."""
         data = request.get_json(force=True) or {}
         src = data.get("src")
-        preset_base = (data.get("preset") or "auto").lower()
-
-        # NEW: preview session id (frontend should generate one per Size Wizard session)
-        preview_id = (data.get("preview_id") or "").strip() or uuid.uuid4().hex
-        pidfile = _preview_pidfile(preview_id)
-
         if not src or not os.path.isfile(src):
             return jsonify(error="invalid src"), 400
         if not is_allowed_path(src):
             return jsonify(error="path not allowed"), 400
 
-        try:
-            size_value = float(data.get("target_size_value") or 5.0)
-        except Exception:
-            return jsonify(error="invalid target_size_value"), 400
-
-        unit = (data.get("target_size_unit") or "GB").upper()
-        if unit not in ("GB", "MB"):
-            return jsonify(error="invalid target_size_unit"), 400
-        if size_value <= 0:
-            return jsonify(error="invalid target_size_value"), 400
-
-        quality = (data.get("quality") or "balanced").lower()
-        if quality not in ("high", "balanced", "small"):
-            return jsonify(error="invalid quality"), 400
-
-        allow_downscale = bool(data.get("allow_downscale", True))
-        force_4k = bool(data.get("force_4k", False))
-
-        # Make sure ffmpeg + ffprobe exist
+        # Make sure ffmpeg exists
         ok_ff, _o, _e = _run_cmd(["ffmpeg", "-version"])
         if not ok_ff:
-            return jsonify(error="ffmpeg not found in container (needed for image previews)"), 500
+            return jsonify(error="ffmpeg not found in container (needed for previews)"), 500
 
-        ok_fp, _o2, _e2 = _run_cmd(["ffprobe", "-version"])
-        if not ok_fp:
-            return jsonify(error="ffprobe not found in container (needed for fast probing)"), 500
-
-        # FAST probe (replaces slow HandBrake --scan)
+        # FAST probe
         try:
             info = _ffprobe_media_fast(src)
         except Exception as e:
@@ -1181,117 +1209,236 @@ def register_routes(app):
         src_w = int(info.get("width") or 0)
         src_h = int(info.get("height") or 0)
         fps = float(info.get("fps") or 0.0) or 24.0
-
         if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
             return jsonify(error="probe incomplete"), 500
 
-        # ✅ MUCH faster timestamp choice:
-        # Use ~60s in (or 10% for short clips), and force INTEGER seconds so HB/ffmpeg match.
+        # Preview timestamp (integer seconds)
+        if duration_sec < 120:
+            t = max(2.0, min(duration_sec * 0.10, duration_sec - 2.0))
+        else:
+            t = min(60.0, duration_sec - 2.0)
+        t_int = int(max(0.0, t))
 
-        #if duration_sec < 120:
-            #t = max(2.0, min(duration_sec * 0.10, duration_sec - 2.0))
-        #else:
-            #t = min(60.0, duration_sec - 2.0)
+        # Wizard options affecting scaling decision
+        quality = (data.get("quality") or "balanced").lower()
+        if quality not in ("high", "balanced", "small"):
+            return jsonify(error="invalid quality"), 400
+        allow_downscale = bool(data.get("allow_downscale", True))
+        force_4k = bool(data.get("force_4k", False))
 
-        #t_int = int(max(0.0, t))  # integer seconds for consistent matching
+        # Target size inputs (same as wizard)
+        size_value = data.get("target_size_value")
+        if size_value in (None, "", 0):
+            size_value = 5
+        size_unit = (data.get("target_size_unit") or "GB").upper()
+        if size_unit not in ("MB", "GB"):
+            return jsonify(error="invalid target_size_unit"), 400
+        try:
+            size_value_f = float(size_value)
+        except Exception:
+            return jsonify(error="invalid target_size_value"), 400
+        if size_value_f <= 0:
+            return jsonify(error="invalid target_size_value"), 400
 
-        t_int = 1
-
-        target_mb = _size_to_mb(size_value, unit)
+        target_mb = size_value_f * (1024.0 if size_unit == "GB" else 1.0)
         target_bytes = target_mb * 1024.0 * 1024.0
         total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
         audio_kbps = _quality_audio_kbps(quality)
         video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
 
-        # Downscale decision
+        # Decide downscale exactly like wizard logic
         out_w, out_h = src_w, src_h
         decision = "keep"
+        if (not force_4k) and allow_downscale and src_h > 1080:
+            bpp_src = _bpp(video_kbps, src_w, src_h, fps)
+            if bpp_src < 0.045:
+                scale = 1080 / float(src_h)
+                cand_w = int((src_w * scale) // 2 * 2)
+                cand_h = int((src_h * scale) // 2 * 2)
+                cand_w = max(2, cand_w)
+                cand_h = max(2, cand_h)
 
-        bpp_src = _bpp(video_kbps, src_w, src_h, fps)
+                bpp_1080 = _bpp(video_kbps, cand_w, cand_h, fps)
+                if bpp_1080 >= bpp_src * 1.6:
+                    out_w, out_h = cand_w, cand_h
+                    decision = "downscale"
 
-        def pick_downscale(w, h):
-            if w <= 0 or h <= 0:
-                return (w, h)
-            target_h = 1080
-            if h <= target_h:
-                return (w, h)
-            scale = target_h / float(h)
-            nw = int((w * scale) // 2 * 2)
-            nh = int((h * scale) // 2 * 2)
-            return (max(2, nw), max(2, nh))
-
-        cand_w, cand_h = pick_downscale(src_w, src_h)
-        bpp_1080 = _bpp(video_kbps, cand_w, cand_h, fps) if (cand_w, cand_h) != (src_w, src_h) else bpp_src
-
-        if (not force_4k) and allow_downscale:
-            if src_h > 1080 and bpp_src < 0.045 and bpp_1080 >= bpp_src * 1.6:
-                out_w, out_h = cand_w, cand_h
-                decision = "downscale"
-
-        # Preset args for base selection (we still return effective_preset for UI,
-        # but we do NOT use preset_args for preview encoding, because that can be AV1 and very slow).
-        try:
-            base_name = os.path.basename(src)
-            effective_preset, preset_args = _hb_preset_args_for_base(preset_base, base_name)
-        except Exception as e:
-            return jsonify(error=f"preset mapping failed: {e}"), 500
-
-        # Temp files
-        tmpdir = tempfile.mkdtemp(prefix="hbwiz_")
+        # Temp outputs
+        tmpdir = tempfile.mkdtemp(prefix="hbwiz_fast_")
         token = uuid.uuid4().hex
-        out_clip = os.path.join(tmpdir, f"wiz_{token}.mp4")
         old_jpg = os.path.join(tmpdir, f"old_{token}.jpg")
         new_jpg = os.path.join(tmpdir, f"new_{token}.jpg")
 
-        # 1) Extract OLD still at t_int
+        try:
+            _ffmpeg_extract_jpg(src, t_int, old_jpg)
+            _ffmpeg_extract_jpg_scaled(src, t_int, new_jpg, out_w, out_h)
+            return jsonify(
+                ok=True,
+                mode="fast",
+                t_seconds=float(t_int),
+                decision=decision,
+                out_w=out_w,
+                out_h=out_h,
+                old_b64=_b64_jpg(old_jpg),
+                new_b64=_b64_jpg(new_jpg),
+            )
+        finally:
+            # Best-effort cleanup
+            try:
+                os.remove(old_jpg)
+                os.remove(new_jpg)
+                os.rmdir(tmpdir)
+            except Exception:
+                pass
+
+
+
+    @app.route("/wizard_preview_accurate", methods=["POST"])
+    def wizard_preview_accurate():
+        """
+        Accurate preview: short HandBrake encode (6–10s) using the real preset import,
+        BUT force a software encoder so it works inside VMs / systems without NVENC/QSV.
+        """
+        data = request.get_json(force=True) or {}
+        src = data.get("src")
+        preset_base = (data.get("preset") or "auto").lower()
+
+        if not src or not os.path.isfile(src):
+            return jsonify(error="invalid src"), 400
+        if not is_allowed_path(src):
+            return jsonify(error="path not allowed"), 400
+        if preset_base not in ("1080", "4k", "auto"):
+            return jsonify(error="invalid preset"), 400
+
+        # Inputs
+        size_value = data.get("target_size_value")
+        if size_value in (None, "", 0):
+            size_value = 5
+        size_unit = (data.get("target_size_unit") or "GB").upper()
+        quality = (data.get("quality") or "balanced").lower()
+        allow_downscale = bool(data.get("allow_downscale", True))
+        force_4k = bool(data.get("force_4k", False))
+
+        if size_unit not in ("MB", "GB"):
+            return jsonify(error="invalid target_size_unit"), 400
+        if quality not in ("high", "balanced", "small"):
+            return jsonify(error="invalid quality"), 400
+        try:
+            size_value_f = float(size_value)
+        except Exception:
+            return jsonify(error="invalid target_size_value"), 400
+        if size_value_f <= 0:
+            return jsonify(error="invalid target_size_value"), 400
+
+        base = os.path.basename(src)
+
+        # Probe (fast)
+        try:
+            info = _ffprobe_media_fast(src)
+        except Exception:
+            info = _probe_media(src)
+
+        duration_sec = float(info.get("duration_sec") or 0.0)
+        src_w = int(info.get("width") or 0)
+        src_h = int(info.get("height") or 0)
+        fps = float(info.get("fps") or 0.0) or 24.0
+        if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
+            return jsonify(error="probe incomplete"), 500
+
+        # Preview timestamp (integer seconds)
+        if duration_sec < 120:
+            t = max(2.0, min(duration_sec * 0.10, duration_sec - 2.0))
+        else:
+            t = min(60.0, duration_sec - 2.0)
+        t_int = int(max(0.0, t))
+
+        # Compute wizard bitrate + scaling (same as encode_wizard)
+        target_mb = size_value_f * (1024.0 if size_unit == "GB" else 1.0)
+        target_bytes = target_mb * 1024.0 * 1024.0
+        total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
+
+        audio_kbps = _quality_audio_kbps(quality)
+        video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
+
+        enc_preset = _preset_from_quality(quality)
+
+        out_w, out_h = src_w, src_h
+        decision = "keep"
+        if (not force_4k) and allow_downscale and src_h > 1080:
+            bpp_src = _bpp(video_kbps, src_w, src_h, fps)
+            if bpp_src < 0.045:
+                scale = 1080 / float(src_h)
+                out_w = int((src_w * scale) // 2 * 2)
+                out_h = int((src_h * scale) // 2 * 2)
+                out_w = max(2, out_w)
+                out_h = max(2, out_h)
+                bpp_1080 = _bpp(video_kbps, out_w, out_h, fps)
+                if bpp_1080 >= bpp_src * 1.6:
+                    decision = "downscale"
+
+        # Build extra args
+        extra_args = [
+            f"-b {int(video_kbps)}",
+            f"--encoder-preset {enc_preset}",
+        ]
+        if decision == "downscale":
+            extra_args.append(f"--width {out_w} --height {out_h}")
+
+        # Temp files
+        tmpdir = tempfile.mkdtemp(prefix="hbwiz_acc_")
+        preview_id = (data.get("preview_id") or uuid.uuid4().hex).strip() or uuid.uuid4().hex
+        token = uuid.uuid4().hex
+        out_clip = os.path.join(tmpdir, f"clip_{token}.mp4")
+        old_jpg = os.path.join(tmpdir, f"old_{token}.jpg")
+        new_jpg = os.path.join(tmpdir, f"new_{token}.jpg")
+
+        # Extract OLD frame at t_int
         try:
             _ffmpeg_extract_jpg(src, t_int, old_jpg)
         except Exception as e:
             return jsonify(error=f"failed extracting source frame: {e}"), 500
 
-        # 2) Encode ONLY ONE FRAME at the SAME integer time
-        #
-        # IMPORTANT CHANGE:
-        # - Do NOT use preset_args here (those may select AV1/SVT/QSV/NVENC etc and are slow to init)
-        # - Use a FAST preview encoder (x264 ultrafast) so visual compare loads quickly
+        # HandBrake short-segment preview (accurate)
+        preview_seconds = int(max(6, min(10, duration_sec - t_int - 1)))
+
+        # Use the user's preset file+name (for filters/crop/etc),
+        # but ALWAYS force software encoder (x265) so this works in VMs everywhere.
+        try:
+            _effective, preset_a = _hb_preset_args_for_base(preset_base, base)
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+
         hb_cmd = [
             "HandBrakeCLI",
             "-i", src,
             "-o", out_clip,
-            "--start-at", f"seconds:{t_int}",
-            "--stop-at", "frames:1",
+            "--start-at", f"duration:{t_int}",
+            "--stop-at", f"duration:{preview_seconds}",
+        ] + preset_a
 
-            # Fast preview-only settings
-            "--encoder", "x264",
-            "--encoder-preset", "ultrafast",
-            "-b", str(int(video_kbps)),
+        if extra_args:
+            hb_cmd += " ".join(extra_args).split()
 
-            # No audio/subs for speed
+        # Force portable software encode (overrides any hw encoder in the preset)
+        hb_cmd += [
+            "--encoder", "x265",
+            "--encoder-preset", enc_preset,
             "-a", "none",
-            "--subtitle", "none",
-
-            # Keep behavior consistent
-            "--crop", "0:0:0:0",
-            "--cfr",
         ]
 
-        # Apply ONLY the downscale decision for the preview
-        if decision == "downscale":
-            hb_cmd += ["--width", str(out_w), "--height", str(out_h)]
-
-        # NEW: kill any previous preview for this preview_id before starting a new one
+        # Kill any previous preview for this preview_id before starting a new one
         _kill_preview_by_id(preview_id)
 
-        # NEW: run HandBrake as its own process group so cancel can kill it + its children
+        pidfile = _preview_pidfile(preview_id)
+
         p = subprocess.Popen(
             hb_cmd,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
-            start_new_session=True,  # <- makes a new process group (PGID = p.pid)
+            start_new_session=True,
         )
 
-        # Save PGID so /wizard_preview_cancel can kill it later
         try:
             with open(pidfile, "w", encoding="utf-8") as f:
                 f.write(str(p.pid))
@@ -1299,44 +1446,67 @@ def register_routes(app):
             pass
 
         try:
-            out, err = p.communicate(timeout=90)  # keep sane; adjust if needed
+            out, err = p.communicate(timeout=180)
             ok = (p.returncode == 0)
         except subprocess.TimeoutExpired:
-            # timed out -> kill it hard and return error
             try:
                 os.killpg(p.pid, signal.SIGTERM)
                 time.sleep(0.25)
                 os.killpg(p.pid, signal.SIGKILL)
             except Exception:
                 pass
-            ok = False
-            out, err = "", "preview encode timed out"
+            ok, out, err = False, "", "HandBrake preview timed out"
         finally:
-            # Cleanup pidfile (if cancel already removed it, ignore)
             try:
                 os.remove(pidfile)
             except Exception:
                 pass
 
-        if not ok or not os.path.isfile(out_clip):
-            snippet = ((err or out) or "").strip().replace("\n", "\\n")[:900]
-            return jsonify(error=f"HandBrake preview encode failed: {snippet}", preview_id=preview_id), 500
+        if not ok or (not os.path.isfile(out_clip)):
+            snippet = ((err or "") + "\n" + (out or "")).strip().replace("\r", "\n")
+            snippet = snippet[:900]
+            return jsonify(error=f"HandBrake accurate preview failed: {snippet}"), 500
 
-        # 3) Extract NEW still from the 1-frame output
+        # Extract NEW frame from the preview clip (same timestamp within the segment)
         try:
-            _ffmpeg_extract_jpg(out_clip, 0.0, new_jpg)
+            # Since clip starts at t_int, sample ~2s into the clip (or mid if very short)
+            within = 2.0 if preview_seconds >= 4 else max(0.5, preview_seconds * 0.5)
+            _ffmpeg_extract_jpg(out_clip, within, new_jpg)
         except Exception as e:
-            return jsonify(error=f"failed extracting encoded frame: {e}", preview_id=preview_id), 500
+            return jsonify(error=f"failed extracting preview frame: {e}"), 500
 
-        return jsonify(
-            ok=True,
-            preview_id=preview_id,
-            when_seconds=float(t_int),
-            preset=effective_preset,  # still shown in UI
-            decision=decision,
-            old_b64=_b64_jpg(old_jpg),
-            new_b64=_b64_jpg(new_jpg),
-        )
+        # Register clip token so the browser can play it
+        try:
+            PREVIEW_CLIPS[token] = out_clip
+        except Exception:
+            pass
+
+        try:
+            return jsonify(
+                ok=True,
+                preview_id=preview_id,
+                t=t_int,
+                seconds=preview_seconds,
+                decision=decision,
+                out_width=out_w,
+                out_height=out_h,
+                bitrate_kbps=int(video_kbps),
+                encoder_preset=enc_preset,
+                clip_url=f"/wizard_preview_clip/{token}",
+                old_b64=_b64_jpg(old_jpg),
+                new_b64=_b64_jpg(new_jpg),
+            )
+        finally:
+            try:
+                os.remove(old_jpg)
+                os.remove(new_jpg)
+                os.rmdir(tmpdir)
+            except Exception:
+                pass
+    @app.route("/wizard_preview_images", methods=["POST"])
+    def wizard_preview_images():
+        return wizard_preview_accurate()
+
 
 
     @app.route("/wizard_preview", methods=["POST"])

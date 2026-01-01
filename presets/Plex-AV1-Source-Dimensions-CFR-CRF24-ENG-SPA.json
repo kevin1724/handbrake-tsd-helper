@@ -1,0 +1,63 @@
+{
+  "PresetList": [
+    {
+      "PresetName": "Plex-AV1-Source-Dimensions-CFR-CRF24",
+      "PresetDescription": "AV1 (SVT-AV1 10-bit), constant frame rate, audio copy, keeps original resolution \u2014 optimized for Plex \u2014 improved quality CRF",
+      "Type": 1,
+      "Default": false,
+      "FileFormat": "av_mkv",
+      "Optimize": false,
+      "ChapterMarkers": true,
+      "MetadataPassthru": true,
+      "AudioCopyMask": [
+        "copy:aac",
+        "copy:ac3",
+        "copy:eac3",
+        "copy:truehd",
+        "copy:dts",
+        "copy:dtshd",
+        "copy:mp2",
+        "copy:mp3",
+        "copy:flac"
+      ],
+      "AudioEncoderFallback": "av_aac",
+      "AudioTrackSelectionBehavior": "all",
+      "AudioLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "AudioList": [
+        {
+          "AudioEncoder": "copy"
+        }
+      ],
+      "VideoEncoder": "svt_av1_10bit",
+      "VideoProfile": "main",
+      "VideoLevel": "auto",
+      "VideoPreset": "6",
+      "VideoTune": "ssim",
+      "VideoQualityType": 2,
+      "VideoQualitySlider": 24,
+      "VideoMultiPass": true,
+      "VideoFramerateMode": "cfr",
+      "VideoFramerate": "auto",
+      "VideoGrayScale": false,
+      "PictureWidth": 0,
+      "PictureHeight": 0,
+      "PictureKeepRatio": true,
+      "PictureUseMaximumSize": false,
+      "PictureAllowUpscaling": false,
+      "SubtitleTrackSelectionBehavior": "selected",
+      "PresetDisabled": false,
+      "SubtitleLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "SubtitleAddCC": false,
+      "SubtitleAddForeignAudioSearch": false
+    }
+  ],
+  "VersionMajor": 59,
+  "VersionMinor": 0,
+  "VersionMicro": 0
+}

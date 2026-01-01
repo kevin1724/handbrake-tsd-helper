@@ -1,0 +1,61 @@
+{
+  "PresetList": [
+    {
+      "PresetName": "Plex-x265-4K-Source-Dimensions-CFR-RF24-ENG-SPA",
+      "PresetDescription": "H.265 (x265) 10-bit 4K preset, VERY SLOW for best compression, keeps source resolution, CFR \u2014 Plex-friendly",
+      "Type": 1,
+      "Default": false,
+      "FileFormat": "av_mkv",
+      "Optimize": false,
+      "ChapterMarkers": true,
+      "MetadataPassthru": true,
+      "AudioCopyMask": [
+        "copy:aac",
+        "copy:ac3",
+        "copy:eac3",
+        "copy:truehd",
+        "copy:dts",
+        "copy:dtshd",
+        "copy:mp2",
+        "copy:mp3",
+        "copy:flac"
+      ],
+      "AudioEncoderFallback": "av_aac",
+      "AudioTrackSelectionBehavior": "all",
+      "AudioLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "AudioList": [
+        {
+          "AudioEncoder": "copy"
+        }
+      ],
+      "VideoEncoder": "x265_10bit",
+      "VideoProfile": "main10",
+      "VideoLevel": "auto",
+      "VideoPreset": "veryslow",
+      "VideoQualityType": 2,
+      "VideoQualitySlider": 24,
+      "VideoFramerateMode": "cfr",
+      "VideoFramerate": "auto",
+      "VideoGrayScale": false,
+      "PictureWidth": 0,
+      "PictureHeight": 0,
+      "PictureKeepRatio": true,
+      "PictureUseMaximumSize": false,
+      "PictureAllowUpscaling": false,
+      "SubtitleTrackSelectionBehavior": "selected",
+      "SubtitleLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "SubtitleAddCC": false,
+      "SubtitleAddForeignAudioSearch": false,
+      "PresetDisabled": false
+    }
+  ],
+  "VersionMajor": 59,
+  "VersionMinor": 0,
+  "VersionMicro": 0
+}
