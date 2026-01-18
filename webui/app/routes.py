@@ -86,6 +86,9 @@ from .cpu_profiles import (
     get_cpu_profile,
 )
 
+from .events import load_events, clear_events
+from .storage_stats import get_summary as get_storage_summary, list_encodes as list_storage_encodes, clear_stats as clear_storage_stats
+
 # -------------------------------------------------------------------
 # Media probing + preview estimation helpers
 # -------------------------------------------------------------------
@@ -951,6 +954,43 @@ def register_routes(app):
     def cpu_profiles_api():
         """Return CPU profiles for the Settings dropdown / ETA estimation."""
         return jsonify(profiles=list_cpu_profiles())
+
+    # ------------- Events (Lidarr-style feed) -------------
+
+    @app.route("/api/events", methods=["GET"])
+    def events_api():
+        """Return newest-first event log entries."""
+        try:
+            limit = int(request.args.get("limit") or 200)
+        except ValueError:
+            limit = 200
+        limit = max(1, min(2000, limit))
+        return jsonify(events=load_events(limit=limit))
+
+    @app.route("/api/events/clear", methods=["POST"])
+    def events_clear_api():
+        clear_events()
+        return jsonify(ok=True)
+
+    # ------------- Storage savings stats -------------
+
+    @app.route("/api/storage_stats/summary", methods=["GET"])
+    def storage_summary_api():
+        return jsonify(summary=get_storage_summary())
+
+    @app.route("/api/storage_stats", methods=["GET"])
+    def storage_list_api():
+        try:
+            limit = int(request.args.get("limit") or 200)
+        except ValueError:
+            limit = 200
+        limit = max(1, min(5000, limit))
+        return jsonify(encodes=list_storage_encodes(limit=limit))
+
+    @app.route("/api/storage_stats/clear", methods=["POST"])
+    def storage_clear_api():
+        clear_storage_stats()
+        return jsonify(ok=True)
 
 
     # ------------- Directory listing -------------

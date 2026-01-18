@@ -36,6 +36,8 @@ from .config import (
 )
 from .presets import resolve_preset_file_and_name
 from .settings import load_settings  # pull in global settings (hb_threads, etc.)
+from .events import log_event
+from .storage_stats import record_encode
 
 # -------------------------------------------------------------------
 # Global in-memory job state
@@ -185,6 +187,11 @@ def save_jobs():
                 "progress": float(j.get("progress") or 0.0),
                 # NEW: persist ETA if present
                 "eta_seconds": j.get("eta_seconds"),
+                # Storage tracking
+                "src_bytes": j.get("src_bytes"),
+                "out_bytes": j.get("out_bytes"),
+                "saved_bytes": j.get("saved_bytes"),
+                "out_path": j.get("out_path"),
             }
 
         state = {
@@ -245,6 +252,11 @@ def load_jobs():
                 "progress": float(j.get("progress") or 0.0),
                 # NEW: restore ETA if it was saved
                 "eta_seconds": j.get("eta_seconds"),
+                # Storage tracking
+                "src_bytes": j.get("src_bytes"),
+                "out_bytes": j.get("out_bytes"),
+                "saved_bytes": j.get("saved_bytes"),
+                "out_path": j.get("out_path"),
             }
 
         # rebuild queue, keeping only jobs that still exist and are queued
@@ -328,9 +340,20 @@ def create_job(src: str, preset: str, extra_args: str = "") -> str:
         "pid": None,
         "progress": 0.0,
         "eta_seconds": None,  # if you already added ETA support
+        # Storage tracking (filled on completion)
+        "src_bytes": None,
+        "out_bytes": None,
+        "saved_bytes": None,
+        "out_path": None,
     }
     job_queue.append(job_id)
     save_jobs()
+    log_event(
+        "job_queued",
+        f"Queued: {os.path.basename(src)} ({preset})",
+        job_id=job_id,
+        src=src,
+    )
     ensure_dispatcher()
     return job_id
 
@@ -377,9 +400,20 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
             "pid": None,
             "progress": 0.0,
             "eta_seconds": None,  # remove if you don't use ETA
+            "src_bytes": None,
+            "out_bytes": None,
+            "saved_bytes": None,
+            "out_path": None,
         }
         job_queue.append(job_id)
         count += 1
+
+        log_event(
+            "job_queued",
+            f"Queued: {os.path.basename(src)} ({preset})",
+            job_id=job_id,
+            src=src,
+        )
 
     if count > 0:
         save_jobs()
@@ -435,6 +469,13 @@ def list_jobs_for_api() -> list[dict]:
                 "progress": float(j.get("progress") or 0.0),
                 "eta_seconds": eta_val,
                 "has_log": has_log,
+                # Storage tracking
+                "src_bytes": j.get("src_bytes"),
+                "out_bytes": j.get("out_bytes"),
+                "saved_bytes": j.get("saved_bytes"),
+                "saved_gb": round((int(j.get("saved_bytes") or 0) / (1024**3)), 3)
+                if j.get("saved_bytes") is not None
+                else None,
             }
         )
 
@@ -463,6 +504,35 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job["status"] = "running"
     job["progress"] = 0.0
     job["eta_seconds"] = None  # reset ETA at the start
+    # Reset storage tracking fields for this run
+    job["src_bytes"] = None
+    job["out_bytes"] = None
+    job["saved_bytes"] = None
+    job["out_path"] = None
+
+    # Capture source size BEFORE the worker deletes the original
+    try:
+        job["src_bytes"] = int(os.path.getsize(src_path))
+    except Exception:
+        job["src_bytes"] = None
+
+    # Predict output path (must match worker/encode-one.sh)
+    try:
+        suffix = (os.environ.get("SUFFIX") or "TSD").strip() or "TSD"
+    except Exception:
+        suffix = "TSD"
+    d = os.path.dirname(src_path)
+    base = os.path.basename(src_path)
+    name, ext = os.path.splitext(base)
+    out_path = os.path.join(d, f"{name}-{suffix}{ext}")
+    job["out_path"] = out_path
+
+    log_event(
+        "job_started",
+        f"Started: {os.path.basename(src_path)} ({preset_key})",
+        job_id=job_id,
+        src=src_path,
+    )
     save_jobs()
 
     # ------------------------------------------------------------
@@ -473,6 +543,8 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     # ------------------------------------------------------------
     env = os.environ.copy()
     env["SRC"] = src_path  # encode-one.sh uses this
+    # keep SUFFIX consistent across the stack
+    env["SUFFIX"] = suffix
 
     # CPU thread setting pulled from global Settings:
     # Settings page stores hb_threads in settings.json.
@@ -562,6 +634,78 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
         job["status"] = "done" if ret == 0 else "error"
         if ret == 0:
             job["progress"] = 100.0
+
+    # Storage tracking + history (only when we have a real output file)
+    if job.get("status") == "done" and ret == 0:
+        try:
+            if out_path and os.path.isfile(out_path):
+                out_bytes = int(os.path.getsize(out_path))
+                job["out_bytes"] = out_bytes
+
+                src_bytes = job.get("src_bytes")
+                try:
+                    src_bytes_i = int(src_bytes) if src_bytes is not None else 0
+                except Exception:
+                    src_bytes_i = 0
+
+                saved_bytes = max(0, src_bytes_i - out_bytes)
+                job["saved_bytes"] = saved_bytes
+
+                # Persist to long-term history
+                record_encode(
+                    job_id=job_id,
+                    src=src_path,
+                    out=out_path,
+                    preset=preset_key,
+                    src_bytes=src_bytes_i,
+                    out_bytes=out_bytes,
+                )
+
+                log_event(
+                    "job_finished",
+                    f"Finished: {os.path.basename(src_path)} – saved {round(saved_bytes/(1024**3), 3)} GB",
+                    job_id=job_id,
+                    src=src_path,
+                    extra={
+                        "saved_bytes": saved_bytes,
+                        "out_path": out_path,
+                    },
+                )
+            else:
+                # Edge case: worker returned 0 but no output file exists.
+                log_event(
+                    "job_finished",
+                    f"Finished: {os.path.basename(src_path)} (no output file found)",
+                    level="warn",
+                    job_id=job_id,
+                    src=src_path,
+                )
+        except Exception as e:
+            log_event(
+                "stats_error",
+                f"Failed to record storage savings: {e}",
+                level="warn",
+                job_id=job_id,
+                src=src_path,
+            )
+
+    if job.get("status") == "error":
+        log_event(
+            "job_error",
+            f"Error: {os.path.basename(src_path)} (exit {ret})",
+            level="error",
+            job_id=job_id,
+            src=src_path,
+        )
+
+    if job.get("status") == "canceled":
+        log_event(
+            "job_canceled",
+            f"Canceled: {os.path.basename(src_path)}",
+            level="warn",
+            job_id=job_id,
+            src=src_path,
+        )
 
     # Once finished (or canceled), ETA no longer makes sense
     job["eta_seconds"] = None
@@ -671,6 +815,11 @@ def set_queue_paused(paused: bool | None = None) -> bool:
         queue_paused = not queue_paused
 
     save_jobs()
+    log_event(
+        "queue_state",
+        "Queue paused" if queue_paused else "Queue resumed",
+        level="info",
+    )
     return queue_paused
 
 
@@ -694,6 +843,8 @@ def cancel_job(job_id: str) -> tuple[bool, str | None]:
     if not job:
         return False, "job not found"
 
+    src = job.get("src")
+
     # Queued but not started -> remove from queue
     if job["status"] == "queued":
         if job_id in job_queue:
@@ -706,6 +857,14 @@ def cancel_job(job_id: str) -> tuple[bool, str | None]:
         job["progress"] = 0.0
         job["eta_seconds"] = None
         save_jobs()
+        _src = job.get("src")
+        log_event(
+            "job_canceled",
+            f"Canceled (queued): {os.path.basename(_src or '')}",
+            level="warn",
+            job_id=job_id,
+            src=_src,
+        )
         return True, None
 
     # If it's running, try to kill the process
@@ -721,6 +880,15 @@ def cancel_job(job_id: str) -> tuple[bool, str | None]:
     job["progress"] = 0.0
     job["eta_seconds"] = None
     save_jobs()
+
+    _src = job.get("src")
+    log_event(
+        "job_canceled",
+        f"Canceled (running): {os.path.basename(_src or '')}",
+        level="warn",
+        job_id=job_id,
+        src=_src,
+    )
 
     return True, None
 
@@ -742,6 +910,8 @@ def remove_queued_job(job_id: str) -> tuple[bool, str | None]:
     if not job:
         return False, "job not found"
 
+    src = job.get("src")
+
     if job.get("status") != "queued":
         return False, "can only remove jobs in 'queued' status"
 
@@ -753,6 +923,14 @@ def remove_queued_job(job_id: str) -> tuple[bool, str | None]:
 
     jobs.pop(job_id, None)
     save_jobs()
+    _src = job.get("src")
+    log_event(
+        "job_removed",
+        f"Removed from queue: {os.path.basename(_src or '')}",
+        level="info",
+        job_id=job_id,
+        src=_src,
+    )
     return True, None
 
 

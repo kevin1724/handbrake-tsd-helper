@@ -105,6 +105,72 @@
   </div>
 
   <!-- ============================================================
+       Events feed (Lidarr-style)
+       ------------------------------------------------------------ -->
+  <div class="section-card">
+    <h2>Events</h2>
+    <p class="small">Recent activity (queue, encodes, errors, etc.).</p>
+
+    <div class="row">
+      <button id="refreshEventsBtn">Refresh</button>
+      <button id="clearEventsBtn" class="danger">Clear</button>
+      <span id="eventsStatus" class="small"></span>
+    </div>
+
+    <div class="row" style="margin-top:10px; overflow-x:auto;">
+      <table class="simple-table" style="width:100%; min-width:720px;">
+        <thead>
+          <tr>
+            <th style="width:170px;">Time</th>
+            <th style="width:80px;">Level</th>
+            <th style="width:150px;">Type</th>
+            <th>Message</th>
+          </tr>
+        </thead>
+        <tbody id="eventsTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       Storage savings history
+       ------------------------------------------------------------ -->
+  <div class="section-card">
+    <h2>Storage Savings</h2>
+    <p class="small">
+      Tracks how much space was saved per encode and over time.
+    </p>
+
+    <div class="row">
+      <strong>Total saved:</strong>
+      <span id="storageTotalSaved" class="small">Loading…</span>
+      <span style="margin-left:16px;"><strong>Encodes tracked:</strong></span>
+      <span id="storageTotalCount" class="small">…</span>
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <button id="refreshStorageBtn">Refresh</button>
+      <button id="clearStorageBtn" class="danger">Clear</button>
+      <span id="storageStatus" class="small"></span>
+    </div>
+
+    <div class="row" style="margin-top:10px; overflow-x:auto;">
+      <table class="simple-table" style="width:100%; min-width:780px;">
+        <thead>
+          <tr>
+            <th style="width:170px;">Time</th>
+            <th>Movie / File</th>
+            <th style="width:110px;">Old (GB)</th>
+            <th style="width:110px;">New (GB)</th>
+            <th style="width:120px;">Saved (GB)</th>
+          </tr>
+        </thead>
+        <tbody id="storageTbody"></tbody>
+      </table>
+    </div>
+  </div>
+
+  <!-- ============================================================
        Page script
        ------------------------------------------------------------ -->
   <script>
@@ -345,6 +411,139 @@
     }
 
     // -------------------------------
+    // Events feed
+    // -------------------------------
+    function fmtTs(ts) {
+      try {
+        const d = new Date((ts || 0) * 1000);
+        return d.toLocaleString();
+      } catch (e) {
+        return "";
+      }
+    }
+
+    function fmtGB(bytes) {
+      if (bytes === null || bytes === undefined) return "";
+      const n = Number(bytes) || 0;
+      return (n / (1024 ** 3)).toFixed(3);
+    }
+
+    async function loadEvents() {
+      const tbody = document.getElementById("eventsTbody");
+      const status = document.getElementById("eventsStatus");
+      if (!tbody) return;
+      try {
+        if (status) status.textContent = "Loading…";
+        const res = await fetch("/api/events?limit=200");
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        const events = Array.isArray(data.events) ? data.events : [];
+
+        tbody.innerHTML = "";
+        if (events.length === 0) {
+          tbody.innerHTML = "<tr><td colspan='4' class='small'>(no events)</td></tr>";
+        } else {
+          events.forEach(ev => {
+            const tr = document.createElement("tr");
+            const level = (ev.level || "").toUpperCase();
+            tr.innerHTML =
+              `<td>${fmtTs(ev.ts)}</td>` +
+              `<td>${level}</td>` +
+              `<td>${ev.type || ""}</td>` +
+              `<td>${ev.message || ""}</td>`;
+            tbody.appendChild(tr);
+          });
+        }
+
+        if (status) {
+          status.textContent = "";
+        }
+      } catch (err) {
+        console.error(err);
+        if (status) status.textContent = "Failed to load events";
+      }
+    }
+
+    async function clearEventsUI() {
+      const status = document.getElementById("eventsStatus");
+      try {
+        if (status) status.textContent = "Clearing…";
+        const res = await fetch("/api/events/clear", { method: "POST" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        await loadEvents();
+        if (status) status.textContent = "Cleared.";
+        setTimeout(() => { if (status) status.textContent = ""; }, 2000);
+      } catch (err) {
+        console.error(err);
+        if (status) status.textContent = "Failed to clear";
+      }
+    }
+
+    // -------------------------------
+    // Storage savings stats
+    // -------------------------------
+    async function loadStorage() {
+      const totalSaved = document.getElementById("storageTotalSaved");
+      const totalCount = document.getElementById("storageTotalCount");
+      const tbody = document.getElementById("storageTbody");
+      const status = document.getElementById("storageStatus");
+      try {
+        if (status) status.textContent = "Loading…";
+
+        const sRes = await fetch("/api/storage_stats/summary");
+        if (!sRes.ok) throw new Error("HTTP " + sRes.status);
+        const sData = await sRes.json();
+        const summary = sData.summary || {};
+        if (totalSaved) totalSaved.textContent = `${summary.saved_gb || 0} GB`;
+        if (totalCount) totalCount.textContent = `${summary.count || 0}`;
+
+        const rRes = await fetch("/api/storage_stats?limit=200");
+        if (!rRes.ok) throw new Error("HTTP " + rRes.status);
+        const rData = await rRes.json();
+        const rows = Array.isArray(rData.encodes) ? rData.encodes : [];
+
+        if (tbody) {
+          tbody.innerHTML = "";
+          if (rows.length === 0) {
+            tbody.innerHTML = "<tr><td colspan='5' class='small'>(no history yet)</td></tr>";
+          } else {
+            rows.forEach(r => {
+              const tr = document.createElement("tr");
+              const file = (r.src || "").split("/").pop();
+              tr.innerHTML =
+                `<td>${fmtTs(r.ts)}</td>` +
+                `<td>${file || r.src || ""}</td>` +
+                `<td>${fmtGB(r.src_bytes)}</td>` +
+                `<td>${fmtGB(r.out_bytes)}</td>` +
+                `<td>${fmtGB(r.saved_bytes)}</td>`;
+              tbody.appendChild(tr);
+            });
+          }
+        }
+
+        if (status) status.textContent = "";
+      } catch (err) {
+        console.error(err);
+        if (status) status.textContent = "Failed to load stats";
+      }
+    }
+
+    async function clearStorageUI() {
+      const status = document.getElementById("storageStatus");
+      try {
+        if (status) status.textContent = "Clearing…";
+        const res = await fetch("/api/storage_stats/clear", { method: "POST" });
+        if (!res.ok) throw new Error("HTTP " + res.status);
+        await loadStorage();
+        if (status) status.textContent = "Cleared.";
+        setTimeout(() => { if (status) status.textContent = ""; }, 2000);
+      } catch (err) {
+        console.error(err);
+        if (status) status.textContent = "Failed to clear";
+      }
+    }
+
+    // -------------------------------
     // DOM ready
     // -------------------------------
     document.addEventListener("DOMContentLoaded", () => {
@@ -353,9 +552,23 @@
       renderPresetFilesList(presetFiles);
       loadPresetConfigUI();
 
+      // Events + Storage
+      loadEvents();
+      loadStorage();
+
       document.getElementById("saveSettingsBtn").onclick = saveSettings;
       document.getElementById("uploadPresetBtn").onclick = uploadPreset;
       document.getElementById("savePresetConfigBtn").onclick = savePresetConfigUI;
+
+      const refreshEventsBtn = document.getElementById("refreshEventsBtn");
+      if (refreshEventsBtn) refreshEventsBtn.onclick = loadEvents;
+      const clearEventsBtn = document.getElementById("clearEventsBtn");
+      if (clearEventsBtn) clearEventsBtn.onclick = clearEventsUI;
+
+      const refreshStorageBtn = document.getElementById("refreshStorageBtn");
+      if (refreshStorageBtn) refreshStorageBtn.onclick = loadStorage;
+      const clearStorageBtn = document.getElementById("clearStorageBtn");
+      if (clearStorageBtn) clearStorageBtn.onclick = clearStorageUI;
     });
   </script>
 </body>
