@@ -1,17 +1,11 @@
-<!-- -------------------------------------------------------------------
-     HTML template (single-page UI)
---------------------------------------------------------------------- -->
-
 <!doctype html>
 <html>
 <head>
   <meta charset="utf-8">
   <title>HandBrake TSD Helper</title>
-  <!-- External CSS file -->
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
 </head>
 <body>
-  <!-- Simple top nav (matches settings.html) -->
   <nav class="top-nav">
     <a href="/" class="nav-link nav-link-active">Jobs</a>
     <a href="/size_wizard" class="nav-link">Size Wizard</a>
@@ -21,7 +15,7 @@
   <h1>HandBrake One-shot Encoder (TSD)</h1>
 
   <div class="section-card">
-    <h2>Browse & Select File</h2>
+    <h2>Browse &amp; Select File</h2>
 
     <div class="row">
       <label for="rootSelect">Root:</label>
@@ -34,7 +28,6 @@
       <span id="currentPath" class="small"></span>
     </div>
 
-    <!-- New: search box for filenames -->
     <div class="row">
       <label for="searchInput">Search filename:</label>
       <input
@@ -58,7 +51,6 @@
       </div>
     </div>
 
-    <!-- New: search results list -->
     <div class="row" id="searchResultsRow" style="display:none;">
       <strong>Search results</strong>
       <ul id="searchResults"></ul>
@@ -127,19 +119,27 @@
     </div>
   </div>
 
-  <div class="section-card">
-    <h2>Job History (persists across restarts, queued)</h2>
-    <div class="row" style="display:flex; gap:10px; align-items:center;">
+  <div class="section-card jobs-history-card">
+    <div class="jobs-toolbar">
+      <div>
+        <h2 style="margin-bottom:6px;">Job History</h2>
+        <div class="jobs-toolbar-subtitle small">Persists across restarts, queued</div>
+      </div>
+
+      <div class="jobs-toolbar-actions">
+        <span id="jobsViewModeLabel" class="jobs-view-mode-label small">Modern view</span>
+        <button id="jobsViewToggleBtn" type="button">Show stats for nerds</button>
+      </div>
+    </div>
+
+    <div class="row jobs-action-bar" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
       <button id="pauseQueueBtn">Pause queue</button>
       <span id="queueStatusLabel" class="small"></span>
-
-      <!-- clear queued jobs button -->
       <button id="clearQueuedBtn">Clear queued jobs</button>
-
       <button id="clearFinishedBtn" style="margin-left:auto;">Clear finished jobs (done/error)</button>
     </div>
 
-    <div class="row" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+    <div class="row jobs-filter-bar" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
       <label for="jobStatusFilter">Filter:</label>
       <select id="jobStatusFilter">
         <option value="all">All jobs</option>
@@ -149,41 +149,87 @@
         <option value="error">Error</option>
         <option value="canceled">Canceled</option>
       </select>
+
       <label for="jobSearchInput">Search:</label>
       <input id="jobSearchInput" type="text" placeholder="filename or job id" style="width:240px;">
     </div>
 
-    <table>
-      <thead>
-        <tr>
-          <th>Job ID</th>
-          <th>File</th>
-          <th>Preset</th>
-          <th>Status</th>
-          <th>Return</th>
-          <th>Progress</th>
-          <th>ETA</th>
-          <th>Runtime</th>
-          <th>Saved</th>
-          <th>Log</th>
-          <th>Actions</th>
-        </tr>
-      </thead>
-      <tbody id="jobsTableBody">
-      </tbody>
-    </table>
+    <div class="jobs-table-wrap">
+      <table class="jobs-table">
+        <thead>
+          <tr>
+            <th>Job ID</th>
+            <th>File</th>
+            <th>Preset</th>
+            <th>Status</th>
+            <th>Return</th>
+            <th>Progress</th>
+            <th>ETA</th>
+            <th>Runtime</th>
+            <th>Saved</th>
+            <th>Log</th>
+            <th>Actions</th>
+          </tr>
+        </thead>
+        <tbody id="jobsTableBody"></tbody>
+      </table>
+    </div>
   </div>
 
 <script>
-// Server-side data injected by Flask/Jinja.
 const roots = {{ roots|default([], true)|tojson|safe }};
 const uiSettings = {{ settings|default({}, true)|tojson|safe }};
-console.log('DEBUG roots from server:', roots);
 
 let currentPath = null;
 let currentJobId = null;
 let statusTimer = null;
-let jobsTimer = null;     // <-- keep this one, remove the duplicate
+let jobsTimer = null;
+
+// --------------------------
+// Jobs page view mode
+// --------------------------
+function getJobsViewMode() {
+  try {
+    const saved = localStorage.getItem('jobsViewMode');
+    return saved === 'nerds' ? 'nerds' : 'modern';
+  } catch (e) {
+    return 'modern';
+  }
+}
+
+function setJobsViewMode(mode) {
+  const normalized = mode === 'nerds' ? 'nerds' : 'modern';
+  try {
+    localStorage.setItem('jobsViewMode', normalized);
+  } catch (e) {}
+  applyJobsViewMode(normalized);
+}
+
+function applyJobsViewMode(mode) {
+  const normalized = mode === 'nerds' ? 'nerds' : 'modern';
+  document.body.classList.remove('jobs-view-modern', 'jobs-view-nerds');
+  document.body.classList.add(normalized === 'nerds' ? 'jobs-view-nerds' : 'jobs-view-modern');
+
+  const btn = document.getElementById('jobsViewToggleBtn');
+  const label = document.getElementById('jobsViewModeLabel');
+
+  if (btn) {
+    btn.textContent = normalized === 'modern'
+      ? 'Show stats for nerds'
+      : 'Show modern view';
+  }
+
+  if (label) {
+    label.textContent = normalized === 'modern'
+      ? 'Modern view'
+      : 'Stats for nerds';
+  }
+}
+
+function toggleJobsViewMode() {
+  const next = getJobsViewMode() === 'modern' ? 'nerds' : 'modern';
+  setJobsViewMode(next);
+}
 
 // --------------------------
 // Size Wizard bridge
@@ -268,10 +314,8 @@ function loadDir(path) {
       currentPath = data.path;
       document.getElementById('currentPath').textContent = data.path;
 
-      // Clear any previous search status/results when changing folder
       clearSearchResults();
 
-      // Folders
       const dirsUl = document.getElementById('dirs');
       dirsUl.innerHTML = '';
       data.dirs.forEach(name => {
@@ -282,13 +326,11 @@ function loadDir(path) {
           if (!base.startsWith('/')) base = '/' + base;
           if (base.endsWith('/')) base = base.slice(0, -1);
           const newPath = base + '/' + name;
-          console.log('Navigating to:', newPath);
           loadDir(newPath);
         };
         dirsUl.appendChild(li);
       });
 
-      // Files
       const filesUl = document.getElementById('files');
       filesUl.innerHTML = '';
       data.files.forEach(name => {
@@ -313,7 +355,7 @@ function loadDir(path) {
 function goUp() {
   const rootPaths = roots.map(r => r[0]);
   if (rootPaths.includes(currentPath)) {
-    return; // already at root
+    return;
   }
   const parts = currentPath.split('/').filter(Boolean);
   parts.pop();
@@ -322,7 +364,7 @@ function goUp() {
 }
 
 // --------------------------
-// NEW: Search helpers
+// Search helpers
 // --------------------------
 function clearSearchResults() {
   const row = document.getElementById('searchResultsRow');
@@ -355,7 +397,6 @@ function renderSearchResults(results) {
   results.forEach(item => {
     const li = document.createElement('li');
 
-    // Tag to show if it's a folder or file
     const tag = document.createElement('span');
     tag.className = 'small';
     tag.textContent = item.type === 'dir' ? '[Folder] ' : '[File] ';
@@ -373,11 +414,9 @@ function renderSearchResults(results) {
 
     li.onclick = () => {
       if (item.type === 'dir') {
-        // For folders: navigate there and clear any selected file
         setSelectedFile('');
         loadDir(item.path);
       } else {
-        // For files: select the file and also load the folder it lives in
         setSelectedFile(item.path);
         if (item.folder) {
           loadDir(item.folder);
@@ -440,7 +479,7 @@ function startEncode() {
       return;
     }
     currentJobId = data.job_id;
-    document.getElementById('statusText').textContent = "Job queued: " + currentJobId;
+    document.getElementById('statusText').textContent = 'Job queued: ' + currentJobId;
     document.getElementById('statusBox').textContent = '';
     const pb = document.getElementById('progressBar');
     pb.style.display = 'block';
@@ -502,8 +541,7 @@ function checkStatus() {
       const pb = document.getElementById('progressBar');
       if (data.progress !== undefined && data.progress !== null) {
         pb.value = data.progress;
-        document.getElementById('progressLabel').textContent =
-          data.progress.toFixed(1) + '%';
+        document.getElementById('progressLabel').textContent = data.progress.toFixed(1) + '%';
       }
 
       if (data.status === 'done' || data.status === 'error' || data.status === 'canceled') {
@@ -519,10 +557,6 @@ function checkStatus() {
     });
 }
 
-// ----------------------------------------------------------
-// Helper: convert seconds → "1h 23m", "5m 10s", "32s", etc.
-// (currently unused, but kept for future ETA work)
-// ----------------------------------------------------------
 function formatEta(seconds) {
   if (!isFinite(seconds) || seconds <= 0) {
     return '';
@@ -534,19 +568,14 @@ function formatEta(seconds) {
   const mins = Math.floor(s / 60);
   const secs = s % 60;
 
-  if (hours > 0) {
-    return `${hours}h ${mins}m`;
-  }
-  if (mins > 0) {
-    return `${mins}m ${secs}s`;
-  }
+  if (hours > 0) return `${hours}h ${mins}m`;
+  if (mins > 0) return `${mins}m ${secs}s`;
   return `${secs}s`;
 }
 
 // --------------------------
 // Jobs table + queue state
 // --------------------------
-
 function formatDateTime(ts) {
   if (!ts) return '';
   const d = new Date(ts * 1000);
@@ -573,6 +602,41 @@ function formatSavedGb(savedGb) {
 function getQueueUiMode() {
   const mode = (uiSettings && uiSettings.queue_ui_mode) ? String(uiSettings.queue_ui_mode).toLowerCase() : 'buttons';
   return mode === 'drag_drop' ? 'drag_drop' : 'buttons';
+}
+
+function truncateJobId(jobId) {
+  if (!jobId) return '';
+  return jobId.length > 12 ? jobId.slice(0, 12) + '…' : jobId;
+}
+
+function createBadge(text, extraClass = '') {
+  const span = document.createElement('span');
+  span.className = `job-badge ${extraClass}`.trim();
+  span.textContent = text;
+  return span;
+}
+
+function createProgressCell(job) {
+  const wrap = document.createElement('div');
+  wrap.className = 'job-progress-wrap';
+
+  const bar = document.createElement('div');
+  bar.className = 'job-progress-bar';
+
+  const fill = document.createElement('div');
+  fill.className = 'job-progress-fill';
+  const pct = Number(job.progress || 0);
+  fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+
+  bar.appendChild(fill);
+
+  const label = document.createElement('div');
+  label.className = 'job-progress-label';
+  label.textContent = job.progress != null ? `${pct.toFixed(1)}%` : '';
+
+  wrap.appendChild(bar);
+  wrap.appendChild(label);
+  return wrap;
 }
 
 function moveQueuedJob(jobId, direction) {
@@ -669,6 +733,7 @@ function refreshJobsSummary() {
     })
     .catch(err => console.error(err));
 }
+
 function refreshJobs() {
   fetch('/jobs')
     .then(r => r.json())
@@ -682,163 +747,174 @@ function refreshJobs() {
       const searchFilter = (document.getElementById('jobSearchInput')?.value || '').trim().toLowerCase();
       const queueUiMode = getQueueUiMode();
 
-      (data.jobs || []).filter(job => {
-        const fileName = (job.src || '').split(/[\/]/).pop().toLowerCase();
-        const id = (job.id || '').toLowerCase();
-        const matchesStatus = statusFilter === 'all' || (job.status || '').toLowerCase() === statusFilter;
-        const matchesSearch = !searchFilter || fileName.includes(searchFilter) || id.includes(searchFilter);
-        return matchesStatus && matchesSearch;
-      }).forEach(job => {
-        const tr = document.createElement('tr');
-        if (job.status === 'queued' && queueUiMode === 'drag_drop') {
-          enableQueueDragAndDrop(tr, job);
-        }
-
-        const tdId = document.createElement('td');
-        tdId.textContent = job.id;
-        tdId.className = 'small';
-        tr.appendChild(tdId);
-
-        const tdSrc = document.createElement('td');
-        const fullSrc = job.src || '';
-        const baseName = fullSrc.split(/[\/]/).pop();
-        tdSrc.innerHTML = '';
-        const nameDiv = document.createElement('div');
-        nameDiv.textContent = baseName || fullSrc;
-        const metaDiv = document.createElement('div');
-        metaDiv.className = 'small';
-        metaDiv.textContent = formatDateTime(job.created_at);
-        tdSrc.appendChild(nameDiv);
-        tdSrc.appendChild(metaDiv);
-        tdSrc.className = 'small';
-        tdSrc.title = fullSrc;
-        tr.appendChild(tdSrc);
-
-        const tdPreset = document.createElement('td');
-        tdPreset.textContent = job.preset;
-        tr.appendChild(tdPreset);
-
-        const tdStatus = document.createElement('td');
-        tdStatus.textContent = job.status;
-        if (job.status === 'done') tdStatus.className = 'job-status-done';
-        else if (job.status === 'error') tdStatus.className = 'job-status-error';
-        else if (job.status === 'running') tdStatus.className = 'job-status-running';
-        else if (job.status === 'canceled') tdStatus.className = 'job-status-canceled';
-        else if (job.status === 'queued') tdStatus.className = 'job-status-queued';
-        tr.appendChild(tdStatus);
-
-        const tdRc = document.createElement('td');
-        tdRc.textContent = job.returncode === null ? '' : job.returncode;
-        tr.appendChild(tdRc);
-
-        const tdProg = document.createElement('td');
-        tdProg.textContent = job.progress != null ? job.progress.toFixed(1) + '%' : '';
-        tr.appendChild(tdProg);
-
-        const tdEta = document.createElement('td');
-        tdEta.textContent = (job.eta_seconds != null && job.status === 'running') ? formatEta(job.eta_seconds) : '';
-        tr.appendChild(tdEta);
-
-        const tdRuntime = document.createElement('td');
-        tdRuntime.textContent = formatDuration(job.duration_seconds);
-        tr.appendChild(tdRuntime);
-
-        const tdSaved = document.createElement('td');
-        tdSaved.textContent = formatSavedGb(job.saved_gb);
-        tr.appendChild(tdSaved);
-
-        const tdLog = document.createElement('td');
-        if (job.has_log) {
-          const a = document.createElement('a');
-          a.href = '/job_log/' + encodeURIComponent(job.id);
-          a.textContent = 'Download';
-          a.target = '_blank';
-          tdLog.appendChild(a);
-        } else {
-          tdLog.textContent = '';
-        }
-        tr.appendChild(tdLog);
-
-        const tdActions = document.createElement('td');
-        if (job.status === 'queued') {
-          const queueMeta = document.createElement('div');
-          queueMeta.className = 'small';
-          queueMeta.textContent = job.queue_position ? `Queue #${job.queue_position}` : '';
-          tdActions.appendChild(queueMeta);
-
-          if (queueUiMode === 'drag_drop') {
-            const dragHint = document.createElement('div');
-            dragHint.className = 'queue-drag-hint';
-            dragHint.textContent = '☰ Drag row';
-            tdActions.appendChild(dragHint);
-          } else {
-            const topBtn = document.createElement('button');
-            topBtn.textContent = 'Top';
-            topBtn.onclick = () => moveQueuedJob(job.id, 'top').catch(err => alert(err.message || 'Failed to reorder job'));
-            tdActions.appendChild(topBtn);
-
-            const upBtn = document.createElement('button');
-            upBtn.textContent = 'Up';
-            upBtn.onclick = () => moveQueuedJob(job.id, 'up').catch(err => alert(err.message || 'Failed to reorder job'));
-            tdActions.appendChild(upBtn);
-
-            const downBtn = document.createElement('button');
-            downBtn.textContent = 'Down';
-            downBtn.onclick = () => moveQueuedJob(job.id, 'down').catch(err => alert(err.message || 'Failed to reorder job'));
-            tdActions.appendChild(downBtn);
-
-            const bottomBtn = document.createElement('button');
-            bottomBtn.textContent = 'Bottom';
-            bottomBtn.onclick = () => moveQueuedJob(job.id, 'bottom').catch(err => alert(err.message || 'Failed to reorder job'));
-            tdActions.appendChild(bottomBtn);
+      (data.jobs || [])
+        .filter(job => {
+          const fileName = (job.src || '').split(/[\/]/).pop().toLowerCase();
+          const id = (job.id || '').toLowerCase();
+          const matchesStatus = statusFilter === 'all' || (job.status || '').toLowerCase() === statusFilter;
+          const matchesSearch = !searchFilter || fileName.includes(searchFilter) || id.includes(searchFilter);
+          return matchesStatus && matchesSearch;
+        })
+        .forEach(job => {
+          const tr = document.createElement('tr');
+          if (job.status === 'queued' && queueUiMode === 'drag_drop') {
+            enableQueueDragAndDrop(tr, job);
           }
 
-          const moveWrap = document.createElement('div');
-          moveWrap.className = 'queue-position-wrap';
-          const posInput = document.createElement('input');
-          posInput.type = 'number';
-          posInput.min = '1';
-          posInput.step = '1';
-          posInput.value = job.queue_position || 1;
-          posInput.className = 'queue-position-input';
-          const goBtn = document.createElement('button');
-          goBtn.textContent = 'Go';
-          goBtn.onclick = () => {
-            const nextPos = Number(posInput.value || 0);
-            moveQueuedJobToPosition(job.id, nextPos).catch(err => alert(err.message || 'Failed to move job'));
-          };
-          moveWrap.appendChild(posInput);
-          moveWrap.appendChild(goBtn);
-          tdActions.appendChild(moveWrap);
+          const tdId = document.createElement('td');
+          tdId.className = 'job-id-cell small';
+          tdId.textContent = truncateJobId(job.id);
+          tdId.title = job.id || '';
+          tr.appendChild(tdId);
 
-          const removeBtn = document.createElement('button');
-          removeBtn.textContent = 'Remove';
-          removeBtn.onclick = () => removeQueuedJob(job.id);
-          tdActions.appendChild(removeBtn);
-        } else {
-          tdActions.textContent = '';
-        }
-        tr.appendChild(tdActions);
+          const tdSrc = document.createElement('td');
+          tdSrc.className = 'job-file-cell';
+          tdSrc.title = job.src || '';
 
-        tbody.appendChild(tr);
-      });
+          const nameDiv = document.createElement('div');
+          nameDiv.className = 'job-file-name';
+          nameDiv.textContent = (job.src || '').split(/[\/]/).pop() || job.src || '';
+
+          const metaDiv = document.createElement('div');
+          metaDiv.className = 'job-file-meta small';
+          metaDiv.textContent = formatDateTime(job.created_at);
+
+          tdSrc.appendChild(nameDiv);
+          tdSrc.appendChild(metaDiv);
+          tr.appendChild(tdSrc);
+
+          const tdPreset = document.createElement('td');
+          tdPreset.appendChild(createBadge(job.preset || '', 'badge-preset'));
+          tr.appendChild(tdPreset);
+
+          const tdStatus = document.createElement('td');
+          const status = String(job.status || '').toLowerCase();
+          let statusClass = 'badge-status-queued';
+          if (status === 'done') statusClass = 'badge-status-done';
+          else if (status === 'error') statusClass = 'badge-status-error';
+          else if (status === 'running') statusClass = 'badge-status-running';
+          else if (status === 'canceled') statusClass = 'badge-status-canceled';
+          tdStatus.appendChild(createBadge(job.status || '', statusClass));
+          tr.appendChild(tdStatus);
+
+          const tdRc = document.createElement('td');
+          tdRc.textContent = job.returncode === null ? '' : job.returncode;
+          tr.appendChild(tdRc);
+
+          const tdProg = document.createElement('td');
+          tdProg.appendChild(createProgressCell(job));
+          tr.appendChild(tdProg);
+
+          const tdEta = document.createElement('td');
+          tdEta.textContent = (job.eta_seconds != null && job.status === 'running') ? formatEta(job.eta_seconds) : '';
+          tr.appendChild(tdEta);
+
+          const tdRuntime = document.createElement('td');
+          tdRuntime.textContent = formatDuration(job.duration_seconds);
+          tr.appendChild(tdRuntime);
+
+          const tdSaved = document.createElement('td');
+          tdSaved.textContent = formatSavedGb(job.saved_gb);
+          tr.appendChild(tdSaved);
+
+          const tdLog = document.createElement('td');
+          if (job.has_log) {
+            const a = document.createElement('a');
+            a.href = '/job_log/' + encodeURIComponent(job.id);
+            a.textContent = 'Download';
+            a.target = '_blank';
+            tdLog.appendChild(a);
+          }
+          tr.appendChild(tdLog);
+
+          const tdActions = document.createElement('td');
+          tdActions.className = 'job-actions-cell';
+
+          if (job.status === 'queued') {
+            const queueMeta = document.createElement('div');
+            queueMeta.className = 'queue-meta small';
+            queueMeta.textContent = job.queue_position ? `Queue #${job.queue_position}` : '';
+            tdActions.appendChild(queueMeta);
+
+            if (queueUiMode === 'drag_drop') {
+              const dragHint = document.createElement('div');
+              dragHint.className = 'queue-drag-hint small';
+              dragHint.textContent = '☰ Drag row';
+              tdActions.appendChild(dragHint);
+            } else {
+              const inline = document.createElement('div');
+              inline.className = 'queue-actions-inline';
+
+              const topBtn = document.createElement('button');
+              topBtn.textContent = 'Top';
+              topBtn.onclick = () => moveQueuedJob(job.id, 'top').catch(err => alert(err.message || 'Failed to reorder job'));
+
+              const upBtn = document.createElement('button');
+              upBtn.textContent = 'Up';
+              upBtn.onclick = () => moveQueuedJob(job.id, 'up').catch(err => alert(err.message || 'Failed to reorder job'));
+
+              const downBtn = document.createElement('button');
+              downBtn.textContent = 'Down';
+              downBtn.onclick = () => moveQueuedJob(job.id, 'down').catch(err => alert(err.message || 'Failed to reorder job'));
+
+              const bottomBtn = document.createElement('button');
+              bottomBtn.textContent = 'Bottom';
+              bottomBtn.onclick = () => moveQueuedJob(job.id, 'bottom').catch(err => alert(err.message || 'Failed to reorder job'));
+
+              inline.appendChild(topBtn);
+              inline.appendChild(upBtn);
+              inline.appendChild(downBtn);
+              inline.appendChild(bottomBtn);
+              tdActions.appendChild(inline);
+            }
+
+            const moveWrap = document.createElement('div');
+            moveWrap.className = 'queue-position-wrap';
+
+            const posInput = document.createElement('input');
+            posInput.type = 'number';
+            posInput.min = '1';
+            posInput.step = '1';
+            posInput.value = job.queue_position || 1;
+            posInput.className = 'queue-position-input';
+
+            const goBtn = document.createElement('button');
+            goBtn.textContent = 'Go';
+            goBtn.onclick = () => {
+              const nextPos = Number(posInput.value || 0);
+              moveQueuedJobToPosition(job.id, nextPos).catch(err => alert(err.message || 'Failed to move job'));
+            };
+
+            moveWrap.appendChild(posInput);
+            moveWrap.appendChild(goBtn);
+            tdActions.appendChild(moveWrap);
+
+            const removeBtn = document.createElement('button');
+            removeBtn.textContent = 'Remove';
+            removeBtn.className = 'danger-outline';
+            removeBtn.onclick = () => removeQueuedJob(job.id);
+            tdActions.appendChild(removeBtn);
+          }
+
+          tr.appendChild(tdActions);
+          tbody.appendChild(tr);
+        });
     })
     .catch(err => {
       console.error(err);
     });
 }
 
-
 function batchRename() {
   if (!currentPath) {
-    alert("No current path selected.");
+    alert('No current path selected.');
     return;
   }
 
   if (!confirm(
-    "This will rename all video files in:\n" +
+    'This will rename all video files in:\n' +
     currentPath +
-    "\n\nFiles will get -TSD added before the extension. Continue?"
+    '\n\nFiles will get -TSD added before the extension. Continue?'
   )) {
     return;
   }
@@ -854,32 +930,31 @@ function batchRename() {
         alert(data.error);
         return;
       }
-      const text = "Renamed " + data.renamed_count +
-        " file(s). Skipped " + data.skipped_count + ".";
+      const text = 'Renamed ' + data.renamed_count + ' file(s). Skipped ' + data.skipped_count + '.';
       document.getElementById('batchRenameResult').textContent = text;
       loadDir(currentPath);
     })
     .catch(err => {
       console.error(err);
-      alert("Batch rename failed");
+      alert('Batch rename failed');
     });
 }
 
 function batchEncode(folderOnly) {
   if (!currentPath) {
-    alert("No current path selected.");
+    alert('No current path selected.');
     return;
   }
 
   const preset = document.getElementById('presetSelect').value;
 
   const msg = folderOnly
-    ? "This will QUEUE encodes for ALL video files directly in:\n" +
+    ? 'This will QUEUE encodes for ALL video files directly in:\n' +
       currentPath +
-      "\n\nPreset: " + preset + "\n\nThey will run one-by-one in order. Continue?"
-    : "This will QUEUE encodes for ALL video files in this folder AND ALL SUBFOLDERS:\n" +
+      '\n\nPreset: ' + preset + '\n\nThey will run one-by-one in order. Continue?'
+    : 'This will QUEUE encodes for ALL video files in this folder AND ALL SUBFOLDERS:\n' +
       currentPath +
-      "\n\nPreset: " + preset + "\n\nThey will run one-by-one in order. Continue?";
+      '\n\nPreset: ' + preset + '\n\nThey will run one-by-one in order. Continue?';
 
   if (!confirm(msg)) {
     return;
@@ -898,12 +973,12 @@ function batchEncode(folderOnly) {
         alert(data.error);
         return;
       }
-      alert("Queued " + data.count + " file(s) for encode.");
+      alert('Queued ' + data.count + ' file(s) for encode.');
       refreshJobs();
     })
     .catch(err => {
       console.error(err);
-      alert("Batch encode failed");
+      alert('Batch encode failed');
     });
 }
 
@@ -912,9 +987,7 @@ function clearFinishedJobs() {
     return;
   }
 
-  fetch('/clear_finished_jobs', {
-    method: 'POST'
-  })
+  fetch('/clear_finished_jobs', { method: 'POST' })
     .then(r => r.json())
     .then(data => {
       if (data.error) {
@@ -934,17 +1007,13 @@ function clearQueuedJobs() {
     return;
   }
 
-  fetch('/clear_queued_jobs', {
-    method: 'POST'
-  })
+  fetch('/clear_queued_jobs', { method: 'POST' })
     .then(r => r.json())
     .then(data => {
       if (data.error) {
         alert(data.error);
         return;
       }
-      // Optionally show how many were removed:
-      // alert("Removed " + (data.removed ?? 0) + " queued job(s).");
       refreshJobs();
     })
     .catch(err => {
@@ -952,7 +1021,6 @@ function clearQueuedJobs() {
       alert('Failed to clear queued jobs');
     });
 }
-
 
 function refreshQueueState() {
   fetch('/queue_state')
@@ -982,7 +1050,7 @@ function toggleQueuePause() {
     body: JSON.stringify({paused: null})
   })
     .then(r => r.json())
-    .then(data => {
+    .then(() => {
       refreshQueueState();
     })
     .catch(err => {
@@ -990,7 +1058,6 @@ function toggleQueuePause() {
       alert('Failed to toggle queue pause');
     });
 }
-
 
 // --------------------------
 // DOMContentLoaded init
@@ -1023,7 +1090,6 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('clearQueuedBtn').onclick = clearQueuedJobs;
   document.getElementById('pauseQueueBtn').onclick = toggleQueuePause;
 
-  // NEW: bind search
   document.getElementById('searchBtn').onclick = searchMedia;
   document.getElementById('searchInput').addEventListener('keypress', (e) => {
     if (e.key === 'Enter') {
@@ -1033,6 +1099,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('jobStatusFilter').addEventListener('change', refreshJobs);
   document.getElementById('jobSearchInput').addEventListener('input', refreshJobs);
+
+  applyJobsViewMode(getJobsViewMode());
+
+  const jobsViewToggleBtn = document.getElementById('jobsViewToggleBtn');
+  if (jobsViewToggleBtn) {
+    jobsViewToggleBtn.onclick = toggleJobsViewMode;
+  }
 
   updateWizardBtn();
   refreshJobs();
@@ -1046,7 +1119,5 @@ document.addEventListener('DOMContentLoaded', () => {
   }, 5000);
 });
 </script>
-
-
 </body>
 </html>
