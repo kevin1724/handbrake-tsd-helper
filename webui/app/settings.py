@@ -25,6 +25,11 @@ DEFAULT_SETTINGS = {
     # Size Wizard / ETA estimation
     "cpu_profile": "i5-9500t",      # baseline CPU
     "cpu_speed_override": 1.0,       # multiplier (1.0 = no adjustment)
+
+    # Queue UI behavior on the Jobs page
+    # buttons = classic button controls
+    # drag_drop = grab rows and reorder visually
+    "queue_ui_mode": "buttons",
 }
 
 _settings_cache: dict | None = None
@@ -108,6 +113,18 @@ def save_settings(new_values: dict) -> dict:
         cpu_speed_override = 1.0
 
     base["cpu_speed_override"] = cpu_speed_override
+
+    # ------------------------------------------------------------------
+    # Queue UI mode
+    # ------------------------------------------------------------------
+    queue_ui_mode = new_values.get("queue_ui_mode", base.get("queue_ui_mode", "buttons"))
+    if isinstance(queue_ui_mode, str):
+        queue_ui_mode = queue_ui_mode.strip().lower()
+    else:
+        queue_ui_mode = "buttons"
+    if queue_ui_mode not in {"buttons", "drag_drop"}:
+        queue_ui_mode = "buttons"
+    base["queue_ui_mode"] = queue_ui_mode
 
     # ------------------------------------------------------------------
     # Persist

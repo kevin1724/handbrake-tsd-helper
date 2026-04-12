@@ -68,6 +68,9 @@ from .jobs import (
     clear_queued_jobs,
     get_queue_state,
     set_queue_paused,
+    move_queued_job_to_position,
+    move_queued_job,
+    get_job_summary,
 )
 
 from .presets import (
@@ -901,11 +904,13 @@ def register_routes(app):
     def index():
         """Render the main single-page web UI."""
         preset_files = list_preset_files()
+        settings = load_settings()
         return render_template(
             "index.html",
             roots=ROOTS,
             preset_files=preset_files,
             preset_dir=PRESET_DIR,
+            settings=settings,
         )
 
     @app.route("/size_wizard")
@@ -1718,6 +1723,11 @@ def register_routes(app):
         items = list_jobs_for_api()
         return jsonify(jobs=items)
 
+    @app.route("/jobs/summary")
+    def jobs_summary():
+        """Return dashboard metrics for the jobs page."""
+        return jsonify(summary=get_job_summary())
+
     # ------------- Job log download -------------
 
     @app.route("/job_log/<job_id>")
@@ -2032,6 +2042,23 @@ def register_routes(app):
         if not ok:
             return jsonify(error=err or "remove failed"), 400
         return jsonify(ok=True, job_id=job_id)
+
+    @app.route("/move/<job_id>", methods=["POST"])
+    def move_job_route(job_id):
+        """Move a queued job up/down/top/bottom or to a specific position in the queue."""
+        data = request.get_json(silent=True) or {}
+
+        if "position" in data and data.get("position") not in (None, ""):
+            ok, err = move_queued_job_to_position(job_id, data.get("position"))
+            if not ok:
+                return jsonify(error=err or "move failed"), 400
+            return jsonify(ok=True, job_id=job_id, position=int(data.get("position")))
+
+        direction = (data.get("direction") or "").strip().lower()
+        ok, err = move_queued_job(job_id, direction)
+        if not ok:
+            return jsonify(error=err or "move failed"), 400
+        return jsonify(ok=True, job_id=job_id, direction=direction)
 
     # ------------- Media search (files + folders, fuzzy-ish) -------------
 

@@ -65,6 +65,10 @@ job_queue: list[str] = []
 queue_paused: bool = False
 dispatcher_started: bool = False
 
+
+def _now_ts() -> float:
+    return float(time.time())
+
 # Regex to parse HandBrakeCLI progress lines:
 # e.g. "Encoding: task 1 of 1, 42.34 % (118.19 fps, avg 118.40 fps, ETA 00h02m34s)"
 PROGRESS_RE = re.compile(
@@ -192,6 +196,10 @@ def save_jobs():
                 "out_bytes": j.get("out_bytes"),
                 "saved_bytes": j.get("saved_bytes"),
                 "out_path": j.get("out_path"),
+                "created_at": j.get("created_at"),
+                "started_at": j.get("started_at"),
+                "finished_at": j.get("finished_at"),
+                "duration_seconds": j.get("duration_seconds"),
             }
 
         state = {
@@ -257,6 +265,10 @@ def load_jobs():
                 "out_bytes": j.get("out_bytes"),
                 "saved_bytes": j.get("saved_bytes"),
                 "out_path": j.get("out_path"),
+                "created_at": j.get("created_at"),
+                "started_at": j.get("started_at"),
+                "finished_at": j.get("finished_at"),
+                "duration_seconds": j.get("duration_seconds"),
             }
 
         # rebuild queue, keeping only jobs that still exist and are queued
@@ -345,6 +357,10 @@ def create_job(src: str, preset: str, extra_args: str = "") -> str:
         "out_bytes": None,
         "saved_bytes": None,
         "out_path": None,
+        "created_at": _now_ts(),
+        "started_at": None,
+        "finished_at": None,
+        "duration_seconds": None,
     }
     job_queue.append(job_id)
     save_jobs()
@@ -404,6 +420,10 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
             "out_bytes": None,
             "saved_bytes": None,
             "out_path": None,
+            "created_at": _now_ts(),
+            "started_at": None,
+            "finished_at": None,
+            "duration_seconds": None,
         }
         job_queue.append(job_id)
         count += 1
@@ -476,11 +496,26 @@ def list_jobs_for_api() -> list[dict]:
                 "saved_gb": round((int(j.get("saved_bytes") or 0) / (1024**3)), 3)
                 if j.get("saved_bytes") is not None
                 else None,
+                "created_at": j.get("created_at"),
+                "started_at": j.get("started_at"),
+                "finished_at": j.get("finished_at"),
+                "duration_seconds": j.get("duration_seconds"),
+                "queue_position": (job_queue.index(jid) + 1) if jid in job_queue and j.get("status") == "queued" else None,
             }
         )
 
-    # Sort newest first (by job id, which is a uuid; you could later swap to timestamp)
-    job_items.sort(key=lambda x: x["id"], reverse=True)
+    def _sort_key(item: dict):
+        status = str(item.get("status") or "").lower()
+        created = float(item.get("created_at") or 0.0)
+        if status == "running":
+            return (0, 0, -created, item["id"])
+        if status == "queued":
+            pos = int(item.get("queue_position") or 999999)
+            return (1, pos, -created, item["id"])
+        return (2, 0, -created, item["id"])
+
+    # Keep the visible queue aligned with the real queue order.
+    job_items.sort(key=_sort_key)
     return job_items
 
 
@@ -503,6 +538,9 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job = jobs[job_id]
     job["status"] = "running"
     job["progress"] = 0.0
+    job["started_at"] = _now_ts()
+    job["finished_at"] = None
+    job["duration_seconds"] = None
     job["eta_seconds"] = None  # reset ETA at the start
     # Reset storage tracking fields for this run
     job["src_bytes"] = None
@@ -709,6 +747,12 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
 
     # Once finished (or canceled), ETA no longer makes sense
     job["eta_seconds"] = None
+    job["finished_at"] = _now_ts()
+    if job.get("started_at") is not None:
+        try:
+            job["duration_seconds"] = max(0.0, float(job["finished_at"]) - float(job["started_at"]))
+        except Exception:
+            job["duration_seconds"] = None
 
     job["pid"] = None
     save_jobs()
@@ -856,6 +900,12 @@ def cancel_job(job_id: str) -> tuple[bool, str | None]:
         job["returncode"] = None
         job["progress"] = 0.0
         job["eta_seconds"] = None
+        job["finished_at"] = _now_ts()
+        if job.get("started_at") is not None:
+            try:
+                job["duration_seconds"] = max(0.0, float(job["finished_at"]) - float(job["started_at"]))
+            except Exception:
+                job["duration_seconds"] = None
         save_jobs()
         _src = job.get("src")
         log_event(
@@ -892,6 +942,132 @@ def cancel_job(job_id: str) -> tuple[bool, str | None]:
 
     return True, None
 
+
+
+
+def move_queued_job(job_id: str, direction: str) -> tuple[bool, str | None]:
+    """Reorder a queued job inside the queue.
+
+    direction: up | down | top | bottom
+    """
+    global job_queue
+
+    if direction not in {"up", "down", "top", "bottom"}:
+        return False, "invalid direction"
+
+    job = jobs.get(job_id)
+    if not job:
+        return False, "job not found"
+    if job.get("status") != "queued":
+        return False, "only queued jobs can be reordered"
+    if job_id not in job_queue:
+        return False, "job is not currently in queue"
+
+    idx = job_queue.index(job_id)
+    new_idx = idx
+    if direction == "up":
+        new_idx = max(0, idx - 1)
+    elif direction == "down":
+        new_idx = min(len(job_queue) - 1, idx + 1)
+    elif direction == "top":
+        new_idx = 0
+    elif direction == "bottom":
+        new_idx = len(job_queue) - 1
+
+    if new_idx == idx:
+        return True, None
+
+    job_queue.pop(idx)
+    job_queue.insert(new_idx, job_id)
+    save_jobs()
+    log_event(
+        "job_reordered",
+        f"Reordered queued job: {os.path.basename(job.get('src') or job_id)} → position {new_idx + 1}",
+        job_id=job_id,
+        src=job.get("src"),
+    )
+    return True, None
+
+
+
+def move_queued_job_to_position(job_id: str, position: int) -> tuple[bool, str | None]:
+    """Move a queued job to an explicit 1-based position in the queue."""
+    global job_queue
+
+    job = jobs.get(job_id)
+    if not job:
+        return False, "job not found"
+    if job.get("status") != "queued":
+        return False, "only queued jobs can be reordered"
+    if job_id not in job_queue:
+        return False, "job is not currently in queue"
+
+    try:
+        target_pos = int(position)
+    except (TypeError, ValueError):
+        return False, "invalid position"
+
+    if target_pos < 1:
+        target_pos = 1
+    if target_pos > len(job_queue):
+        target_pos = len(job_queue)
+
+    idx = job_queue.index(job_id)
+    new_idx = target_pos - 1
+    if new_idx == idx:
+        return True, None
+
+    job_queue.pop(idx)
+    job_queue.insert(new_idx, job_id)
+    save_jobs()
+    log_event(
+        "job_reordered",
+        f"Moved queued job: {os.path.basename(job.get('src') or job_id)} → position {new_idx + 1}",
+        job_id=job_id,
+        src=job.get("src"),
+    )
+    return True, None
+
+
+def get_job_summary() -> dict:
+    """Return lightweight dashboard metrics for the jobs page."""
+    status_counts = {
+        "queued": 0,
+        "running": 0,
+        "done": 0,
+        "error": 0,
+        "canceled": 0,
+    }
+    total_saved_bytes = 0
+    total_runtime_seconds = 0.0
+
+    for job in jobs.values():
+        status = str(job.get("status") or "").lower()
+        if status in status_counts:
+            status_counts[status] += 1
+
+        try:
+            total_saved_bytes += int(job.get("saved_bytes") or 0)
+        except Exception:
+            pass
+
+        try:
+            total_runtime_seconds += float(job.get("duration_seconds") or 0.0)
+        except Exception:
+            pass
+
+    queued_items = [jid for jid in job_queue if jid in jobs and jobs[jid].get("status") == "queued"]
+    running_job_id = next((jid for jid, j in jobs.items() if j.get("status") == "running"), None)
+
+    return {
+        "counts": status_counts,
+        "queue_paused": bool(queue_paused),
+        "queued_count": len(queued_items),
+        "running_job_id": running_job_id,
+        "saved_bytes": total_saved_bytes,
+        "saved_gb": round(total_saved_bytes / (1024**3), 3) if total_saved_bytes else 0.0,
+        "total_runtime_seconds": round(total_runtime_seconds, 1),
+    }
 
 def remove_queued_job(job_id: str) -> tuple[bool, str | None]:
     """

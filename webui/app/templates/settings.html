@@ -95,13 +95,30 @@
   </div>
 
   <!-- ============================================================
-       Future settings placeholder
+       UI settings
        ------------------------------------------------------------ -->
   <div class="section-card">
-    <h2>UI Settings (coming soon)</h2>
+    <h2>UI Settings</h2>
     <p class="small">
-      Theme, layout, and UI preferences will live here later.
+      Control how queued jobs are reordered on the Jobs page.
     </p>
+
+    <div class="row">
+      <label for="queueUiModeSelect"><strong>Queue interaction mode</strong>:</label>
+      <select id="queueUiModeSelect" style="min-width:260px;">
+        <option value="buttons">Buttons (Top / Up / Down / Bottom)</option>
+        <option value="drag_drop">Drag and drop rows</option>
+      </select>
+    </div>
+
+    <div class="row small">
+      Drag and drop makes the queue visually reorder right away. Both modes still support moving a job to a specific queue position.
+    </div>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="saveUiSettingsBtn">Save UI settings</button>
+      <span id="uiSettingsSaveStatus" class="small"></span>
+    </div>
   </div>
 
   <!-- ============================================================
@@ -178,8 +195,7 @@
     const initialSettings = {{ settings|tojson }};
     const initialPresetFiles = {{ preset_files|tojson }};
 
-    // ✅ Keep an up-to-date list of available preset JSON files.
-    // Used for both the preset file list and the Auto-mode default selectors.
+    // Keep an up-to-date list of available preset JSON files.
     let presetFiles = Array.isArray(initialPresetFiles) ? initialPresetFiles.slice() : [];
 
     // -------------------------------
@@ -189,6 +205,11 @@
       const input = document.getElementById("hbThreadsInput");
       const val = parseInt(initialSettings?.hb_threads || 0, 10) || 0;
       input.value = val > 0 ? val : "";
+
+      const queueUiModeSelect = document.getElementById("queueUiModeSelect");
+      if (queueUiModeSelect) {
+        queueUiModeSelect.value = initialSettings?.queue_ui_mode || "buttons";
+      }
     }
 
     async function loadCpuProfiles() {
@@ -228,32 +249,37 @@
       }
     }
 
-    async function saveSettings() {
-      const statusEl = document.getElementById("settingsSaveStatus");
+    async function saveSettings(statusElementId = "settingsSaveStatus") {
+      const statusEl = document.getElementById(statusElementId);
       const threadsRaw = document.getElementById("hbThreadsInput").value.trim();
       const cpuProfile = document.getElementById("cpuProfileSelect").value || "";
+      const queueUiMode = document.getElementById("queueUiModeSelect")?.value || "buttons";
 
       let threads = parseInt(threadsRaw, 10);
       if (isNaN(threads) || threads < 0) threads = 0;
 
       try {
-        statusEl.textContent = "Saving…";
+        if (statusEl) statusEl.textContent = "Saving…";
+
         const res = await fetch("/api/settings", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             hb_threads: threads,
-            cpu_profile: cpuProfile
+            cpu_profile: cpuProfile,
+            queue_ui_mode: queueUiMode
           })
         });
 
         if (!res.ok) throw new Error("HTTP " + res.status);
 
-        statusEl.textContent = "Saved.";
-        setTimeout(() => statusEl.textContent = "", 3000);
+        if (statusEl) {
+          statusEl.textContent = "Saved.";
+          setTimeout(() => { statusEl.textContent = ""; }, 3000);
+        }
       } catch (err) {
         console.error(err);
-        statusEl.textContent = "Error saving settings";
+        if (statusEl) statusEl.textContent = "Error saving settings";
       }
     }
 
@@ -556,7 +582,16 @@
       loadEvents();
       loadStorage();
 
-      document.getElementById("saveSettingsBtn").onclick = saveSettings;
+      const saveSettingsBtn = document.getElementById("saveSettingsBtn");
+      if (saveSettingsBtn) {
+        saveSettingsBtn.onclick = () => saveSettings("settingsSaveStatus");
+      }
+
+      const saveUiSettingsBtn = document.getElementById("saveUiSettingsBtn");
+      if (saveUiSettingsBtn) {
+        saveUiSettingsBtn.onclick = () => saveSettings("uiSettingsSaveStatus");
+      }
+
       document.getElementById("uploadPresetBtn").onclick = uploadPreset;
       document.getElementById("savePresetConfigBtn").onclick = savePresetConfigUI;
 

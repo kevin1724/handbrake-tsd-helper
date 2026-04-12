@@ -294,3 +294,63 @@ a:hover {
   background: #ff0000;
 }
 
+.nav-link {
+  display: inline-block;
+  padding: 8px 12px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-alt);
+}
+
+.nav-link-active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+}
+
+.stat-chip {
+  min-width: 120px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-alt);
+}
+
+.stat-chip div {
+  margin-top: 6px;
+  font-size: 18px;
+  font-weight: 700;
+}
+
+td button {
+  margin: 2px;
+}
+
+.queue-row-draggable {
+  cursor: grab;
+}
+
+.queue-row-draggable.dragging {
+  opacity: 0.45;
+}
+
+.queue-row-draggable.drag-over {
+  outline: 2px dashed var(--accent);
+  outline-offset: -2px;
+}
+
+.queue-drag-hint {
+  font-size: 12px;
+  opacity: 0.9;
+  margin-bottom: 6px;
+}
+
+.queue-position-wrap {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  margin: 4px 0;
+}
+
+.queue-position-input {
+  width: 70px;
+}

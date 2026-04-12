@@ -116,6 +116,18 @@
   </div>
 
   <div class="section-card">
+    <h2>Queue Dashboard</h2>
+    <div class="row" style="display:flex; gap:12px; flex-wrap:wrap;">
+      <div class="stat-chip"><strong>Queued</strong><div id="summaryQueued">0</div></div>
+      <div class="stat-chip"><strong>Running</strong><div id="summaryRunning">0</div></div>
+      <div class="stat-chip"><strong>Completed</strong><div id="summaryDone">0</div></div>
+      <div class="stat-chip"><strong>Errors</strong><div id="summaryError">0</div></div>
+      <div class="stat-chip"><strong>Saved</strong><div id="summarySaved">0 GB</div></div>
+      <div class="stat-chip"><strong>Total runtime</strong><div id="summaryRuntime">0m</div></div>
+    </div>
+  </div>
+
+  <div class="section-card">
     <h2>Job History (persists across restarts, queued)</h2>
     <div class="row" style="display:flex; gap:10px; align-items:center;">
       <button id="pauseQueueBtn">Pause queue</button>
@@ -125,6 +137,20 @@
       <button id="clearQueuedBtn">Clear queued jobs</button>
 
       <button id="clearFinishedBtn" style="margin-left:auto;">Clear finished jobs (done/error)</button>
+    </div>
+
+    <div class="row" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
+      <label for="jobStatusFilter">Filter:</label>
+      <select id="jobStatusFilter">
+        <option value="all">All jobs</option>
+        <option value="queued">Queued</option>
+        <option value="running">Running</option>
+        <option value="done">Done</option>
+        <option value="error">Error</option>
+        <option value="canceled">Canceled</option>
+      </select>
+      <label for="jobSearchInput">Search:</label>
+      <input id="jobSearchInput" type="text" placeholder="filename or job id" style="width:240px;">
     </div>
 
     <table>
@@ -137,6 +163,8 @@
           <th>Return</th>
           <th>Progress</th>
           <th>ETA</th>
+          <th>Runtime</th>
+          <th>Saved</th>
           <th>Log</th>
           <th>Actions</th>
         </tr>
@@ -149,6 +177,7 @@
 <script>
 // Server-side data injected by Flask/Jinja.
 const roots = {{ roots|default([], true)|tojson|safe }};
+const uiSettings = {{ settings|default({}, true)|tojson|safe }};
 console.log('DEBUG roots from server:', roots);
 
 let currentPath = null;
@@ -517,81 +546,207 @@ function formatEta(seconds) {
 // --------------------------
 // Jobs table + queue state
 // --------------------------
+
+function formatDateTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts * 1000);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleString();
+}
+
+function formatDuration(seconds) {
+  if (seconds == null || !Number.isFinite(Number(seconds))) return '';
+  const s = Math.max(0, Math.round(Number(seconds)));
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${sec}s`;
+  return `${sec}s`;
+}
+
+function formatSavedGb(savedGb) {
+  if (savedGb == null || !Number.isFinite(Number(savedGb))) return '';
+  return `${Number(savedGb).toFixed(2)} GB`;
+}
+
+function getQueueUiMode() {
+  const mode = (uiSettings && uiSettings.queue_ui_mode) ? String(uiSettings.queue_ui_mode).toLowerCase() : 'buttons';
+  return mode === 'drag_drop' ? 'drag_drop' : 'buttons';
+}
+
+function moveQueuedJob(jobId, direction) {
+  return fetch('/move/' + encodeURIComponent(jobId), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ direction })
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) throw new Error(data.error);
+      refreshJobs();
+    });
+}
+
+function moveQueuedJobToPosition(jobId, position) {
+  return fetch('/move/' + encodeURIComponent(jobId), {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({ position })
+  })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) throw new Error(data.error);
+      refreshJobs();
+    });
+}
+
+function removeQueuedJob(jobId) {
+  if (!confirm('Remove this queued job?')) return;
+
+  fetch('/remove/' + encodeURIComponent(jobId), { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) {
+        alert(data.error);
+        return;
+      }
+      refreshJobs();
+    })
+    .catch(err => {
+      console.error(err);
+      alert('Failed to remove job');
+    });
+}
+
+function enableQueueDragAndDrop(row, job) {
+  row.draggable = true;
+  row.classList.add('queue-row-draggable');
+  row.dataset.jobId = job.id;
+  row.dataset.queuePosition = String(job.queue_position || '');
+
+  row.addEventListener('dragstart', (e) => {
+    row.classList.add('dragging');
+    e.dataTransfer.effectAllowed = 'move';
+    e.dataTransfer.setData('text/plain', job.id);
+  });
+
+  row.addEventListener('dragend', () => {
+    row.classList.remove('dragging');
+  });
+
+  row.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    row.classList.add('drag-over');
+  });
+
+  row.addEventListener('dragleave', () => {
+    row.classList.remove('drag-over');
+  });
+
+  row.addEventListener('drop', (e) => {
+    e.preventDefault();
+    row.classList.remove('drag-over');
+    const draggedJobId = e.dataTransfer.getData('text/plain');
+    const targetPosition = Number(job.queue_position || 0);
+    if (!draggedJobId || !targetPosition || draggedJobId === job.id) return;
+    moveQueuedJobToPosition(draggedJobId, targetPosition).catch(err => alert(err.message || 'Failed to reorder job'));
+  });
+}
+
+function refreshJobsSummary() {
+  fetch('/jobs/summary')
+    .then(r => r.json())
+    .then(data => {
+      const s = data.summary || {};
+      const counts = s.counts || {};
+      document.getElementById('summaryQueued').textContent = s.queued_count ?? counts.queued ?? 0;
+      document.getElementById('summaryRunning').textContent = counts.running ?? 0;
+      document.getElementById('summaryDone').textContent = counts.done ?? 0;
+      document.getElementById('summaryError').textContent = counts.error ?? 0;
+      document.getElementById('summarySaved').textContent = `${Number(s.saved_gb || 0).toFixed(2)} GB`;
+      document.getElementById('summaryRuntime').textContent = formatDuration(s.total_runtime_seconds || 0);
+    })
+    .catch(err => console.error(err));
+}
 function refreshJobs() {
-  // Fetch the latest list of jobs from the backend
   fetch('/jobs')
     .then(r => r.json())
     .then(data => {
-      // If the backend returned an error, just stop
       if (data.error) return;
 
-      // Grab the <tbody> where we render all job rows
       const tbody = document.getElementById('jobsTableBody');
-      // Clear any old rows before re-rendering
       tbody.innerHTML = '';
 
-      // Loop over each job returned by /jobs
-      data.jobs.forEach(job => {
-        const tr = document.createElement('tr');
+      const statusFilter = (document.getElementById('jobStatusFilter')?.value || 'all').toLowerCase();
+      const searchFilter = (document.getElementById('jobSearchInput')?.value || '').trim().toLowerCase();
+      const queueUiMode = getQueueUiMode();
 
-        // -------- Job ID column --------
+      (data.jobs || []).filter(job => {
+        const fileName = (job.src || '').split(/[\/]/).pop().toLowerCase();
+        const id = (job.id || '').toLowerCase();
+        const matchesStatus = statusFilter === 'all' || (job.status || '').toLowerCase() === statusFilter;
+        const matchesSearch = !searchFilter || fileName.includes(searchFilter) || id.includes(searchFilter);
+        return matchesStatus && matchesSearch;
+      }).forEach(job => {
+        const tr = document.createElement('tr');
+        if (job.status === 'queued' && queueUiMode === 'drag_drop') {
+          enableQueueDragAndDrop(tr, job);
+        }
+
         const tdId = document.createElement('td');
-        tdId.textContent = job.id;     // full UUID
-        tdId.className = "small";      // smaller font so it doesn’t dominate
+        tdId.textContent = job.id;
+        tdId.className = 'small';
         tr.appendChild(tdId);
 
-        // -------- File column (show basename only, full path as tooltip) --------
         const tdSrc = document.createElement('td');
         const fullSrc = job.src || '';
-        const baseName = fullSrc.split(/[\\/]/).pop();
-        tdSrc.textContent = baseName || fullSrc;
-        tdSrc.className = "small";
+        const baseName = fullSrc.split(/[\/]/).pop();
+        tdSrc.innerHTML = '';
+        const nameDiv = document.createElement('div');
+        nameDiv.textContent = baseName || fullSrc;
+        const metaDiv = document.createElement('div');
+        metaDiv.className = 'small';
+        metaDiv.textContent = formatDateTime(job.created_at);
+        tdSrc.appendChild(nameDiv);
+        tdSrc.appendChild(metaDiv);
+        tdSrc.className = 'small';
         tdSrc.title = fullSrc;
         tr.appendChild(tdSrc);
 
-        // -------- Preset column --------
         const tdPreset = document.createElement('td');
         tdPreset.textContent = job.preset;
         tr.appendChild(tdPreset);
 
-        // -------- Status column --------
         const tdStatus = document.createElement('td');
         tdStatus.textContent = job.status;
-
-        if (job.status === 'done') {
-          tdStatus.className = 'job-status-done';
-        } else if (job.status === 'error') {
-          tdStatus.className = 'job-status-error';
-        } else if (job.status === 'running') {
-          tdStatus.className = 'job-status-running';
-        } else if (job.status === 'canceled') {
-          tdStatus.className = 'job-status-canceled';
-        } else if (job.status === 'queued') {
-          tdStatus.className = 'job-status-queued';
-        }
+        if (job.status === 'done') tdStatus.className = 'job-status-done';
+        else if (job.status === 'error') tdStatus.className = 'job-status-error';
+        else if (job.status === 'running') tdStatus.className = 'job-status-running';
+        else if (job.status === 'canceled') tdStatus.className = 'job-status-canceled';
+        else if (job.status === 'queued') tdStatus.className = 'job-status-queued';
         tr.appendChild(tdStatus);
 
-        // -------- Return code column --------
         const tdRc = document.createElement('td');
         tdRc.textContent = job.returncode === null ? '' : job.returncode;
         tr.appendChild(tdRc);
 
-        // -------- Progress column --------
         const tdProg = document.createElement('td');
-        tdProg.textContent =
-          job.progress != null ? job.progress.toFixed(1) + '%' : '';
+        tdProg.textContent = job.progress != null ? job.progress.toFixed(1) + '%' : '';
         tr.appendChild(tdProg);
 
-        // -------- ETA column (uses job.eta_seconds from backend) --------
         const tdEta = document.createElement('td');
-        if (job.eta_seconds != null && job.status === 'running') {
-          tdEta.textContent = formatEta(job.eta_seconds);
-        } else {
-          tdEta.textContent = '';
-        }
+        tdEta.textContent = (job.eta_seconds != null && job.status === 'running') ? formatEta(job.eta_seconds) : '';
         tr.appendChild(tdEta);
 
-        // -------- Log column --------
+        const tdRuntime = document.createElement('td');
+        tdRuntime.textContent = formatDuration(job.duration_seconds);
+        tr.appendChild(tdRuntime);
+
+        const tdSaved = document.createElement('td');
+        tdSaved.textContent = formatSavedGb(job.saved_gb);
+        tr.appendChild(tdSaved);
+
         const tdLog = document.createElement('td');
         if (job.has_log) {
           const a = document.createElement('a');
@@ -604,28 +759,61 @@ function refreshJobs() {
         }
         tr.appendChild(tdLog);
 
-        // -------- Actions column --------
         const tdActions = document.createElement('td');
         if (job.status === 'queued') {
-          const removeBtn = document.createElement('button');
-          removeBtn.textContent = 'Remove from queue';
-          removeBtn.onclick = () => {
-            if (!confirm('Remove this queued job?')) return;
+          const queueMeta = document.createElement('div');
+          queueMeta.className = 'small';
+          queueMeta.textContent = job.queue_position ? `Queue #${job.queue_position}` : '';
+          tdActions.appendChild(queueMeta);
 
-            fetch('/remove/' + encodeURIComponent(job.id), { method: 'POST' })
-              .then(r => r.json())
-              .then(data => {
-                if (data.error) {
-                  alert(data.error);
-                  return;
-                }
-                refreshJobs();
-              })
-              .catch(err => {
-                console.error(err);
-                alert('Failed to remove job');
-              });
+          if (queueUiMode === 'drag_drop') {
+            const dragHint = document.createElement('div');
+            dragHint.className = 'queue-drag-hint';
+            dragHint.textContent = '☰ Drag row';
+            tdActions.appendChild(dragHint);
+          } else {
+            const topBtn = document.createElement('button');
+            topBtn.textContent = 'Top';
+            topBtn.onclick = () => moveQueuedJob(job.id, 'top').catch(err => alert(err.message || 'Failed to reorder job'));
+            tdActions.appendChild(topBtn);
+
+            const upBtn = document.createElement('button');
+            upBtn.textContent = 'Up';
+            upBtn.onclick = () => moveQueuedJob(job.id, 'up').catch(err => alert(err.message || 'Failed to reorder job'));
+            tdActions.appendChild(upBtn);
+
+            const downBtn = document.createElement('button');
+            downBtn.textContent = 'Down';
+            downBtn.onclick = () => moveQueuedJob(job.id, 'down').catch(err => alert(err.message || 'Failed to reorder job'));
+            tdActions.appendChild(downBtn);
+
+            const bottomBtn = document.createElement('button');
+            bottomBtn.textContent = 'Bottom';
+            bottomBtn.onclick = () => moveQueuedJob(job.id, 'bottom').catch(err => alert(err.message || 'Failed to reorder job'));
+            tdActions.appendChild(bottomBtn);
+          }
+
+          const moveWrap = document.createElement('div');
+          moveWrap.className = 'queue-position-wrap';
+          const posInput = document.createElement('input');
+          posInput.type = 'number';
+          posInput.min = '1';
+          posInput.step = '1';
+          posInput.value = job.queue_position || 1;
+          posInput.className = 'queue-position-input';
+          const goBtn = document.createElement('button');
+          goBtn.textContent = 'Go';
+          goBtn.onclick = () => {
+            const nextPos = Number(posInput.value || 0);
+            moveQueuedJobToPosition(job.id, nextPos).catch(err => alert(err.message || 'Failed to move job'));
           };
+          moveWrap.appendChild(posInput);
+          moveWrap.appendChild(goBtn);
+          tdActions.appendChild(moveWrap);
+
+          const removeBtn = document.createElement('button');
+          removeBtn.textContent = 'Remove';
+          removeBtn.onclick = () => removeQueuedJob(job.id);
           tdActions.appendChild(removeBtn);
         } else {
           tdActions.textContent = '';
@@ -843,12 +1031,17 @@ document.addEventListener('DOMContentLoaded', () => {
     }
   });
 
+  document.getElementById('jobStatusFilter').addEventListener('change', refreshJobs);
+  document.getElementById('jobSearchInput').addEventListener('input', refreshJobs);
+
   updateWizardBtn();
   refreshJobs();
+  refreshJobsSummary();
   refreshQueueState();
 
   jobsTimer = setInterval(() => {
     refreshJobs();
+    refreshJobsSummary();
     refreshQueueState();
   }, 5000);
 });
