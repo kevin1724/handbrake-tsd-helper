@@ -55,6 +55,7 @@ from .config import (
     VIDEO_EXTS,
     PRESET_DIR,
     LOG_DIR,
+    DATA_DIR,
 )
 from .jobs import (
     is_allowed_path,
@@ -699,6 +700,386 @@ def _quality_label_from_bpp(bpp):
     return ("risky", "🔴 Risky (likely artifacts)")
 
 
+WIZARD_PRESETS_FILE = os.path.join(DATA_DIR, "wizard_presets.json")
+WIZARD_PRESET_LIMIT = 100
+
+WIZARD_VIDEO_CODECS = {"h265", "h264"}
+WIZARD_ENCODER_FAMILIES = {"software", "qsv"}
+WIZARD_BIT_DEPTHS = {"8", "10"}
+WIZARD_QUALITIES = {"high", "balanced", "small"}
+WIZARD_ENCODER_SPEEDS = {"auto", "fast", "medium", "slow"}
+WIZARD_RESOLUTION_MODES = {"auto", "keep", "2160", "1440", "1080", "720"}
+WIZARD_AUDIO_MODES = {"auto", "aac", "copy"}
+WIZARD_AUDIO_TRACKS = {"first", "all"}
+WIZARD_SUBTITLE_MODES = {"none", "first", "all"}
+WIZARD_FRAMERATE_MODES = {"same", "pfr", "cfr"}
+WIZARD_FRAMERATES = {"23.976", "24", "25", "29.97", "30", "50", "59.94", "60"}
+WIZARD_DEINTERLACE_MODES = {"off", "decomb", "yadif"}
+WIZARD_CROP_MODES = {"auto", "none"}
+
+WIZARD_DEFAULT_OPTIONS = {
+    "preset": "auto",
+    "target_size_value": 5.0,
+    "target_size_unit": "GB",
+    "quality": "balanced",
+    "video_codec": "h265",
+    "encoder_family": "software",
+    "bit_depth": "10",
+    "encoder_speed": "auto",
+    "resolution_mode": "auto",
+    "audio_mode": "auto",
+    "audio_bitrate": "auto",
+    "audio_tracks": "first",
+    "subtitle_mode": "none",
+    "framerate_mode": "same",
+    "framerate": "23.976",
+    "deinterlace": "off",
+    "crop_mode": "auto",
+    "two_pass": False,
+}
+
+
+def _choice(value, allowed: set[str], default: str) -> str:
+    val = str(value or default).strip().lower()
+    return val if val in allowed else default
+
+
+def _truthy(value, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _wizard_encoder_label(encoder_name: str) -> str:
+    labels = {
+        "x264": "H.264 CPU",
+        "x265": "H.265 CPU",
+        "x265_10bit": "H.265 10-bit CPU",
+        "qsv_h264": "H.264 Intel QSV",
+        "qsv_h265": "H.265 Intel QSV",
+        "qsv_h265_10bit": "H.265 10-bit Intel QSV",
+    }
+    return labels.get(encoder_name, encoder_name)
+
+
+def _wizard_encoder_name(options: dict) -> str:
+    codec = options["video_codec"]
+    family = options["encoder_family"]
+    bit_depth = options["bit_depth"]
+
+    if family == "qsv":
+        if codec == "h264":
+            return "qsv_h264"
+        return "qsv_h265_10bit" if bit_depth == "10" else "qsv_h265"
+
+    if codec == "h264":
+        return "x264"
+    return "x265_10bit" if bit_depth == "10" else "x265"
+
+
+def _wizard_encoder_preset(options: dict) -> str:
+    speed = options["encoder_speed"]
+    quality = options["quality"]
+    family = options["encoder_family"]
+
+    if speed == "auto":
+        speed = "slow" if quality == "high" else ("fast" if quality == "small" else "medium")
+
+    if family == "qsv":
+        return {"fast": "speed", "medium": "balanced", "slow": "quality"}.get(speed, "balanced")
+    return {"fast": "fast", "medium": "medium", "slow": "slow"}.get(speed, "medium")
+
+
+def _wizard_audio_kbps(options: dict) -> int:
+    if options["audio_mode"] == "copy":
+        return 256
+    if options["audio_bitrate"] != "auto":
+        try:
+            return max(64, min(640, int(options["audio_bitrate"])))
+        except Exception:
+            pass
+    return _quality_audio_kbps(options["quality"])
+
+
+def _scale_to_height(width: int, height: int, target_height: int) -> tuple[int, int]:
+    if width <= 0 or height <= 0 or target_height <= 0 or height <= target_height:
+        return width, height
+    scale = target_height / float(height)
+    out_w = int((width * scale) // 2 * 2)
+    out_h = int((height * scale) // 2 * 2)
+    return max(2, out_w), max(2, out_h)
+
+
+def _wizard_normalize_options(data: dict) -> dict:
+    data = data or {}
+    options = WIZARD_DEFAULT_OPTIONS.copy()
+
+    preset = _choice(data.get("preset"), {"1080", "4k", "auto"}, options["preset"])
+    unit = str(data.get("target_size_unit") or options["target_size_unit"]).strip().upper()
+    if unit not in {"MB", "GB"}:
+        raise ValueError("invalid target_size_unit")
+
+    try:
+        size_value = float(data.get("target_size_value") or options["target_size_value"])
+    except Exception:
+        raise ValueError("invalid target_size_value")
+    if size_value <= 0:
+        raise ValueError("invalid target_size_value")
+
+    options.update(
+        {
+            "preset": preset,
+            "target_size_value": size_value,
+            "target_size_unit": unit,
+            "quality": _choice(data.get("quality"), WIZARD_QUALITIES, options["quality"]),
+            "video_codec": _choice(data.get("video_codec"), WIZARD_VIDEO_CODECS, options["video_codec"]),
+            "encoder_family": _choice(data.get("encoder_family"), WIZARD_ENCODER_FAMILIES, options["encoder_family"]),
+            "bit_depth": _choice(data.get("bit_depth"), WIZARD_BIT_DEPTHS, options["bit_depth"]),
+            "encoder_speed": _choice(data.get("encoder_speed"), WIZARD_ENCODER_SPEEDS, options["encoder_speed"]),
+            "audio_mode": _choice(data.get("audio_mode"), WIZARD_AUDIO_MODES, options["audio_mode"]),
+            "audio_tracks": _choice(data.get("audio_tracks"), WIZARD_AUDIO_TRACKS, options["audio_tracks"]),
+            "subtitle_mode": _choice(data.get("subtitle_mode"), WIZARD_SUBTITLE_MODES, options["subtitle_mode"]),
+            "framerate_mode": _choice(data.get("framerate_mode"), WIZARD_FRAMERATE_MODES, options["framerate_mode"]),
+            "framerate": _choice(data.get("framerate"), WIZARD_FRAMERATES, options["framerate"]),
+            "deinterlace": _choice(data.get("deinterlace"), WIZARD_DEINTERLACE_MODES, options["deinterlace"]),
+            "crop_mode": _choice(data.get("crop_mode"), WIZARD_CROP_MODES, options["crop_mode"]),
+            "two_pass": _truthy(data.get("two_pass"), options["two_pass"]),
+        }
+    )
+
+    audio_bitrate = str(data.get("audio_bitrate") or options["audio_bitrate"]).strip().lower()
+    if audio_bitrate != "auto":
+        try:
+            audio_bitrate_i = int(audio_bitrate)
+        except Exception:
+            audio_bitrate_i = 192
+        audio_bitrate = str(max(64, min(640, audio_bitrate_i)))
+    options["audio_bitrate"] = audio_bitrate
+
+    resolution_mode = data.get("resolution_mode")
+    if not resolution_mode:
+        force_4k = _truthy(data.get("force_4k"), False)
+        allow_downscale = _truthy(data.get("allow_downscale"), True)
+        resolution_mode = "keep" if force_4k or not allow_downscale else "auto"
+    options["resolution_mode"] = _choice(resolution_mode, WIZARD_RESOLUTION_MODES, options["resolution_mode"])
+
+    return options
+
+
+def _wizard_resolution_decision(options: dict, src_w: int, src_h: int, fps: float, video_kbps: float):
+    mode = options["resolution_mode"]
+    out_w, out_h = src_w, src_h
+    decision = "keep"
+    note = ""
+
+    if mode == "keep":
+        return out_w, out_h, decision, note
+
+    if mode in {"720", "1080", "1440", "2160"}:
+        target_h = int(mode)
+        if src_h > target_h:
+            out_w, out_h = _scale_to_height(src_w, src_h, target_h)
+            decision = f"cap_{target_h}"
+            note = f"Resolution capped at {target_h}p."
+        return out_w, out_h, decision, note
+
+    bpp_src = _bpp(video_kbps, src_w, src_h, fps)
+    cand_w, cand_h = _scale_to_height(src_w, src_h, 1080)
+    bpp_1080 = _bpp(video_kbps, cand_w, cand_h, fps) if (cand_w, cand_h) != (src_w, src_h) else bpp_src
+
+    if src_h > 1080 and bpp_src < 0.045 and bpp_1080 >= bpp_src * 1.6:
+        out_w, out_h = cand_w, cand_h
+        decision = "auto_downscale"
+        note = "Auto downscale selected to protect quality at the requested size."
+
+    return out_w, out_h, decision, note
+
+
+def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h: int, src_w: int, src_h: int, *, preview: bool = False) -> list[str]:
+    args = [
+        "-b",
+        str(int(video_kbps)),
+        "--encoder",
+        _wizard_encoder_name(options),
+        "--encoder-preset",
+        _wizard_encoder_preset(options),
+    ]
+
+    if (out_w, out_h) != (src_w, src_h):
+        args += ["--width", str(int(out_w)), "--height", str(int(out_h))]
+
+    if options["framerate_mode"] in {"pfr", "cfr"}:
+        args += ["-r", options["framerate"], f"--{options['framerate_mode']}"]
+
+    if options["deinterlace"] == "decomb":
+        args.append("--decomb")
+    elif options["deinterlace"] == "yadif":
+        args.append("--deinterlace")
+
+    if options["crop_mode"] == "none":
+        args += ["--crop", "0:0:0:0"]
+
+    if not preview:
+        if options["audio_tracks"] == "all":
+            args.append("--all-audio")
+
+        if options["audio_mode"] == "copy":
+            args += ["-E", "copy"]
+        else:
+            args += ["-E", "av_aac", "-B", str(_wizard_audio_kbps(options))]
+
+        if options["subtitle_mode"] == "first":
+            args += ["--subtitle", "1"]
+        elif options["subtitle_mode"] == "all":
+            args.append("--all-subtitles")
+
+        if options["two_pass"] and options["encoder_family"] == "software":
+            args.append("--two-pass")
+
+    return args
+
+
+def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False, preview: bool = False) -> dict:
+    src = (data.get("src") or "").strip()
+    if not src or not os.path.isfile(src):
+        raise ValueError("invalid src")
+    if not is_allowed_path(src):
+        raise ValueError("path not allowed")
+
+    base = os.path.basename(src)
+    name_only, _ext = os.path.splitext(base)
+    if for_queue and name_only.lower().endswith("-tsd"):
+        raise ValueError("file already tagged -TSD, not queuing")
+
+    options = _wizard_normalize_options(data)
+    effective_preset = options["preset"]
+    if effective_preset == "auto":
+        effective_preset = guess_preset_from_filename(base)
+
+    info = probe_func(src)
+    duration_sec = float(info.get("duration_sec") or 0.0)
+    src_w = int(info.get("width") or 0)
+    src_h = int(info.get("height") or 0)
+    fps = float(info.get("fps") or 0.0) or 24.0
+    if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
+        raise RuntimeError("probe incomplete")
+
+    target_mb = _size_to_mb(options["target_size_value"], options["target_size_unit"])
+    target_bytes = target_mb * 1024.0 * 1024.0
+    total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
+    audio_kbps = _wizard_audio_kbps(options)
+    video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
+    out_w, out_h, decision, note = _wizard_resolution_decision(options, src_w, src_h, fps, video_kbps)
+    bpp_final = _bpp(video_kbps, out_w, out_h, fps)
+    q_code, q_label = _quality_label_from_bpp(bpp_final)
+
+    encoder_preset = _wizard_encoder_preset(options)
+    encoder_name = _wizard_encoder_name(options)
+    extra_args = _wizard_build_extra_args(options, video_kbps, out_w, out_h, src_w, src_h, preview=preview)
+
+    settings = load_settings()
+    cpu = get_cpu_profile(settings.get("cpu_profile"))
+    try:
+        cpu_override_f = float(settings.get("cpu_speed_override", 1.0))
+    except Exception:
+        cpu_override_f = 1.0
+    if cpu_override_f <= 0:
+        cpu_override_f = 1.0
+
+    base_est_fps = _estimate_encode_fps(out_w, out_h, encoder_preset)
+    if options["encoder_family"] == "qsv":
+        base_est_fps *= 3.0
+    est_fps = max(1.0, min(base_est_fps * float(cpu.speed_index) * cpu_override_f, 500.0))
+    eta_sec = (duration_sec * fps) / est_fps if est_fps > 0 else 0.0
+
+    return {
+        "src": src,
+        "preset": effective_preset,
+        "options": options,
+        "probe": info,
+        "extra_args": extra_args,
+        "inputs": {
+            "target_mb": target_mb,
+            **options,
+        },
+        "estimates": {
+            "total_bitrate_kbps": round(total_bitrate_kbps, 1),
+            "audio_bitrate_kbps": audio_kbps,
+            "video_bitrate_kbps": round(video_kbps, 1),
+            "bpp": round(bpp_final, 5),
+            "quality_code": q_code,
+            "quality_label": q_label,
+            "encoder": encoder_name,
+            "encoder_label": _wizard_encoder_label(encoder_name),
+            "encoder_preset": encoder_preset,
+            "eta_seconds": int(round(eta_sec)),
+            "eta_human": f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m" if eta_sec >= 3600 else f"{int(eta_sec//60)}m",
+            "cpu_profile": cpu.id,
+            "cpu_label": cpu.label,
+            "cpu_speed_index": float(cpu.speed_index),
+            "cpu_speed_override": float(cpu_override_f),
+            "est_fps": round(est_fps, 1),
+            "decision": decision,
+            "decision_note": note,
+            "output_resolution": {"width": out_w, "height": out_h},
+        },
+    }
+
+
+def _wizard_public_options(options: dict) -> dict:
+    return _wizard_normalize_options(options)
+
+
+def _load_wizard_presets() -> list[dict]:
+    try:
+        with open(WIZARD_PRESETS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return []
+    except Exception as e:
+        print(f"[WARN] Failed to load wizard_presets.json: {e}", flush=True)
+        return []
+
+    rows = data if isinstance(data, list) else []
+    out = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        try:
+            options = _wizard_public_options(row.get("options") or {})
+        except Exception:
+            options = WIZARD_DEFAULT_OPTIONS.copy()
+        out.append(
+            {
+                "id": str(row.get("id") or uuid.uuid4()),
+                "name": str(row.get("name") or "Wizard preset"),
+                "options": options,
+                "created_at": float(row.get("created_at") or time.time()),
+                "updated_at": float(row.get("updated_at") or row.get("created_at") or time.time()),
+            }
+        )
+    out.sort(key=lambda r: (r["name"].lower(), r["updated_at"]))
+    return out[:WIZARD_PRESET_LIMIT]
+
+
+def _save_wizard_presets(rows: list[dict]) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(WIZARD_PRESETS_FILE, "w", encoding="utf-8") as f:
+        json.dump(rows[:WIZARD_PRESET_LIMIT], f, indent=2)
+
+
+def _clean_wizard_preset_name(name: str) -> str:
+    value = (name or "").strip()
+    value = re.sub(r"\s+", " ", value)
+    if not value:
+        raise ValueError("missing preset name")
+    return value[:80]
+
+
 # -------------------------------------------------------------------
 # Side-by-side preview helpers
 # -------------------------------------------------------------------
@@ -918,6 +1299,62 @@ def register_routes(app):
         """Render the Size Wizard page (prefill via query string)."""
         return render_template("size_wizard.html")
 
+    @app.route("/api/wizard_presets", methods=["GET", "POST"])
+    def wizard_presets_api():
+        """List or save Size Wizard recipes."""
+        if request.method == "GET":
+            return jsonify(presets=_load_wizard_presets())
+
+        data = request.get_json(force=True) or {}
+        try:
+            preset_id = str(data.get("id") or "").strip()
+            name = _clean_wizard_preset_name(data.get("name") or "")
+            options_data = data.get("options") if isinstance(data.get("options"), dict) else data
+            options = _wizard_public_options(options_data)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+
+        rows = _load_wizard_presets()
+        now = time.time()
+        existing = None
+        for row in rows:
+            if preset_id and row.get("id") == preset_id:
+                existing = row
+                break
+            if not preset_id and row.get("name", "").strip().lower() == name.lower():
+                existing = row
+                break
+
+        if existing:
+            existing["name"] = name
+            existing["options"] = options
+            existing["updated_at"] = now
+            saved = existing
+        else:
+            saved = {
+                "id": uuid.uuid4().hex,
+                "name": name,
+                "options": options,
+                "created_at": now,
+                "updated_at": now,
+            }
+            rows.append(saved)
+
+        rows.sort(key=lambda r: float(r.get("updated_at") or 0), reverse=True)
+        _save_wizard_presets(rows)
+        return jsonify(ok=True, preset=saved, presets=_load_wizard_presets())
+
+    @app.route("/api/wizard_presets/<preset_id>", methods=["DELETE"])
+    def wizard_preset_delete_api(preset_id):
+        """Delete a saved Size Wizard recipe."""
+        preset_id = (preset_id or "").strip()
+        rows = _load_wizard_presets()
+        kept = [row for row in rows if row.get("id") != preset_id]
+        if len(kept) == len(rows):
+            return jsonify(error="wizard preset not found"), 404
+        _save_wizard_presets(kept)
+        return jsonify(ok=True, presets=_load_wizard_presets())
+
     @app.route("/settings")
     def settings_page():
         """Render the settings page (global app settings)."""
@@ -1058,99 +1495,23 @@ def register_routes(app):
 
     @app.route("/encode_wizard", methods=["POST"])
     def encode_wizard():
-        """Queue an encode with target size + simple quality tweaks."""
+        """Queue an encode with Size Wizard options."""
         data = request.get_json(force=True)
 
-        src = data.get("src")
-        preset = data.get("preset") or "auto"
-        size_value = data.get("target_size_value")
-        if size_value in (None, "", 0):
-            size_value = 5
-        size_unit = (data.get("target_size_unit") or "GB").upper()
-        quality = data.get("quality") or "balanced"
-        allow_downscale = bool(data.get("allow_downscale", True))
-        force_4k = bool(data.get("force_4k", False))
-
-        if not src or not os.path.isfile(src):
-            return jsonify(error="invalid src"), 400
-        if not is_allowed_path(src):
-            return jsonify(error="path not allowed"), 400
-        if preset not in ("1080", "4k", "auto"):
-            return jsonify(error="invalid preset"), 400
-        if size_unit not in ("MB", "GB"):
-            return jsonify(error="invalid target_size_unit"), 400
-        if quality not in ("high", "balanced", "small"):
-            return jsonify(error="invalid quality"), 400
         try:
-            size_value_f = float(size_value)
-        except Exception:
-            return jsonify(error="invalid target_size_value"), 400
-        if size_value_f <= 0:
-            return jsonify(error="invalid target_size_value"), 400
+            plan = _wizard_plan(data, probe_func=_probe_media, for_queue=True, preview=False)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        except Exception as e:
+            return jsonify(error=str(e)), 500
 
-        base = os.path.basename(src)
-        name_only, _ext = os.path.splitext(base)
-        if name_only.lower().endswith("-tsd"):
-            return jsonify(error="file already tagged -TSD, not queuing"), 400
-
-        if preset == "auto":
-            preset = guess_preset_from_filename(base)
-
-        # target MB
-        target_mb = size_value_f * (1024.0 if size_unit == "GB" else 1.0)
-
-        # probe duration to convert size -> bitrate
-        info = _probe_media(src)
-        duration_sec = float(info.get("duration_sec") or 0.0)
-        if duration_sec <= 0:
-            return jsonify(error="probe failed (duration)"), 500
-
-        target_bytes = target_mb * 1024.0 * 1024.0
-        total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
-
-        audio_kbps = _quality_audio_kbps(quality)
-        video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
-
-        enc_preset = _preset_from_quality(quality)
-
-        # HandBrakeCLI flags (baseline preset still applies via your preset import)
-        extra_args = [
-            f"-b {int(video_kbps)}",
-            f"--encoder-preset {enc_preset}",
-        ]
-
-
-        # Optional downscale logic (same heuristic as wizard_preview)
-        try:
-            info = _probe_media(src)
-            duration_sec = float(info.get("duration_sec") or 0.0)
-            src_w = int(info.get("width") or 0)
-            src_h = int(info.get("height") or 0)
-            fps = float(info.get("fps") or 0.0) or 24.0
-
-            if duration_sec > 0 and src_w > 0 and src_h > 0 and (not force_4k) and allow_downscale:
-                target_bytes = target_mb * 1024.0 * 1024.0
-                total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
-                audio_kbps = _quality_audio_kbps(quality)
-                video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
-
-                bpp_src = _bpp(video_kbps, src_w, src_h, fps)
-
-                if src_h > 1080 and bpp_src < 0.045:
-                    scale = 1080 / float(src_h)
-                    out_w = int((src_w * scale) // 2 * 2)
-                    out_h = int((src_h * scale) // 2 * 2)
-                    out_w = max(2, out_w)
-                    out_h = max(2, out_h)
-
-                    bpp_1080 = _bpp(video_kbps, out_w, out_h, fps)
-                    if bpp_1080 >= bpp_src * 1.6:
-                        extra_args.append(f"--width {out_w} --height {out_h}")
-        except Exception:
-            pass
-
-        job_id = create_job(src, preset, extra_args=" ".join(extra_args))
-        return jsonify(job_id=job_id, preset=preset, extra_args=extra_args)
+        job_id = create_job(plan["src"], plan["preset"], extra_args=" ".join(plan["extra_args"]))
+        return jsonify(
+            job_id=job_id,
+            preset=plan["preset"],
+            extra_args=plan["extra_args"],
+            estimates=plan["estimates"],
+        )
 
     # ------------- Wizard preview helpers -------------
 
@@ -1189,6 +1550,19 @@ def register_routes(app):
             raise RuntimeError((err or out or "ffmpeg failed").strip())
 
 
+    def _remove_preview_clip(path: str):
+        try:
+            os.remove(path)
+        except Exception:
+            pass
+        try:
+            parent = os.path.dirname(path)
+            if os.path.basename(parent).startswith("hbwiz_"):
+                os.rmdir(parent)
+        except Exception:
+            pass
+
+
     def _register_preview_clip(token: str, path: str):
         # Keep a small in-memory registry so we can serve clips by token.
         # Clips are cleaned up lazily on new preview requests.
@@ -1201,18 +1575,12 @@ def register_routes(app):
                 # Remove oldest
                 for tok, (p, ts) in sorted(PREVIEW_CLIPS.items(), key=lambda kv: kv[1][1])[:-30]:
                     PREVIEW_CLIPS.pop(tok, None)
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
+                    _remove_preview_clip(p)
             cutoff = now - (30 * 60)
             for tok, (p, ts) in list(PREVIEW_CLIPS.items()):
                 if ts < cutoff:
                     PREVIEW_CLIPS.pop(tok, None)
-                    try:
-                        os.remove(p)
-                    except Exception:
-                        pass
+                    _remove_preview_clip(p)
         except Exception:
             pass
 
@@ -1244,18 +1612,15 @@ def register_routes(app):
         if not ok_ff:
             return jsonify(error="ffmpeg not found in container (needed for previews)"), 500
 
-        # FAST probe
         try:
-            info = _ffprobe_media_fast(src)
+            plan = _wizard_plan(data, probe_func=_ffprobe_media_fast, preview=True)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
         except Exception as e:
             return jsonify(error=str(e)), 500
 
+        info = plan["probe"]
         duration_sec = float(info.get("duration_sec") or 0.0)
-        src_w = int(info.get("width") or 0)
-        src_h = int(info.get("height") or 0)
-        fps = float(info.get("fps") or 0.0) or 24.0
-        if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
-            return jsonify(error="probe incomplete"), 500
 
         # Preview timestamp (integer seconds)
         if duration_sec < 120:
@@ -1264,49 +1629,10 @@ def register_routes(app):
             t = min(60.0, duration_sec - 2.0)
         t_int = int(max(0.0, t))
 
-        # Wizard options affecting scaling decision
-        quality = (data.get("quality") or "balanced").lower()
-        if quality not in ("high", "balanced", "small"):
-            return jsonify(error="invalid quality"), 400
-        allow_downscale = bool(data.get("allow_downscale", True))
-        force_4k = bool(data.get("force_4k", False))
-
-        # Target size inputs (same as wizard)
-        size_value = data.get("target_size_value")
-        if size_value in (None, "", 0):
-            size_value = 5
-        size_unit = (data.get("target_size_unit") or "GB").upper()
-        if size_unit not in ("MB", "GB"):
-            return jsonify(error="invalid target_size_unit"), 400
-        try:
-            size_value_f = float(size_value)
-        except Exception:
-            return jsonify(error="invalid target_size_value"), 400
-        if size_value_f <= 0:
-            return jsonify(error="invalid target_size_value"), 400
-
-        target_mb = size_value_f * (1024.0 if size_unit == "GB" else 1.0)
-        target_bytes = target_mb * 1024.0 * 1024.0
-        total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
-        audio_kbps = _quality_audio_kbps(quality)
-        video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
-
-        # Decide downscale exactly like wizard logic
-        out_w, out_h = src_w, src_h
-        decision = "keep"
-        if (not force_4k) and allow_downscale and src_h > 1080:
-            bpp_src = _bpp(video_kbps, src_w, src_h, fps)
-            if bpp_src < 0.045:
-                scale = 1080 / float(src_h)
-                cand_w = int((src_w * scale) // 2 * 2)
-                cand_h = int((src_h * scale) // 2 * 2)
-                cand_w = max(2, cand_w)
-                cand_h = max(2, cand_h)
-
-                bpp_1080 = _bpp(video_kbps, cand_w, cand_h, fps)
-                if bpp_1080 >= bpp_src * 1.6:
-                    out_w, out_h = cand_w, cand_h
-                    decision = "downscale"
+        out_res = plan["estimates"]["output_resolution"]
+        out_w = int(out_res.get("width") or 0)
+        out_h = int(out_res.get("height") or 0)
+        decision = plan["estimates"].get("decision") or "keep"
 
         # Temp outputs
         tmpdir = tempfile.mkdtemp(prefix="hbwiz_fast_")
@@ -1341,54 +1667,29 @@ def register_routes(app):
     @app.route("/wizard_preview_accurate", methods=["POST"])
     def wizard_preview_accurate():
         """
-        Accurate preview: short HandBrake encode (6–10s) using the real preset import,
-        BUT force a software encoder so it works inside VMs / systems without NVENC/QSV.
+        Accurate preview: short HandBrake encode using the same wizard plan as queueing.
         """
         data = request.get_json(force=True) or {}
-        src = data.get("src")
-        preset_base = (data.get("preset") or "auto").lower()
 
-        if not src or not os.path.isfile(src):
-            return jsonify(error="invalid src"), 400
-        if not is_allowed_path(src):
-            return jsonify(error="path not allowed"), 400
-        if preset_base not in ("1080", "4k", "auto"):
-            return jsonify(error="invalid preset"), 400
-
-        # Inputs
-        size_value = data.get("target_size_value")
-        if size_value in (None, "", 0):
-            size_value = 5
-        size_unit = (data.get("target_size_unit") or "GB").upper()
-        quality = (data.get("quality") or "balanced").lower()
-        allow_downscale = bool(data.get("allow_downscale", True))
-        force_4k = bool(data.get("force_4k", False))
-
-        if size_unit not in ("MB", "GB"):
-            return jsonify(error="invalid target_size_unit"), 400
-        if quality not in ("high", "balanced", "small"):
-            return jsonify(error="invalid quality"), 400
         try:
-            size_value_f = float(size_value)
-        except Exception:
-            return jsonify(error="invalid target_size_value"), 400
-        if size_value_f <= 0:
-            return jsonify(error="invalid target_size_value"), 400
+            plan = _wizard_plan(data, probe_func=_ffprobe_media_fast, preview=True)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        except Exception as e:
+            return jsonify(error=str(e)), 500
 
+        src = plan["src"]
         base = os.path.basename(src)
-
-        # Probe (fast)
-        try:
-            info = _ffprobe_media_fast(src)
-        except Exception:
-            info = _probe_media(src)
-
+        info = plan["probe"]
         duration_sec = float(info.get("duration_sec") or 0.0)
-        src_w = int(info.get("width") or 0)
-        src_h = int(info.get("height") or 0)
-        fps = float(info.get("fps") or 0.0) or 24.0
-        if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
-            return jsonify(error="probe incomplete"), 500
+        estimates = plan["estimates"]
+        out_res = estimates["output_resolution"]
+        out_w = int(out_res.get("width") or 0)
+        out_h = int(out_res.get("height") or 0)
+        decision = estimates.get("decision") or "keep"
+        video_kbps = float(estimates.get("video_bitrate_kbps") or 0)
+        encoder_preset = estimates.get("encoder_preset") or ""
+        encoder_label = estimates.get("encoder_label") or estimates.get("encoder") or ""
 
         # Preview timestamp (integer seconds)
         if duration_sec < 120:
@@ -1396,38 +1697,6 @@ def register_routes(app):
         else:
             t = min(60.0, duration_sec - 2.0)
         t_int = int(max(0.0, t))
-
-        # Compute wizard bitrate + scaling (same as encode_wizard)
-        target_mb = size_value_f * (1024.0 if size_unit == "GB" else 1.0)
-        target_bytes = target_mb * 1024.0 * 1024.0
-        total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
-
-        audio_kbps = _quality_audio_kbps(quality)
-        video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
-
-        enc_preset = _preset_from_quality(quality)
-
-        out_w, out_h = src_w, src_h
-        decision = "keep"
-        if (not force_4k) and allow_downscale and src_h > 1080:
-            bpp_src = _bpp(video_kbps, src_w, src_h, fps)
-            if bpp_src < 0.045:
-                scale = 1080 / float(src_h)
-                out_w = int((src_w * scale) // 2 * 2)
-                out_h = int((src_h * scale) // 2 * 2)
-                out_w = max(2, out_w)
-                out_h = max(2, out_h)
-                bpp_1080 = _bpp(video_kbps, out_w, out_h, fps)
-                if bpp_1080 >= bpp_src * 1.6:
-                    decision = "downscale"
-
-        # Build extra args
-        extra_args = [
-            f"-b {int(video_kbps)}",
-            f"--encoder-preset {enc_preset}",
-        ]
-        if decision == "downscale":
-            extra_args.append(f"--width {out_w} --height {out_h}")
 
         # Temp files
         tmpdir = tempfile.mkdtemp(prefix="hbwiz_acc_")
@@ -1446,10 +1715,8 @@ def register_routes(app):
         # HandBrake short-segment preview (accurate)
         preview_seconds = int(max(6, min(10, duration_sec - t_int - 1)))
 
-        # Use the user's preset file+name (for filters/crop/etc),
-        # but ALWAYS force software encoder (x265) so this works in VMs everywhere.
         try:
-            _effective, preset_a = _hb_preset_args_for_base(preset_base, base)
+            _effective, preset_a = _hb_preset_args_for_base(plan["preset"], base)
         except Exception as e:
             return jsonify(error=str(e)), 500
 
@@ -1461,15 +1728,8 @@ def register_routes(app):
             "--stop-at", f"duration:{preview_seconds}",
         ] + preset_a
 
-        if extra_args:
-            hb_cmd += " ".join(extra_args).split()
-
-        # Force portable software encode (overrides any hw encoder in the preset)
-        hb_cmd += [
-            "--encoder", "x265",
-            "--encoder-preset", enc_preset,
-            "-a", "none",
-        ]
+        hb_cmd += _flatten_args(plan["extra_args"])
+        hb_cmd += ["-a", "none"]
 
         # Kill any previous preview for this preview_id before starting a new one
         _kill_preview_by_id(preview_id)
@@ -1520,23 +1780,23 @@ def register_routes(app):
         except Exception as e:
             return jsonify(error=f"failed extracting preview frame: {e}"), 500
 
-        # Register clip token so the browser can play it
-        try:
-            PREVIEW_CLIPS[token] = out_clip
-        except Exception:
-            pass
+        _register_preview_clip(token, out_clip)
 
         try:
             return jsonify(
                 ok=True,
                 preview_id=preview_id,
-                t=t_int,
+                t_seconds=t_int,
                 seconds=preview_seconds,
+                preview_seconds=preview_seconds,
+                preset=plan["preset"],
                 decision=decision,
                 out_width=out_w,
                 out_height=out_h,
                 bitrate_kbps=int(video_kbps),
-                encoder_preset=enc_preset,
+                encoder=estimates.get("encoder"),
+                encoder_label=encoder_label,
+                encoder_preset=encoder_preset,
                 clip_url=f"/wizard_preview_clip/{token}",
                 old_b64=_b64_jpg(old_jpg),
                 new_b64=_b64_jpg(new_jpg),
@@ -1558,140 +1818,20 @@ def register_routes(app):
     def wizard_preview():
         """Return an estimated outcome for Size Wizard inputs."""
         data = request.get_json(force=True) or {}
-        src = data.get("src")
-        if not src or not os.path.isfile(src):
-            return jsonify(error="invalid src"), 400
-        if not is_allowed_path(src):
-            return jsonify(error="path not allowed"), 400
-
         try:
-            size_value = float(data.get("target_size_value") or 5.0)
-        except Exception:
-            return jsonify(error="invalid target_size_value"), 400
-        unit = (data.get("target_size_unit") or "GB").upper()
-        if unit not in ("GB", "MB"):
-            return jsonify(error="invalid target_size_unit"), 400
-        if size_value <= 0:
-            return jsonify(error="invalid target_size_value"), 400
-
-        quality = (data.get("quality") or "balanced").lower()
-        if quality not in ("high", "balanced", "small"):
-            return jsonify(error="invalid quality"), 400
-
-        allow_downscale = bool(data.get("allow_downscale", True))
-        force_4k = bool(data.get("force_4k", False))
-
-        try:
-            info = _probe_media(src)
+            plan = _wizard_plan(data, probe_func=_probe_media, preview=False)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
         except Exception as e:
             return jsonify(error=str(e)), 500
 
-        duration_sec = float(info.get("duration_sec") or 0.0)
-        src_w = int(info.get("width") or 0)
-        src_h = int(info.get("height") or 0)
-        fps = float(info.get("fps") or 0.0) or 24.0
-        if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
-            return jsonify(error="probe incomplete"), 500
-
-        target_mb = _size_to_mb(size_value, unit)
-        target_bytes = target_mb * 1024.0 * 1024.0
-
-        total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
-        audio_kbps = _quality_audio_kbps(quality)
-        video_kbps = max(250.0, total_bitrate_kbps - audio_kbps)
-
-        enc_preset = _preset_from_quality(quality)
-
-        out_w, out_h = src_w, src_h
-        decision = "keep"
-        note = ""
-
-        bpp_src = _bpp(video_kbps, src_w, src_h, fps)
-
-        def pick_downscale(w, h):
-            if w <= 0 or h <= 0:
-                return (w, h)
-            target_h = 1080
-            if h <= target_h:
-                return (w, h)
-            scale = target_h / float(h)
-            nw = int((w * scale) // 2 * 2)
-            nh = int((h * scale) // 2 * 2)
-            return (max(2, nw), max(2, nh))
-
-        cand_w, cand_h = pick_downscale(src_w, src_h)
-        bpp_1080 = _bpp(video_kbps, cand_w, cand_h, fps) if (cand_w, cand_h) != (src_w, src_h) else bpp_src
-
-        if (not force_4k) and allow_downscale:
-            if src_h > 1080 and bpp_src < 0.045 and bpp_1080 >= bpp_src * 1.6:
-                out_w, out_h = cand_w, cand_h
-                decision = "downscale"
-                note = "Requested size implies low bitrate for 4K; downscaling to improve quality."
-
-        bpp_final = _bpp(video_kbps, out_w, out_h, fps)
-        q_code, q_label = _quality_label_from_bpp(bpp_final)
-
-        # -------------------------------
-        # CPU-aware ETA estimation
-        # -------------------------------
-        settings = load_settings()
-        cpu_id = settings.get("cpu_profile")
-        cpu_override = settings.get("cpu_speed_override", 1.0)
-
-        cpu = get_cpu_profile(cpu_id)
-
-        try:
-            cpu_override_f = float(cpu_override)
-        except Exception:
-            cpu_override_f = 1.0
-        if cpu_override_f <= 0:
-            cpu_override_f = 1.0
-
-        # Base encode fps estimate (generic baseline CPU)
-        base_est_fps = _estimate_encode_fps(out_w, out_h, enc_preset)
-
-        # Scale by CPU speed index (relative) and optional user override
-        est_fps = base_est_fps * float(cpu.speed_index) * cpu_override_f
-
-        # Avoid absurd values
-        est_fps = max(1.0, min(est_fps, 500.0))
-
-        total_frames = duration_sec * fps
-        eta_sec = total_frames / est_fps if est_fps > 0 else 0.0
-
-
-        extra_args = [f"--target-size {int(target_mb)}", f"--encoder-preset {enc_preset}"]
-        if decision == "downscale":
-            extra_args.append(f"--width {out_w} --height {out_h}")
-
         return jsonify(
-            src=src,
-            probe=info,
-            inputs={
-                "target_mb": target_mb,
-                "quality": quality,
-                "allow_downscale": allow_downscale,
-                "force_4k": force_4k,
-            },
-            estimates={
-                "total_bitrate_kbps": round(total_bitrate_kbps, 1),
-                "audio_bitrate_kbps": audio_kbps,
-                "video_bitrate_kbps": round(video_kbps, 1),
-                "bpp": round(bpp_final, 5),
-                "quality_code": q_code,
-                "quality_label": q_label,
-                "eta_seconds": int(round(eta_sec)),
-                "eta_human": f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m" if eta_sec >= 3600 else f"{int(eta_sec//60)}m",
-                "cpu_profile": cpu.id,
-                "cpu_label": cpu.label,
-                "cpu_speed_index": float(cpu.speed_index),
-                "cpu_speed_override": float(cpu_override_f),
-                "est_fps": round(est_fps, 1),
-                "decision": decision,
-                "decision_note": note,
-                "output_resolution": {"width": out_w, "height": out_h},
-            },
-            suggested_extra_args=extra_args,
+            src=plan["src"],
+            preset=plan["preset"],
+            probe=plan["probe"],
+            inputs=plan["inputs"],
+            estimates=plan["estimates"],
+            suggested_extra_args=plan["extra_args"],
         )
 
 

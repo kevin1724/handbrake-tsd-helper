@@ -252,7 +252,12 @@ function openSizeWizard() {
     return;
   }
   const preset = document.getElementById('presetSelect').value;
-  window.location.href = '/size_wizard?src=' + encodeURIComponent(src) + '&preset=' + encodeURIComponent(preset);
+  try {
+    const handoff = JSON.stringify({ src, preset, saved_at: Date.now() });
+    sessionStorage.setItem('hbwiz_handoff', handoff);
+    localStorage.setItem('hbwiz_last_handoff', handoff);
+  } catch (e) {}
+  window.location.assign('/size_wizard?src=' + encodeURIComponent(src) + '&preset=' + encodeURIComponent(preset));
 }
 
 // --------------------------

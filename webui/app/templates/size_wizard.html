@@ -2,39 +2,236 @@
 <html>
 <head>
   <meta charset="utf-8">
-
-  <!--
-    ============================================================
-    Size Wizard – HandBrake TSD Helper
-    ------------------------------------------------------------
-    - Text preview is fast (no encode)
-    - Image preview is expensive (HandBrake short encode + ffmpeg)
-      So we:
-        • DO NOT run it automatically on page load
-        • Add timeout + error handling
-        • Provide a button to request it explicitly
-    ============================================================
-  -->
-
-  <title>HandBrake TSD Helper – Size Wizard</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HandBrake TSD Helper - Size Wizard</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
 
   <style>
-    .compare-wrap{
+    body.size-wizard-page {
+      min-width: 0;
+    }
+
+    .wizard-page {
+      max-width: 1440px;
+      margin: 0 auto;
+    }
+
+    .wizard-heading {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      align-items: baseline;
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .wizard-heading h1 {
+      margin: 0;
+    }
+
+    .file-chip {
+      max-width: min(760px, 100%);
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      color: rgba(229,229,229,0.74);
+      font-size: 13px;
+    }
+
+    .recipe-grid,
+    .wizard-form-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 10px;
+      align-items: end;
+    }
+
+    .wizard-layout {
+      display: grid;
+      grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.65fr);
+      gap: 16px;
+      align-items: start;
+    }
+
+    .section-title-row,
+    .wizard-actions,
+    .preview-actions {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .section-title-row {
+      justify-content: space-between;
+      margin-bottom: 8px;
+    }
+
+    .section-title-row h2,
+    .wizard-group h3 {
+      margin: 0;
+    }
+
+    .wizard-group {
+      padding-top: 14px;
+      margin-top: 14px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .wizard-group:first-of-type {
+      border-top: 0;
+      margin-top: 0;
+      padding-top: 0;
+    }
+
+    .wizard-group h3 {
+      font-size: 14px;
+      color: rgba(229,229,229,0.86);
+      margin-bottom: 10px;
+    }
+
+    .wizard-field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .wizard-field label,
+    .field-label {
+      font-size: 12px;
+      color: rgba(229,229,229,0.7);
+    }
+
+    .wizard-field input[type="text"],
+    .wizard-field input[type="number"],
+    .wizard-field select,
+    .source-row input[type="text"] {
+      width: 100%;
+      min-width: 0;
+      min-height: 34px;
+      box-sizing: border-box;
+      background: var(--bg-alt);
+      color: var(--text);
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      padding: 6px 8px;
+    }
+
+    .source-row {
+      margin-bottom: 12px;
+    }
+
+    .source-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      margin-top: 8px;
+    }
+
+    .size-pair {
+      display: grid;
+      grid-template-columns: minmax(90px, 1fr) 86px;
+      gap: 8px;
+    }
+
+    .toggle-line {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      padding-top: 20px;
+    }
+
+    .toggle-line input {
+      margin: 0;
+    }
+
+    .primary-btn {
+      font-weight: 700;
+      border-color: rgba(0,188,212,0.55);
+    }
+
+    .ghost-btn {
+      background: rgba(255,255,255,0.05);
+    }
+
+    .status-text {
+      min-height: 18px;
+      color: rgba(229,229,229,0.78);
+    }
+
+    .status-text.error {
+      color: #ff9d9d;
+    }
+
+    .status-text.ok {
+      color: #89df8d;
+    }
+
+    .metric-list {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 0;
+      margin-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .metric-row {
+      display: grid;
+      grid-template-columns: minmax(120px, 0.75fr) minmax(0, 1.25fr);
+      gap: 12px;
+      padding: 9px 0;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      align-items: baseline;
+    }
+
+    .metric-row span {
+      color: rgba(229,229,229,0.68);
+      font-size: 12px;
+    }
+
+    .metric-row strong {
+      color: #fff;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    .plan-note {
+      margin-top: 10px;
+      color: rgba(229,229,229,0.76);
+      line-height: 1.4;
+    }
+
+    .args-preview {
+      margin: 8px 0 0 0;
+      max-height: 150px;
+      overflow: auto;
+      white-space: pre-wrap;
+      overflow-wrap: anywhere;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 6px;
+      padding: 8px;
+      background: rgba(0,0,0,0.18);
+      color: rgba(229,229,229,0.82);
+      font-size: 12px;
+    }
+
+    .compare-wrap {
       position: relative;
       width: 100%;
-      max-width: 960px;
-      margin-top: 10px;
-      border-radius: 12px;
+      max-width: 980px;
+      margin-top: 12px;
+      border-radius: 8px;
       overflow: hidden;
       border: 1px solid rgba(255,255,255,0.08);
       background: rgba(0,0,0,0.25);
-      aspect-ratio: 16 / 9; /* stable height before images load */
+      aspect-ratio: 16 / 9;
       user-select: none;
     }
 
-    /* Both images must fill the box identically */
-    .compare-img{
+    .compare-img {
       position: absolute;
       inset: 0;
       width: 100%;
@@ -46,22 +243,19 @@
       pointer-events: none;
     }
 
-    /* NEW = bottom layer (full image) */
-    #imgNew { z-index: 1; }
-
-    /* OLD = top layer that we "wipe away" from bottom */
-    #imgOld {
-      z-index: 2;
-      /* clip-path is updated live in JS */
-      clip-path: inset(0 0 50% 0);
+    #imgNew {
+      z-index: 1;
     }
 
-    /* White draggable bar */
-    .wipe-handle{
+    #imgOld {
+      z-index: 2;
+      clip-path: inset(0 50% 0 0);
+    }
+
+    .wipe-handle {
       position: absolute;
-      left: 0;
-      top: 50%;
-      transform: translateY(-50%);
+      left: 50%;
+      top: 0;
       width: 3px;
       height: 100%;
       background: rgba(255,255,255,0.9);
@@ -70,8 +264,7 @@
       cursor: ew-resize;
     }
 
-    /* Center “grip” */
-    .wipe-handle::after{
+    .wipe-handle::after {
       content: "";
       position: absolute;
       left: 50%;
@@ -85,155 +278,503 @@
       backdrop-filter: blur(4px);
     }
 
-    .compare-label{
+    .compare-label {
       position: absolute;
       top: 10px;
-      padding: 6px 10px;
+      padding: 4px 8px;
       font-size: 12px;
-      border-radius: 999px;
       background: rgba(0,0,0,0.55);
       color: #fff;
       pointer-events: none;
       z-index: 4;
     }
-    .label-old { left: 10px; }
-    .label-new { right: 10px; }
 
-    .img-status{
+    .label-old {
+      left: 10px;
+    }
+
+    .label-new {
+      right: 10px;
+    }
+
+    .img-status {
       margin-top: 8px;
-      max-width: 960px;
+      max-width: 980px;
       white-space: pre-wrap;
     }
 
-    .btn-row{
-      display: flex;
-      gap: 10px;
-      align-items: center;
-      margin-top: 10px;
+    .accurate-video-wrap {
+      margin-top: 14px;
+      max-width: 980px;
+    }
+
+    .accurate-video-wrap video {
+      width: 100%;
+      border-radius: 8px;
+      background: #000;
+    }
+
+    @media (max-width: 980px) {
+      .wizard-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .metric-row {
+        grid-template-columns: 1fr;
+        gap: 3px;
+      }
     }
   </style>
 </head>
 
-<body>
+<body class="size-wizard-page">
   <nav class="top-nav">
     <a href="/" class="nav-link">Jobs</a>
     <a href="/size_wizard" class="nav-link nav-link-active">Size Wizard</a>
     <a href="/settings" class="nav-link">Settings</a>
   </nav>
 
-  <h1>Size Wizard</h1>
-
-  <div class="section-card">
-    <h2>Pick size + quality, then queue the job</h2>
-
-    <div class="row">
-      <label>Selected file:</label>
-      <input id="src" type="text" style="width:80%;" readonly>
+  <main class="wizard-page">
+    <div class="wizard-heading">
+      <h1>Size Wizard</h1>
+      <div id="fileNameChip" class="file-chip">No file selected</div>
     </div>
 
-    <div class="row">
-      <label for="preset">Preset base:</label>
-      <select id="preset">
-        <option value="auto">Auto by filename</option>
-        <option value="1080">Force 1080p preset</option>
-        <option value="4k">Force 4K preset</option>
-      </select>
+    <section class="section-card">
+      <div class="section-title-row">
+        <h2>Saved Wizard Presets</h2>
+        <span id="recipeStatus" class="small status-text"></span>
+      </div>
+
+      <div class="recipe-grid">
+        <div class="wizard-field">
+          <label for="savedPresetSelect">Preset</label>
+          <select id="savedPresetSelect">
+            <option value="">New wizard preset</option>
+          </select>
+        </div>
+
+        <div class="wizard-field">
+          <label for="presetName">Name</label>
+          <input id="presetName" type="text" maxlength="80" placeholder="H.265 CPU 5GB">
+        </div>
+
+        <div class="wizard-actions">
+          <button id="loadPresetBtn" type="button" class="ghost-btn">Load</button>
+          <button id="newPresetBtn" type="button" class="ghost-btn">New</button>
+          <button id="savePresetBtn" type="button" class="primary-btn">Save</button>
+          <button id="deletePresetBtn" type="button" class="danger">Delete</button>
+        </div>
+      </div>
+    </section>
+
+    <div class="wizard-layout">
+      <section class="section-card">
+        <div class="section-title-row">
+          <h2>Encode Recipe</h2>
+          <div class="wizard-actions">
+            <button id="queueBtn" type="button" class="primary-btn">Queue Encode</button>
+            <span id="queueStatus" class="small status-text"></span>
+          </div>
+        </div>
+
+        <div class="source-row wizard-field">
+          <label for="src">Selected file</label>
+          <input id="src" type="text" readonly>
+          <div class="source-actions">
+            <a href="/" class="nav-link">Pick From Jobs</a>
+            <button id="useLastFileBtn" type="button" class="ghost-btn">Use Last File</button>
+            <span id="sourceStatus" class="small status-text"></span>
+          </div>
+        </div>
+
+        <div class="wizard-group">
+          <h3>Target</h3>
+          <div class="wizard-form-grid">
+            <div class="wizard-field">
+              <label for="preset">Base preset</label>
+              <select id="preset">
+                <option value="auto">Auto by filename</option>
+                <option value="1080">1080p preset</option>
+                <option value="4k">4K preset</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label>Target size</label>
+              <div class="size-pair">
+                <input id="sizeValue" type="number" min="1" step="0.1" value="5">
+                <select id="sizeUnit">
+                  <option value="GB" selected>GB</option>
+                  <option value="MB">MB</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="wizard-field">
+              <label for="quality">Quality target</label>
+              <select id="quality">
+                <option value="high">High quality</option>
+                <option value="balanced" selected>Balanced</option>
+                <option value="small">Small file</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="resolutionMode">Resolution</label>
+              <select id="resolutionMode">
+                <option value="auto" selected>Auto protect quality</option>
+                <option value="keep">Keep source</option>
+                <option value="2160">Cap at 2160p</option>
+                <option value="1440">Cap at 1440p</option>
+                <option value="1080">Cap at 1080p</option>
+                <option value="720">Cap at 720p</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="wizard-group">
+          <h3>Video</h3>
+          <div class="wizard-form-grid">
+            <div class="wizard-field">
+              <label for="videoCodec">Codec</label>
+              <select id="videoCodec">
+                <option value="h265" selected>H.265 / HEVC</option>
+                <option value="h264">H.264 / AVC</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="encoderFamily">Encoder</label>
+              <select id="encoderFamily">
+                <option value="software" selected>CPU software</option>
+                <option value="qsv">Intel QSV</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="bitDepth">Bit depth</label>
+              <select id="bitDepth">
+                <option value="10" selected>10-bit</option>
+                <option value="8">8-bit</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="encoderSpeed">Encoder speed</label>
+              <select id="encoderSpeed">
+                <option value="auto" selected>Auto</option>
+                <option value="fast">Fast</option>
+                <option value="medium">Medium</option>
+                <option value="slow">Slow</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="framerateMode">Frame rate</label>
+              <select id="framerateMode">
+                <option value="same" selected>Same as source</option>
+                <option value="pfr">Peak frame rate</option>
+                <option value="cfr">Constant frame rate</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="framerate">FPS</label>
+              <select id="framerate">
+                <option value="23.976" selected>23.976</option>
+                <option value="24">24</option>
+                <option value="25">25</option>
+                <option value="29.97">29.97</option>
+                <option value="30">30</option>
+                <option value="50">50</option>
+                <option value="59.94">59.94</option>
+                <option value="60">60</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="wizard-group">
+          <h3>Audio, Subtitles, Filters</h3>
+          <div class="wizard-form-grid">
+            <div class="wizard-field">
+              <label for="audioMode">Audio</label>
+              <select id="audioMode">
+                <option value="auto" selected>AAC auto</option>
+                <option value="aac">AAC custom bitrate</option>
+                <option value="copy">Copy source audio</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="audioBitrate">Audio bitrate</label>
+              <select id="audioBitrate">
+                <option value="auto" selected>Auto</option>
+                <option value="160">160 kbps</option>
+                <option value="192">192 kbps</option>
+                <option value="256">256 kbps</option>
+                <option value="320">320 kbps</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="audioTracks">Audio tracks</label>
+              <select id="audioTracks">
+                <option value="first" selected>First track</option>
+                <option value="all">All tracks</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="subtitleMode">Subtitles</label>
+              <select id="subtitleMode">
+                <option value="none" selected>None</option>
+                <option value="first">First track</option>
+                <option value="all">All tracks</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="deinterlace">Deinterlace</label>
+              <select id="deinterlace">
+                <option value="off" selected>Off</option>
+                <option value="decomb">Decomb</option>
+                <option value="yadif">Yadif</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="cropMode">Crop</label>
+              <select id="cropMode">
+                <option value="auto" selected>Auto</option>
+                <option value="none">None</option>
+              </select>
+            </div>
+
+            <label class="toggle-line">
+              <input id="twoPass" type="checkbox">
+              Two-pass video
+            </label>
+          </div>
+        </div>
+      </section>
+
+      <aside class="section-card">
+        <div class="section-title-row">
+          <h2>Live Plan</h2>
+          <span id="planStatus" class="small status-text"></span>
+        </div>
+
+        <div id="previewBox" class="small">Waiting for a selected file.</div>
+
+        <div class="metric-list" aria-live="polite">
+          <div class="metric-row">
+            <span>Target</span>
+            <strong id="metricTarget">-</strong>
+          </div>
+          <div class="metric-row">
+            <span>Video bitrate</span>
+            <strong id="metricVideoBitrate">-</strong>
+          </div>
+          <div class="metric-row">
+            <span>Audio bitrate</span>
+            <strong id="metricAudioBitrate">-</strong>
+          </div>
+          <div class="metric-row">
+            <span>Quality</span>
+            <strong id="metricQuality">-</strong>
+          </div>
+          <div class="metric-row">
+            <span>Output</span>
+            <strong id="metricOutput">-</strong>
+          </div>
+          <div class="metric-row">
+            <span>Encoder</span>
+            <strong id="metricEncoder">-</strong>
+          </div>
+          <div class="metric-row">
+            <span>ETA</span>
+            <strong id="metricEta">-</strong>
+          </div>
+        </div>
+
+        <div id="decisionNote" class="small plan-note"></div>
+
+        <div class="wizard-group">
+          <label class="field-label" for="argsPreview">Extra args</label>
+          <pre id="argsPreview" class="args-preview">-</pre>
+        </div>
+      </aside>
     </div>
 
-    <div class="row">
-      <label>Target size:</label>
-      <input id="sizeValue" type="number" min="1" step="0.1" value="5" style="width:120px;">
-      <select id="sizeUnit">
-        <option value="GB" selected>GB</option>
-        <option value="MB">MB</option>
-      </select>
-    </div>
+    <section class="section-card">
+      <div class="section-title-row">
+        <h2>Visual Compare</h2>
+        <div class="preview-actions">
+          <button id="genFastBtn" type="button" class="ghost-btn">Fast Preview</button>
+          <button id="genAccurateBtn" type="button" class="ghost-btn">Accurate Preview</button>
+        </div>
+      </div>
 
-    <div class="row">
-      <label for="quality">Quality priority:</label>
-      <select id="quality">
-        <option value="high">High quality (slower)</option>
-        <option value="balanced" selected>Balanced</option>
-        <option value="small">Smallest possible (faster)</option>
-      </select>
-    </div>
+      <div id="compareWrap" class="compare-wrap" style="display:none;">
+        <img id="imgNew" class="compare-img" alt="Wizard frame">
+        <img id="imgOld" class="compare-img" alt="Original frame">
+        <div id="handle" class="wipe-handle" role="slider" tabindex="0" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></div>
+        <div class="compare-label label-old">Original</div>
+        <div class="compare-label label-new">Wizard</div>
+      </div>
 
-    <div class="row">
-      <label style="min-width:160px;">Resolution behavior:</label>
-      <label style="margin-right:16px;">
-        <input id="allowDownscale" type="checkbox" checked>
-        Allow downscale if needed
-      </label>
-      <label>
-        <input id="force4k" type="checkbox">
-        Force keep original resolution
-      </label>
-    </div>
+      <div id="imgStatus" class="small img-status"></div>
 
-    <div class="row">
-      <button id="queueBtn">Queue Wizard Encode</button>
-      <span id="queueStatus" class="small"></span>
-    </div>
+      <div id="accurateVideoWrap" class="accurate-video-wrap" style="display:none;">
+        <h3>Accurate Preview Clip</h3>
+        <video id="accurateVideo" controls playsinline></video>
+        <div id="accurateVideoHint" class="small status-text"></div>
+      </div>
+    </section>
+  </main>
 
-    <hr>
+  <script>
+    const defaultOptions = {
+      preset: "auto",
+      target_size_value: 5,
+      target_size_unit: "GB",
+      quality: "balanced",
+      video_codec: "h265",
+      encoder_family: "software",
+      bit_depth: "10",
+      encoder_speed: "auto",
+      resolution_mode: "auto",
+      audio_mode: "auto",
+      audio_bitrate: "auto",
+      audio_tracks: "first",
+      subtitle_mode: "none",
+      framerate_mode: "same",
+      framerate: "23.976",
+      deinterlace: "off",
+      crop_mode: "auto",
+      two_pass: false
+    };
 
-    <h3>Live Preview</h3>
-    <div id="previewBox" class="small" style="white-space: pre-wrap;"></div>
+    const controlIds = [
+      "preset",
+      "sizeValue",
+      "sizeUnit",
+      "quality",
+      "resolutionMode",
+      "videoCodec",
+      "encoderFamily",
+      "bitDepth",
+      "encoderSpeed",
+      "framerateMode",
+      "framerate",
+      "audioMode",
+      "audioBitrate",
+      "audioTracks",
+      "subtitleMode",
+      "deinterlace",
+      "cropMode",
+      "twoPass"
+    ];
 
-    <hr>
+    const PREVIEW_ID_KEY = "hbwiz_preview_id";
+    let previewTimer = null;
+    let previewSeq = 0;
+    let wizardPresets = [];
+    let activePresetId = "";
+    let imgFetchController = null;
+    let isDragging = false;
+    let pos01 = 0.5;
 
-    <h3>Visual Compare</h3>
-    <p class="small">
-      OLD is on top. NEW is underneath.
-      Drag the white bar: right → reveal more NEW, left → show more OLD.
-    </p>
+    function el(id) {
+      return document.getElementById(id);
+    }
 
-    <div class="btn-row">
-      <button id="genFastBtn">Preview (Fast)</button>
-      <span class="small" style="opacity:0.85;">(instant: scale/crop sanity check)</span>
-      <button id="genAccurateBtn" style="margin-left:8px;">Preview (Accurate)</button>
-      <span class="small" style="opacity:0.85;">(6–10s HandBrake encode)</span>
-    </div>
+    function qs(name) {
+      return new URLSearchParams(window.location.search).get(name);
+    }
 
-    <div id="compareWrap" class="compare-wrap" style="display:none;">
-      <!-- NEW underneath -->
-      <img id="imgNew" class="compare-img" alt="Wizard frame (NEW)">
-      <!-- OLD on top (we clip it) -->
-      <img id="imgOld" class="compare-img" alt="Original frame (OLD)">
+    function safeGetStorage(storage, key) {
+      try {
+        return storage.getItem(key);
+      } catch (e) {
+        return null;
+      }
+    }
 
-      <div id="handle" class="wipe-handle" role="slider" aria-valuemin="0" aria-valuemax="100" aria-valuenow="50"></div>
+    function safeSetStorage(storage, key, value) {
+      try {
+        storage.setItem(key, value);
+      } catch (e) {}
+    }
 
-      <div class="compare-label label-old">OLD</div>
-      <div class="compare-label label-new">NEW</div>
-    </div>
+    function safeRemoveStorage(storage, key) {
+      try {
+        storage.removeItem(key);
+      } catch (e) {}
+    }
 
-    <div id="imgStatus" class="small img-status"></div>
-  </div>
+    const wizardSessionStorage = (() => {
+      try {
+        return window.sessionStorage;
+      } catch (e) {
+        return null;
+      }
+    })();
 
-  
-    <div id="accurateVideoWrap" style="display:none; margin-top:14px; max-width:960px;">
-      <h4 style="margin:10px 0 6px 0;">Accurate Preview Clip</h4>
-      <video id="accurateVideo" controls playsinline style="width:100%; border-radius:12px; background:#000;"></video>
-      <div id="accurateVideoHint" class="small" style="opacity:0.85; margin-top:6px;"></div>
-    </div>
+    const wizardLocalStorage = (() => {
+      try {
+        return window.localStorage;
+      } catch (e) {
+        return null;
+      }
+    })();
 
-<script>
-    // -----------------------------
-    // Helpers
-    // -----------------------------
+    function readWizardHandoff() {
+      const raw = safeGetStorage(wizardSessionStorage, "hbwiz_handoff")
+        || safeGetStorage(wizardLocalStorage, "hbwiz_last_handoff");
+      if (!raw) return null;
+
+      try {
+        const data = JSON.parse(raw);
+        if (!data || !data.src) return null;
+        return {
+          src: String(data.src || ""),
+          preset: String(data.preset || "auto")
+        };
+      } catch (e) {
+        return null;
+      }
+    }
+
+    function rememberWizardHandoff(src, preset) {
+      if (!src) return;
+      const raw = JSON.stringify({ src, preset: preset || "auto", saved_at: Date.now() });
+      safeSetStorage(wizardSessionStorage, "hbwiz_handoff", raw);
+      safeSetStorage(wizardLocalStorage, "hbwiz_last_handoff", raw);
+    }
+
+    function newPreviewId() {
+      return (Date.now().toString(16) + Math.random().toString(16).slice(2));
+    }
+
+    let previewId = safeGetStorage(wizardSessionStorage, PREVIEW_ID_KEY);
+    if (!previewId) {
+      previewId = newPreviewId();
+      safeSetStorage(wizardSessionStorage, PREVIEW_ID_KEY, previewId);
+    }
+
     async function fetchWithTimeout(url, options = {}, timeoutMs = 15000) {
       const timeoutController = new AbortController();
       const timeoutId = setTimeout(() => timeoutController.abort(), timeoutMs);
-
-      // If caller provided a signal, combine it with the timeout signal
       let signal = timeoutController.signal;
 
       if (options.signal) {
         if (typeof AbortSignal !== "undefined" && AbortSignal.any) {
           signal = AbortSignal.any([timeoutController.signal, options.signal]);
         } else {
-          // Fallback for browsers without AbortSignal.any:
-          // If caller aborts, also abort our timeout controller
           try {
             options.signal.addEventListener("abort", () => timeoutController.abort(), { once: true });
           } catch (e) {}
@@ -242,15 +783,40 @@
       }
 
       try {
-        // IMPORTANT: spread options, but override signal with our combined signal
         return await fetch(url, { ...options, signal });
       } finally {
         clearTimeout(timeoutId);
       }
     }
 
-    function qs(name) {
-      return new URLSearchParams(window.location.search).get(name);
+    async function readJson(res) {
+      try {
+        return await res.json();
+      } catch (e) {
+        return { error: "Invalid server response" };
+      }
+    }
+
+    function setStatus(id, text, kind = "") {
+      const node = el(id);
+      node.textContent = text || "";
+      node.classList.toggle("error", kind === "error");
+      node.classList.toggle("ok", kind === "ok");
+    }
+
+    function setValue(id, value) {
+      const node = el(id);
+      if (!node) return;
+      node.value = value == null ? "" : String(value);
+    }
+
+    function setChecked(id, value) {
+      const node = el(id);
+      if (node) node.checked = !!value;
+    }
+
+    function basename(path) {
+      return String(path || "").split(/[\\/]/).filter(Boolean).pop() || "";
     }
 
     function fmtSeconds(sec) {
@@ -263,52 +829,319 @@
       return `${s}s`;
     }
 
-    // -----------------------------
-    // Prefill from query string
-    // -----------------------------
-    const srcQ = qs("src");
-    const presetQ = qs("preset");
-    if (srcQ) document.getElementById("src").value = srcQ;
-    if (presetQ) document.getElementById("preset").value = presetQ;
-
-    let previewTimer = null;
-
-    // -----------------------------
-    // NEW: preview session id + cancel support
-    // -----------------------------
-    const PREVIEW_ID_KEY = "hbwiz_preview_id";
-
-    function newPreviewId() {
-      // stable enough, no deps
-      return (Date.now().toString(16) + Math.random().toString(16).slice(2));
+    function fmtMb(mb) {
+      const value = Number(mb || 0);
+      if (value >= 1024) return `${(value / 1024).toFixed(2)} GB`;
+      return `${Math.round(value)} MB`;
     }
 
-    // One preview_id per Size Wizard visit/session
-    let previewId = sessionStorage.getItem(PREVIEW_ID_KEY);
-    if (!previewId) {
-      previewId = newPreviewId();
-      sessionStorage.setItem(PREVIEW_ID_KEY, previewId);
+    function fmtKbps(value) {
+      const n = Number(value || 0);
+      if (n >= 1000) return `${(n / 1000).toFixed(2)} Mbps`;
+      return `${Math.round(n)} kbps`;
     }
 
-    // Track an in-flight image request so we can abort it on navigation
-    let imgFetchController = null;
+    function qualityText(estimates) {
+      const map = {
+        good: "Good",
+        ok: "OK",
+        risky: "Risky"
+      };
+      const code = estimates.quality_code || "";
+      const text = map[code] || estimates.quality_label || "-";
+      const bpp = estimates.bpp == null ? "" : ` (${estimates.bpp} bpp)`;
+      return `${text}${bpp}`;
+    }
+
+    function buildRecipeName(payload) {
+      const codec = payload.video_codec === "h264" ? "H.264" : "H.265";
+      const encoder = payload.encoder_family === "qsv" ? "QSV" : "CPU";
+      return `${codec} ${encoder} ${payload.target_size_value}${payload.target_size_unit}`;
+    }
+
+    function currentPayload() {
+      return {
+        src: el("src").value,
+        preset: el("preset").value,
+        target_size_value: Number(el("sizeValue").value || defaultOptions.target_size_value),
+        target_size_unit: el("sizeUnit").value,
+        quality: el("quality").value,
+        video_codec: el("videoCodec").value,
+        encoder_family: el("encoderFamily").value,
+        bit_depth: el("bitDepth").value,
+        encoder_speed: el("encoderSpeed").value,
+        resolution_mode: el("resolutionMode").value,
+        audio_mode: el("audioMode").value,
+        audio_bitrate: el("audioBitrate").value,
+        audio_tracks: el("audioTracks").value,
+        subtitle_mode: el("subtitleMode").value,
+        framerate_mode: el("framerateMode").value,
+        framerate: el("framerate").value,
+        deinterlace: el("deinterlace").value,
+        crop_mode: el("cropMode").value,
+        two_pass: el("twoPass").checked
+      };
+    }
+
+    function recipeOptions(payload) {
+      const copy = { ...payload };
+      delete copy.src;
+      delete copy.preview_id;
+      return copy;
+    }
+
+    function applyWizardOptions(options = {}) {
+      const o = { ...defaultOptions, ...options };
+      setValue("preset", o.preset);
+      setValue("sizeValue", o.target_size_value);
+      setValue("sizeUnit", o.target_size_unit);
+      setValue("quality", o.quality);
+      setValue("resolutionMode", o.resolution_mode);
+      setValue("videoCodec", o.video_codec);
+      setValue("encoderFamily", o.encoder_family);
+      setValue("bitDepth", o.bit_depth);
+      setValue("encoderSpeed", o.encoder_speed);
+      setValue("framerateMode", o.framerate_mode);
+      setValue("framerate", o.framerate);
+      setValue("audioMode", o.audio_mode);
+      setValue("audioBitrate", o.audio_bitrate);
+      setValue("audioTracks", o.audio_tracks);
+      setValue("subtitleMode", o.subtitle_mode);
+      setValue("deinterlace", o.deinterlace);
+      setValue("cropMode", o.crop_mode);
+      setChecked("twoPass", o.two_pass);
+      updateControlStates();
+      schedulePreview();
+    }
+
+    function updateSelectedFileLabel() {
+      const path = el("src").value;
+      el("fileNameChip").textContent = path ? basename(path) : "No file selected";
+      el("useLastFileBtn").disabled = !readWizardHandoff();
+    }
+
+    function updateControlStates() {
+      const isH264 = el("videoCodec").value === "h264";
+      if (isH264) el("bitDepth").value = "8";
+      el("bitDepth").disabled = isH264;
+
+      const audioMode = el("audioMode").value;
+      el("audioBitrate").disabled = audioMode === "copy";
+
+      const sameRate = el("framerateMode").value === "same";
+      el("framerate").disabled = sameRate;
+
+      const isQsv = el("encoderFamily").value === "qsv";
+      if (isQsv) el("twoPass").checked = false;
+      el("twoPass").disabled = isQsv;
+    }
+
+    function renderWizardPresets() {
+      const select = el("savedPresetSelect");
+      select.innerHTML = "";
+      select.appendChild(new Option("New wizard preset", ""));
+      wizardPresets.forEach((preset) => {
+        select.appendChild(new Option(preset.name, preset.id));
+      });
+      select.value = activePresetId;
+      updatePresetActionState();
+    }
+
+    function updatePresetActionState() {
+      const select = el("savedPresetSelect");
+      el("loadPresetBtn").disabled = !select.value;
+      el("deletePresetBtn").disabled = !select.value;
+    }
+
+    async function loadWizardPresets() {
+      try {
+        const res = await fetchWithTimeout("/api/wizard_presets", {}, 10000);
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(data.error || "Failed to load presets");
+        wizardPresets = Array.isArray(data.presets) ? data.presets : [];
+        renderWizardPresets();
+      } catch (e) {
+        setStatus("recipeStatus", e.message || "Preset load failed", "error");
+      }
+    }
+
+    function loadSelectedWizardPreset() {
+      const id = el("savedPresetSelect").value;
+      const preset = wizardPresets.find((row) => row.id === id);
+      if (!preset) return;
+      activePresetId = preset.id;
+      el("presetName").value = preset.name;
+      applyWizardOptions(preset.options || {});
+      renderWizardPresets();
+      setStatus("recipeStatus", "Loaded", "ok");
+    }
+
+    function newWizardPresetDraft() {
+      activePresetId = "";
+      el("savedPresetSelect").value = "";
+      el("presetName").value = "";
+      renderWizardPresets();
+      setStatus("recipeStatus", "Ready to save a new preset");
+    }
+
+    function useLastWizardFile() {
+      const handoff = readWizardHandoff();
+      if (!handoff || !handoff.src) {
+        setStatus("sourceStatus", "No saved file handoff found.", "error");
+        showNoSourceState();
+        return;
+      }
+
+      el("src").value = handoff.src;
+      if (handoff.preset) el("preset").value = handoff.preset;
+      updateSelectedFileLabel();
+      setStatus("sourceStatus", "Loaded last file from Jobs.", "ok");
+      schedulePreview();
+    }
+
+    async function saveWizardPreset() {
+      const payload = currentPayload();
+      const nameInput = el("presetName");
+      const name = nameInput.value.trim() || buildRecipeName(payload);
+      nameInput.value = name;
+      setStatus("recipeStatus", "Saving...");
+
+      try {
+        const res = await fetchWithTimeout("/api/wizard_presets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: activePresetId || undefined,
+            name,
+            options: recipeOptions(payload)
+          })
+        }, 12000);
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(data.error || "Save failed");
+        wizardPresets = Array.isArray(data.presets) ? data.presets : [];
+        activePresetId = data.preset && data.preset.id ? data.preset.id : activePresetId;
+        renderWizardPresets();
+        setStatus("recipeStatus", "Saved", "ok");
+      } catch (e) {
+        setStatus("recipeStatus", e.message || "Save failed", "error");
+      }
+    }
+
+    async function deleteWizardPreset() {
+      const id = el("savedPresetSelect").value;
+      if (!id) return;
+      const preset = wizardPresets.find((row) => row.id === id);
+      const label = preset ? preset.name : "this preset";
+      if (!window.confirm(`Delete ${label}?`)) return;
+      setStatus("recipeStatus", "Deleting...");
+
+      try {
+        const res = await fetchWithTimeout(`/api/wizard_presets/${encodeURIComponent(id)}`, {
+          method: "DELETE"
+        }, 10000);
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(data.error || "Delete failed");
+        wizardPresets = Array.isArray(data.presets) ? data.presets : [];
+        if (activePresetId === id) activePresetId = "";
+        renderWizardPresets();
+        setStatus("recipeStatus", "Deleted", "ok");
+      } catch (e) {
+        setStatus("recipeStatus", e.message || "Delete failed", "error");
+      }
+    }
+
+    function resetPlan(message) {
+      el("previewBox").textContent = message || "Waiting for a selected file.";
+      el("metricTarget").textContent = "-";
+      el("metricVideoBitrate").textContent = "-";
+      el("metricAudioBitrate").textContent = "-";
+      el("metricQuality").textContent = "-";
+      el("metricOutput").textContent = "-";
+      el("metricEncoder").textContent = "-";
+      el("metricEta").textContent = "-";
+      el("decisionNote").textContent = "";
+      el("argsPreview").textContent = "-";
+    }
+
+    function showNoSourceState() {
+      setStatus("sourceStatus", "Pick a file from Jobs, or use the last file opened here.");
+      setStatus("planStatus", "");
+      resetPlan("No file selected yet.");
+      el("imgStatus").textContent = "";
+      el("compareWrap").style.display = "none";
+      el("accurateVideoWrap").style.display = "none";
+    }
+
+    function renderPlan(data, payload) {
+      const p = data.probe || {};
+      const e = data.estimates || {};
+      const output = e.output_resolution || {};
+      const inputs = data.inputs || {};
+      const args = Array.isArray(data.suggested_extra_args) ? data.suggested_extra_args : [];
+      const sourceLine = `${basename(payload.src)} | ${fmtSeconds(p.duration_sec)} | ${p.width || "-"}x${p.height || "-"} @ ${Number(p.fps || 0).toFixed(2)} fps`;
+
+      el("previewBox").textContent = sourceLine;
+      el("metricTarget").textContent = fmtMb(inputs.target_mb);
+      el("metricVideoBitrate").textContent = fmtKbps(e.video_bitrate_kbps);
+      el("metricAudioBitrate").textContent = fmtKbps(e.audio_bitrate_kbps);
+      el("metricQuality").textContent = qualityText(e);
+      el("metricOutput").textContent = `${output.width || "-"}x${output.height || "-"} (${e.decision || "keep"})`;
+      el("metricEncoder").textContent = `${e.encoder_label || e.encoder || "-"}${e.encoder_preset ? ` / ${e.encoder_preset}` : ""}`;
+      el("metricEta").textContent = `${e.eta_human || "-"}${e.est_fps ? ` at about ${e.est_fps} fps` : ""}`;
+      el("decisionNote").textContent = e.decision_note || "Keeping the selected resolution plan.";
+      el("argsPreview").textContent = args.length ? args.join(" ") : "-";
+    }
+
+    async function refreshPreviewText() {
+      const payload = currentPayload();
+      const seq = ++previewSeq;
+
+      updateSelectedFileLabel();
+      updateControlStates();
+
+      if (!payload.src) {
+        showNoSourceState();
+        return;
+      }
+
+      rememberWizardHandoff(payload.src, payload.preset);
+      setStatus("sourceStatus", "Loaded selected file.", "ok");
+      setStatus("planStatus", "Calculating...");
+
+      try {
+        const res = await fetchWithTimeout("/wizard_preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }, 20000);
+        const data = await readJson(res);
+        if (seq !== previewSeq) return;
+        if (!res.ok) throw new Error(data.error || "Preview failed");
+        renderPlan(data, payload);
+        setStatus("planStatus", "Ready", "ok");
+      } catch (e) {
+        if (seq !== previewSeq) return;
+        resetPlan(e.message || "Preview failed");
+        setStatus("planStatus", "Error", "error");
+      }
+    }
+
+    function schedulePreview() {
+      clearTimeout(previewTimer);
+      previewTimer = setTimeout(refreshPreviewText, 350);
+    }
 
     function cancelPreviewOnServer() {
-      // cancel in-flight fetch (client side)
       try { imgFetchController?.abort(); } catch (e) {}
       imgFetchController = null;
 
-      // tell server to kill HandBrake preview for this preview_id
-      // use sendBeacon so it still fires during unload/navigation
       const payload = JSON.stringify({ preview_id: previewId });
-
       if (navigator.sendBeacon) {
         const blob = new Blob([payload], { type: "application/json" });
         navigator.sendBeacon("/wizard_preview_cancel", blob);
         return;
       }
 
-      // fallback if sendBeacon not available
       fetch("/wizard_preview_cancel", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -317,102 +1150,23 @@
       }).catch(() => {});
     }
 
-    // Fire cancel when leaving Size Wizard
-    window.addEventListener("pagehide", cancelPreviewOnServer);
-    window.addEventListener("beforeunload", cancelPreviewOnServer);
-
-    function currentPayload() {
-      return {
-        src: document.getElementById("src").value,
-        preset: document.getElementById("preset").value,
-        target_size_value: Number(document.getElementById("sizeValue").value),
-        target_size_unit: document.getElementById("sizeUnit").value,
-        quality: document.getElementById("quality").value,
-        allow_downscale: document.getElementById("allowDownscale").checked,
-        force_4k: document.getElementById("force4k").checked
-      };
-    }
-
-    // -----------------------------
-    // Text preview
-    // -----------------------------
-    async function refreshPreviewText() {
-      const payload = currentPayload();
-      const box = document.getElementById("previewBox");
-
-      if (!payload.src) {
-        box.textContent = "No file selected.";
-        return;
-      }
-
-      box.textContent = "Calculating preview…";
-
-      let res, data;
-      try {
-        res = await fetchWithTimeout("/wizard_preview", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(payload)
-        }, 15000);
-        data = await res.json();
-      } catch (e) {
-        box.textContent = "Preview error: server unreachable or timed out.";
-        return;
-      }
-
-      if (!res.ok) {
-        box.textContent = JSON.stringify(data, null, 2);
-        return;
-      }
-
-      const p = data.probe || {};
-      const e = data.estimates || {};
-
-      box.textContent =
-        `Source: ${payload.src}\n` +
-        `Duration: ${fmtSeconds(p.duration_sec)} | ${p.width}x${p.height} @ ${Number(p.fps || 0).toFixed(2)} fps\n\n` +
-        `Target size: ${Number(data.inputs?.target_mb || 0).toFixed(0)} MB\n` +
-        `Bitrate: video ${e.video_bitrate_kbps} kbps / audio ${e.audio_bitrate_kbps} kbps\n` +
-        `Quality: ${e.quality_label} (bpp=${e.bpp})\n\n` +
-        `CPU: ${e.cpu_label} (x${e.cpu_speed_index})\n` +
-        `ETA: ${e.eta_human} (~${e.est_fps} fps)\n\n` +
-        `Output: ${e.output_resolution?.width}x${e.output_resolution?.height} (${e.decision})`;
-    }
-
-    function schedulePreview() {
-      clearTimeout(previewTimer);
-      previewTimer = setTimeout(refreshPreviewText, 350);
-    }
-
-    // -----------------------------
-    // Visual compare (bar drag)
-    // -----------------------------
-    const wrap = document.getElementById("compareWrap");
-    const imgOld = document.getElementById("imgOld");
-    const imgNew = document.getElementById("imgNew");
-    const handle = document.getElementById("handle");
-
-    let isDragging = false;
-    let pos01 = 0.5; // 0..1
-
     function applyWipe(p01) {
       pos01 = Math.max(0, Math.min(1, p01));
-      const revealPct = pos01 * 100;
-      imgOld.style.clipPath = `inset(0 0 ${revealPct}% 0)`;
-      handle.style.left = `${revealPct}%`;
-      handle.setAttribute("aria-valuenow", String(Math.round(revealPct)));
+      const pct = pos01 * 100;
+      el("imgOld").style.clipPath = `inset(0 ${100 - pct}% 0 0)`;
+      el("handle").style.left = `${pct}%`;
+      el("handle").setAttribute("aria-valuenow", String(Math.round(pct)));
     }
 
     function pointerToPos01(ev) {
-      const r = wrap.getBoundingClientRect();
-      const x = (ev.clientX - r.left) / r.width;
-      return x;
+      const r = el("compareWrap").getBoundingClientRect();
+      return (ev.clientX - r.left) / r.width;
     }
 
     function startDrag(ev) {
-      if (wrap.style.display === "none") return;
+      if (el("compareWrap").style.display === "none") return;
       isDragging = true;
-      wrap.setPointerCapture?.(ev.pointerId);
+      el("compareWrap").setPointerCapture?.(ev.pointerId);
       applyWipe(pointerToPos01(ev));
     }
 
@@ -423,256 +1177,234 @@
 
     function endDrag(ev) {
       isDragging = false;
-      try { wrap.releasePointerCapture?.(ev.pointerId); } catch(e) {}
+      try { el("compareWrap").releasePointerCapture?.(ev.pointerId); } catch(e) {}
     }
 
-    wrap.addEventListener("pointerdown", startDrag);
-    wrap.addEventListener("pointermove", moveDrag);
-    window.addEventListener("pointerup", endDrag);
+    function setPreviewBusy(buttonId, busy, normalText, busyText) {
+      const button = el(buttonId);
+      button.dataset.busy = busy ? "1" : "0";
+      button.textContent = busy ? busyText : normalText;
+      button.disabled = false;
+    }
 
-    handle.addEventListener("keydown", (e) => {
-      if (e.key === "ArrowLeft") { e.preventDefault(); applyWipe(pos01 - 0.03); }
-      if (e.key === "ArrowRight"){ e.preventDefault(); applyWipe(pos01 + 0.03); }
-    });
-
-    // -----------------------------
-    // Image preview (expensive)
-    // -----------------------------
     async function refreshPreviewImages() {
       const payload = currentPayload();
-      const status = document.getElementById("imgStatus");
-      const btn = document.getElementById("genFastBtn");
+      const status = el("imgStatus");
+      const button = el("genFastBtn");
 
       if (!payload.src) {
-        status.textContent = "Pick a file first (go back to Jobs).";
+        status.textContent = "Pick a file first.";
         return;
       }
 
-      // If a request is already running, treat button click as "Cancel"
-      if (btn.dataset.busy === "1") {
-        status.textContent = "Canceling preview…";
+      if (button.dataset.busy === "1") {
+        status.textContent = "Canceling preview...";
         cancelPreviewOnServer();
-        btn.dataset.busy = "0";
-        btn.textContent = "Preview (Fast)";
-        btn.disabled = false;
-        wrap.style.display = "none";
+        setPreviewBusy("genFastBtn", false, "Fast Preview", "Cancel Preview");
+        el("compareWrap").style.display = "none";
         return;
       }
 
-      // UI -> busy
-      btn.dataset.busy = "1";
-      btn.textContent = "Cancel Preview";
-      btn.disabled = false;
-
-      status.textContent = "Generating image preview (short encode)…";
-
-      // include preview_id so server can kill the right HandBrake run
+      setPreviewBusy("genFastBtn", true, "Fast Preview", "Cancel Preview");
+      status.textContent = "Generating fast preview...";
       payload.preview_id = previewId;
-
-      // cancel any previous server preview before starting a new one
       cancelPreviewOnServer();
-
-      // NEW: use our own abort controller so leaving page stops the wait
       imgFetchController = new AbortController();
 
-      let res, data;
       try {
-        // IMPORTANT: timeout so it doesn't hang forever
-        // (backend uses timeout=90s, so we pick 95s)
-        res = await fetchWithTimeout("/wizard_preview_fast_images", {
+        const res = await fetchWithTimeout("/wizard_preview_fast_images", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
           signal: imgFetchController.signal
         }, 195000);
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(data.error || "Fast preview failed");
 
-        data = await res.json();
+        el("imgOld").onload = () => {
+          if (el("imgOld").naturalWidth && el("imgOld").naturalHeight) {
+            el("compareWrap").style.aspectRatio = `${el("imgOld").naturalWidth} / ${el("imgOld").naturalHeight}`;
+          }
+        };
+        el("imgNew").src = "data:image/jpeg;base64," + data.new_b64;
+        el("imgOld").src = "data:image/jpeg;base64," + data.old_b64;
+        el("compareWrap").style.display = "";
+        applyWipe(0.5);
+        status.textContent = `Frame at ${fmtSeconds(data.t_seconds)} | ${data.out_w || "-"}x${data.out_h || "-"} | ${data.decision || "keep"}`;
       } catch (e) {
-        status.textContent = "Image preview canceled / unreachable / timed out.";
-        wrap.style.display = "none";
-        return;
+        status.textContent = e.message || "Fast preview failed";
+        el("compareWrap").style.display = "none";
       } finally {
         imgFetchController = null;
-        // UI -> not busy
-        btn.dataset.busy = "0";
-        btn.textContent = "Preview (Fast)";
-        btn.disabled = false;
+        setPreviewBusy("genFastBtn", false, "Fast Preview", "Cancel Preview");
       }
-
-      if (!res.ok) {
-        const msg = (data && data.error) ? String(data.error) : "";
-        if (msg.toLowerCase().includes("ffmpeg not found")) {
-          status.textContent = "Image preview needs ffmpeg inside the container. Install ffmpeg in the Dockerfile.";
-        } else if (msg.toLowerCase().includes("timed out")) {
-          status.textContent = "Image preview timed out. Try again, or pick a shorter / easier file.";
-        } else {
-          status.textContent = "Image preview error:\n" + JSON.stringify(data, null, 2);
-        }
-        wrap.style.display = "none";
-        return;
-      }
-
-      // Keep layout stable
-      imgOld.onload = () => {
-        if (imgOld.naturalWidth && imgOld.naturalHeight) {
-          wrap.style.aspectRatio = `${imgOld.naturalWidth} / ${imgOld.naturalHeight}`;
-        }
-      };
-
-      imgNew.src = "data:image/jpeg;base64," + data.new_b64;
-      imgOld.src = "data:image/jpeg;base64," + data.old_b64;
-
-      wrap.style.display = "";
-      applyWipe(0.5);
-
-      status.textContent = `Frame at ~${fmtSeconds((data.t_seconds ?? data.when_seconds))} (drag the white bar)`;
     }
 
     async function refreshAccuratePreview() {
       const payload = currentPayload();
-      const status = document.getElementById("imgStatus");
-      const btn = document.getElementById("genAccurateBtn");
-      const wrap = document.getElementById("compareWrap");
-      const vwrap = document.getElementById("accurateVideoWrap");
-      const video = document.getElementById("accurateVideo");
-      const vhint = document.getElementById("accurateVideoHint");
+      const status = el("imgStatus");
+      const button = el("genAccurateBtn");
+      const wrap = el("compareWrap");
+      const vwrap = el("accurateVideoWrap");
+      const video = el("accurateVideo");
+      const vhint = el("accurateVideoHint");
 
       if (!payload.src) {
-        status.textContent = "Pick a file first (go back to Jobs).";
+        status.textContent = "Pick a file first.";
         return;
       }
 
-      // If a request is already running, treat click as cancel
-      if (btn.dataset.busy === "1") {
-        status.textContent = "Canceling accurate preview…";
+      if (button.dataset.busy === "1") {
+        status.textContent = "Canceling accurate preview...";
         cancelPreviewOnServer();
-        btn.dataset.busy = "0";
-        btn.textContent = "Preview (Accurate)";
-        btn.disabled = false;
+        setPreviewBusy("genAccurateBtn", false, "Accurate Preview", "Cancel Accurate Preview");
         vwrap.style.display = "none";
         video.removeAttribute("src");
         video.load();
         return;
       }
 
-      // Give this request a preview_id so server-side cancel can find it
-      if (!payload.preview_id) payload.preview_id = (crypto.randomUUID ? crypto.randomUUID() : String(Date.now()));
-      // Keep the global previewId in sync so Cancel works
-      previewId = payload.preview_id;
-      try { sessionStorage.setItem(PREVIEW_ID_KEY, previewId); } catch (e) {}
-
-      // UI -> busy
-      btn.dataset.busy = "1";
-      btn.textContent = "Cancel Accurate Preview";
-      btn.disabled = false;
-
-      status.textContent = "Generating accurate preview clip… (HandBrake short encode)";
+      payload.preview_id = previewId;
+      setPreviewBusy("genAccurateBtn", true, "Accurate Preview", "Cancel Accurate Preview");
+      status.textContent = "Generating accurate preview...";
       vwrap.style.display = "none";
       video.removeAttribute("src");
       video.load();
 
-      // cancel any previous server preview before starting a new one
       cancelPreviewOnServer();
-
       imgFetchController = new AbortController();
 
-      let res, data;
       try {
-        res = await fetchWithTimeout("/wizard_preview_accurate", {
+        const res = await fetchWithTimeout("/wizard_preview_accurate", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
           signal: imgFetchController.signal
         }, 195000);
+        const data = await readJson(res);
+        if (!res.ok || data.error) throw new Error(data.error || "Accurate preview failed");
 
-        data = await res.json();
+        el("imgOld").src = "data:image/jpeg;base64," + data.old_b64;
+        el("imgNew").src = "data:image/jpeg;base64," + data.new_b64;
+        wrap.style.display = "";
+        applyWipe(0.5);
+
+        if (data.clip_url) {
+          video.src = data.clip_url;
+          vwrap.style.display = "";
+          const secs = data.preview_seconds ? `${data.preview_seconds}s` : "";
+          const ts = data.t_seconds != null ? `at ${fmtSeconds(data.t_seconds)}` : "";
+          vhint.textContent = `${secs} ${ts} | ${data.encoder_label || data.encoder || "encoder"}`;
+        }
+
+        status.textContent = "Accurate preview ready.";
       } catch (e) {
-        status.textContent = "Accurate preview canceled / unreachable / timed out.";
-        btn.dataset.busy = "0";
-        btn.textContent = "Preview (Accurate)";
-        btn.disabled = false;
-        return;
+        status.textContent = e.message || "Accurate preview failed";
+      } finally {
+        imgFetchController = null;
+        setPreviewBusy("genAccurateBtn", false, "Accurate Preview", "Cancel Accurate Preview");
       }
-
-      // UI reset
-      btn.dataset.busy = "0";
-      btn.textContent = "Preview (Accurate)";
-      btn.disabled = false;
-
-      if (!res.ok || data.error) {
-        status.textContent = "Accurate preview error: " + (data.error || ("HTTP " + res.status));
-        return;
-      }
-
-      // Update compare images too (so the slider still works)
-      const imgOld = document.getElementById("imgOld");
-      const imgNew = document.getElementById("imgNew");
-      imgOld.src = "data:image/jpeg;base64," + data.old_b64;
-      imgNew.src = "data:image/jpeg;base64," + data.new_b64;
-      wrap.style.display = "block";
-      applyWipe(0.5);
-
-      // Show video clip
-      if (data.clip_url) {
-        video.src = data.clip_url;
-        vwrap.style.display = "block";
-        const secs = data.preview_seconds ? `${data.preview_seconds}s` : "";
-        const ts = data.t_seconds != null ? `@ ~${fmtSeconds(data.t_seconds)}` : "";
-        vhint.textContent = `Clip ${secs} ${ts} using preset “${data.preset || "auto"}”`;
-      }
-
-      status.textContent = `Accurate preview ready (drag the white bar; play the clip below)`;
     }
 
-
-    // -----------------------------
-    // Queue
-    // -----------------------------
     async function queueWizard() {
       const payload = currentPayload();
-      if (!payload.src) return alert("No file selected.");
+      if (!payload.src) {
+        window.alert("No file selected.");
+        return;
+      }
 
-      const statusEl = document.getElementById("queueStatus");
-      statusEl.textContent = "Queuing…";
+      setStatus("queueStatus", "Queuing...");
 
-      let res;
       try {
-        res = await fetchWithTimeout("/encode_wizard", {
+        const res = await fetchWithTimeout("/encode_wizard", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload)
         }, 15000);
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(data.error || "Queue failed");
+        setStatus("queueStatus", `Queued ${data.job_id || ""}`, "ok");
+        setTimeout(() => setStatus("queueStatus", ""), 3500);
       } catch (e) {
-        statusEl.textContent = "Error";
-        alert("Queue failed: server unreachable or timed out.");
-        return;
+        setStatus("queueStatus", "Error", "error");
+        window.alert(e.message || "Queue failed.");
       }
-
-      if (!res.ok) {
-        statusEl.textContent = "Error";
-        alert(await res.text());
-        return;
-      }
-
-      statusEl.textContent = "Queued!";
-      setTimeout(() => statusEl.textContent = "", 2500);
     }
 
-    // -----------------------------
-    // Events
-    // -----------------------------
-    ["preset","sizeValue","sizeUnit","quality","allowDownscale","force4k"].forEach(id => {
-      document.getElementById(id).addEventListener("change", schedulePreview);
-      document.getElementById(id).addEventListener("input", schedulePreview);
-    });
+    function wireEvents() {
+      controlIds.forEach((id) => {
+        const node = el(id);
+        node.addEventListener("change", schedulePreview);
+        node.addEventListener("input", schedulePreview);
+      });
 
-    document.getElementById("queueBtn").onclick = queueWizard;
-    document.getElementById("genFastBtn").onclick = refreshPreviewImages;
-    document.getElementById("genAccurateBtn").onclick = refreshAccuratePreview;
+      el("videoCodec").addEventListener("change", updateControlStates);
+      el("audioMode").addEventListener("change", updateControlStates);
+      el("framerateMode").addEventListener("change", updateControlStates);
+      el("savedPresetSelect").addEventListener("change", updatePresetActionState);
+      el("loadPresetBtn").addEventListener("click", loadSelectedWizardPreset);
+      el("newPresetBtn").addEventListener("click", newWizardPresetDraft);
+      el("useLastFileBtn").addEventListener("click", useLastWizardFile);
+      el("savePresetBtn").addEventListener("click", saveWizardPreset);
+      el("deletePresetBtn").addEventListener("click", deleteWizardPreset);
+      el("queueBtn").addEventListener("click", queueWizard);
+      el("genFastBtn").addEventListener("click", refreshPreviewImages);
+      el("genAccurateBtn").addEventListener("click", refreshAccuratePreview);
 
-    // Initial: ONLY text preview
-    schedulePreview();
+      const wrap = el("compareWrap");
+      wrap.addEventListener("pointerdown", startDrag);
+      wrap.addEventListener("pointermove", moveDrag);
+      window.addEventListener("pointerup", endDrag);
+      el("handle").addEventListener("keydown", (e) => {
+        if (e.key === "ArrowLeft") {
+          e.preventDefault();
+          applyWipe(pos01 - 0.03);
+        }
+        if (e.key === "ArrowRight") {
+          e.preventDefault();
+          applyWipe(pos01 + 0.03);
+        }
+      });
+
+      window.addEventListener("pagehide", cancelPreviewOnServer);
+      window.addEventListener("beforeunload", cancelPreviewOnServer);
+    }
+
+    function initFromQuery() {
+      const srcQ = qs("src") || qs("file") || qs("path") || qs("source");
+      const presetQ = qs("preset") || qs("preset_mode");
+      const handoff = readWizardHandoff();
+
+      if (srcQ) {
+        el("src").value = srcQ;
+        if (presetQ) el("preset").value = presetQ;
+        rememberWizardHandoff(srcQ, presetQ || el("preset").value);
+        safeRemoveStorage(wizardSessionStorage, "hbwiz_handoff");
+        setStatus("sourceStatus", "Loaded from Jobs.", "ok");
+      } else if (handoff && handoff.src) {
+        el("src").value = handoff.src;
+        if (handoff.preset) el("preset").value = handoff.preset;
+        setStatus("sourceStatus", "Recovered the last file from Jobs.", "ok");
+      } else {
+        showNoSourceState();
+      }
+
+      updateSelectedFileLabel();
+    }
+
+    function startWizardPage() {
+      wireEvents();
+      initFromQuery();
+      updateControlStates();
+      loadWizardPresets();
+      schedulePreview();
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", startWizardPage);
+    } else {
+      startWizardPage();
+    }
   </script>
-
 </body>
 </html>

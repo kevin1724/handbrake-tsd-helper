@@ -27,6 +27,8 @@ def create_app():
         Flask app instance
     """
     app = Flask(__name__)
+    app.config["TEMPLATES_AUTO_RELOAD"] = True
+    app.jinja_env.auto_reload = True
 
     # 1️⃣ Load preset configuration into memory
     load_preset_config()
