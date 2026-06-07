@@ -716,8 +716,20 @@ WIZARD_FRAMERATE_MODES = {"same", "pfr", "cfr"}
 WIZARD_FRAMERATES = {"23.976", "24", "25", "29.97", "30", "50", "59.94", "60"}
 WIZARD_DEINTERLACE_MODES = {"off", "decomb", "yadif"}
 WIZARD_CROP_MODES = {"auto", "none"}
+WIZARD_AI_GOALS = {"balanced", "quality", "speed", "small", "archive"}
+WIZARD_AI_HARDWARE = {"auto", "software", "qsv"}
+WIZARD_AI_TRACK_SCOPES = {"first", "all"}
+WIZARD_AI_SUBTITLE_SCOPES = {"none", "first", "all"}
 
 WIZARD_DEFAULT_OPTIONS = {
+    "ai_mode": False,
+    "ai_goal": "balanced",
+    "ai_hardware": "auto",
+    "ai_copy_audio": False,
+    "ai_audio_scope": "first",
+    "ai_subtitle_scope": "none",
+    "audio_languages": [],
+    "subtitle_languages": [],
     "preset": "auto",
     "target_size_value": 5.0,
     "target_size_unit": "GB",
@@ -752,6 +764,77 @@ def _truthy(value, default: bool = False) -> bool:
     if isinstance(value, (int, float)):
         return bool(value)
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+WIZARD_LANGUAGE_ALIASES = {
+    "en": "eng",
+    "english": "eng",
+    "eng": "eng",
+    "ja": "jpn",
+    "jp": "jpn",
+    "japanese": "jpn",
+    "jpn": "jpn",
+    "es": "spa",
+    "spanish": "spa",
+    "spa": "spa",
+    "fr": "fre",
+    "french": "fre",
+    "fre": "fre",
+    "fra": "fre",
+    "de": "ger",
+    "german": "ger",
+    "ger": "ger",
+    "deu": "ger",
+    "it": "ita",
+    "italian": "ita",
+    "ita": "ita",
+    "pt": "por",
+    "portuguese": "por",
+    "por": "por",
+    "ko": "kor",
+    "korean": "kor",
+    "kor": "kor",
+    "zh": "chi",
+    "chinese": "chi",
+    "chi": "chi",
+    "zho": "chi",
+    "nl": "dut",
+    "dutch": "dut",
+    "dut": "dut",
+    "nld": "dut",
+    "ru": "rus",
+    "russian": "rus",
+    "rus": "rus",
+    "pl": "pol",
+    "polish": "pol",
+    "pol": "pol",
+    "und": "und",
+    "unknown": "und",
+}
+
+
+def _wizard_languages(value) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, (list, tuple)):
+        raw = " ".join(str(v) for v in value)
+    else:
+        raw = str(value)
+
+    out = []
+    seen = set()
+    for part in re.split(r"[,;/\s]+", raw.strip().lower()):
+        if not part:
+            continue
+        token = WIZARD_LANGUAGE_ALIASES.get(part, part)
+        token = re.sub(r"[^a-z0-9]", "", token)[:3]
+        if len(token) != 3 or token in seen:
+            continue
+        seen.add(token)
+        out.append(token)
+        if len(out) >= 12:
+            break
+    return out
 
 
 def _wizard_encoder_label(encoder_name: str) -> str:
@@ -814,6 +897,104 @@ def _scale_to_height(width: int, height: int, target_height: int) -> tuple[int, 
     return max(2, out_w), max(2, out_h)
 
 
+def _wizard_likely_qsv(cpu_label: str) -> bool:
+    label = (cpu_label or "").lower()
+    if "intel" not in label:
+        return False
+    return "no igpu" not in label and "kf" not in label
+
+
+def _wizard_ai_choices(options: dict, cpu, cpu_override: float, src_w: int, src_h: int, duration_sec: float) -> tuple[dict, list[str]]:
+    if not options.get("ai_mode"):
+        return options, []
+
+    out = options.copy()
+    goal = out["ai_goal"]
+    hw = out["ai_hardware"]
+    cpu_score = max(0.1, float(getattr(cpu, "speed_index", 1.0)) * float(cpu_override or 1.0))
+    qsv_ok = hw == "qsv" or (hw == "auto" and _wizard_likely_qsv(getattr(cpu, "label", "")))
+    weak_cpu = cpu_score < 0.75
+    strong_cpu = cpu_score >= 1.35
+    very_strong_cpu = cpu_score >= 2.0
+    is_4k = src_h >= 1800 or src_w >= 3200
+    notes = []
+
+    if hw == "software":
+        out["encoder_family"] = "software"
+    elif hw == "qsv":
+        out["encoder_family"] = "qsv"
+    elif goal == "speed" and qsv_ok:
+        out["encoder_family"] = "qsv"
+    elif weak_cpu and qsv_ok:
+        out["encoder_family"] = "qsv"
+    else:
+        out["encoder_family"] = "software"
+
+    if goal == "speed":
+        out["quality"] = "small"
+        out["video_codec"] = "h265" if out["encoder_family"] == "qsv" else ("h264" if weak_cpu else "h265")
+        out["encoder_speed"] = "fast"
+        out["resolution_mode"] = "1080" if is_4k and weak_cpu else "auto"
+        notes.append("speed-first choices")
+    elif goal == "small":
+        out["quality"] = "small"
+        out["video_codec"] = "h265"
+        out["encoder_speed"] = "slow" if out["encoder_family"] == "software" and strong_cpu else "medium"
+        out["resolution_mode"] = "auto"
+        notes.append("smaller-file choices")
+    elif goal == "quality":
+        out["quality"] = "high"
+        out["video_codec"] = "h265"
+        out["encoder_speed"] = "slow" if out["encoder_family"] == "software" and strong_cpu else "medium"
+        out["resolution_mode"] = "keep" if (not is_4k or very_strong_cpu) else "auto"
+        notes.append("quality-first choices")
+    elif goal == "archive":
+        out["quality"] = "balanced"
+        out["video_codec"] = "h265"
+        out["encoder_speed"] = "slow" if out["encoder_family"] == "software" and very_strong_cpu else "medium"
+        out["resolution_mode"] = "auto"
+        notes.append("archive choices")
+    else:
+        out["quality"] = "balanced"
+        out["video_codec"] = "h265"
+        out["encoder_speed"] = "medium" if out["encoder_family"] == "software" else "auto"
+        out["resolution_mode"] = "auto"
+        notes.append("balanced choices")
+
+    out["bit_depth"] = "8" if out["video_codec"] == "h264" else "10"
+    out["two_pass"] = (
+        out["encoder_family"] == "software"
+        and goal in {"quality", "small", "archive"}
+        and cpu_score >= 1.0
+        and duration_sec <= 4 * 60 * 60
+    )
+
+    out["audio_mode"] = "copy" if out["ai_copy_audio"] else "aac"
+    if out["audio_mode"] == "copy":
+        out["audio_bitrate"] = "auto"
+        notes.append("audio copy")
+    elif goal == "quality":
+        out["audio_bitrate"] = "256"
+    elif goal in {"small", "speed"}:
+        out["audio_bitrate"] = "160"
+    else:
+        out["audio_bitrate"] = "192"
+
+    out["audio_tracks"] = out["ai_audio_scope"] if out["audio_languages"] else "first"
+    out["subtitle_mode"] = out["ai_subtitle_scope"] if out["subtitle_languages"] else "none"
+    out["framerate_mode"] = "same"
+    out["deinterlace"] = "off"
+    out["crop_mode"] = "auto"
+
+    notes.append(f"CPU profile {getattr(cpu, 'label', 'default')} at x{cpu_score:.2f}")
+    notes.append(f"{out['encoder_family'].upper()} {out['video_codec'].upper()} {out['encoder_speed']}")
+    if out["audio_languages"]:
+        notes.append("audio languages " + ", ".join(out["audio_languages"]))
+    if out["subtitle_languages"]:
+        notes.append("subtitle languages " + ", ".join(out["subtitle_languages"]))
+    return out, notes
+
+
 def _wizard_normalize_options(data: dict) -> dict:
     data = data or {}
     options = WIZARD_DEFAULT_OPTIONS.copy()
@@ -832,6 +1013,14 @@ def _wizard_normalize_options(data: dict) -> dict:
 
     options.update(
         {
+            "ai_mode": _truthy(data.get("ai_mode"), options["ai_mode"]),
+            "ai_goal": _choice(data.get("ai_goal"), WIZARD_AI_GOALS, options["ai_goal"]),
+            "ai_hardware": _choice(data.get("ai_hardware"), WIZARD_AI_HARDWARE, options["ai_hardware"]),
+            "ai_copy_audio": _truthy(data.get("ai_copy_audio"), options["ai_copy_audio"]),
+            "ai_audio_scope": _choice(data.get("ai_audio_scope"), WIZARD_AI_TRACK_SCOPES, options["ai_audio_scope"]),
+            "ai_subtitle_scope": _choice(data.get("ai_subtitle_scope"), WIZARD_AI_SUBTITLE_SCOPES, options["ai_subtitle_scope"]),
+            "audio_languages": _wizard_languages(data.get("audio_languages")),
+            "subtitle_languages": _wizard_languages(data.get("subtitle_languages")),
             "preset": preset,
             "target_size_value": size_value,
             "target_size_unit": unit,
@@ -924,16 +1113,30 @@ def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h
         args += ["--crop", "0:0:0:0"]
 
     if not preview:
+        audio_langs = options.get("audio_languages") or []
+        subtitle_langs = options.get("subtitle_languages") or []
+
+        if audio_langs:
+            args += ["--audio-lang-list", ",".join(audio_langs)]
+
         if options["audio_tracks"] == "all":
             args.append("--all-audio")
+        elif audio_langs:
+            args.append("--first-audio")
 
         if options["audio_mode"] == "copy":
             args += ["-E", "copy"]
         else:
             args += ["-E", "av_aac", "-B", str(_wizard_audio_kbps(options))]
 
+        if subtitle_langs:
+            args += ["--subtitle-lang-list", ",".join(subtitle_langs)]
+
         if options["subtitle_mode"] == "first":
-            args += ["--subtitle", "1"]
+            if subtitle_langs:
+                args.append("--first-subtitle")
+            else:
+                args += ["--subtitle", "1"]
         elif options["subtitle_mode"] == "all":
             args.append("--all-subtitles")
 
@@ -968,6 +1171,16 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
     if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
         raise RuntimeError("probe incomplete")
 
+    settings = load_settings()
+    cpu = get_cpu_profile(settings.get("cpu_profile"))
+    try:
+        cpu_override_f = float(settings.get("cpu_speed_override", 1.0))
+    except Exception:
+        cpu_override_f = 1.0
+    if cpu_override_f <= 0:
+        cpu_override_f = 1.0
+
+    options, ai_notes = _wizard_ai_choices(options, cpu, cpu_override_f, src_w, src_h, duration_sec)
     target_mb = _size_to_mb(options["target_size_value"], options["target_size_unit"])
     target_bytes = target_mb * 1024.0 * 1024.0
     total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
@@ -980,15 +1193,6 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
     encoder_preset = _wizard_encoder_preset(options)
     encoder_name = _wizard_encoder_name(options)
     extra_args = _wizard_build_extra_args(options, video_kbps, out_w, out_h, src_w, src_h, preview=preview)
-
-    settings = load_settings()
-    cpu = get_cpu_profile(settings.get("cpu_profile"))
-    try:
-        cpu_override_f = float(settings.get("cpu_speed_override", 1.0))
-    except Exception:
-        cpu_override_f = 1.0
-    if cpu_override_f <= 0:
-        cpu_override_f = 1.0
 
     base_est_fps = _estimate_encode_fps(out_w, out_h, encoder_preset)
     if options["encoder_family"] == "qsv":
@@ -1016,6 +1220,9 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
             "encoder": encoder_name,
             "encoder_label": _wizard_encoder_label(encoder_name),
             "encoder_preset": encoder_preset,
+            "ai_mode": bool(options.get("ai_mode")),
+            "ai_summary": "; ".join(ai_notes),
+            "ai_decisions": ai_notes,
             "eta_seconds": int(round(eta_sec)),
             "eta_human": f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m" if eta_sec >= 3600 else f"{int(eta_sec//60)}m",
             "cpu_profile": cpu.id,

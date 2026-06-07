@@ -148,6 +148,13 @@
       margin: 0;
     }
 
+    .ai-mode-band {
+      border: 1px solid rgba(0,188,212,0.24);
+      border-radius: 6px;
+      padding: 12px;
+      background: rgba(0,188,212,0.06);
+    }
+
     .primary-btn {
       font-weight: 700;
       border-color: rgba(0,188,212,0.55);
@@ -388,6 +395,68 @@
           </div>
         </div>
 
+        <div class="wizard-group ai-mode-band">
+          <h3>AI Mode</h3>
+          <div class="wizard-form-grid">
+            <label class="toggle-line">
+              <input id="aiMode" type="checkbox">
+              Use AI choices
+            </label>
+
+            <div class="wizard-field">
+              <label for="aiGoal">Goal</label>
+              <select id="aiGoal">
+                <option value="balanced" selected>Balanced</option>
+                <option value="quality">Best quality</option>
+                <option value="speed">Fastest encode</option>
+                <option value="small">Smallest file</option>
+                <option value="archive">Archive</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="aiHardware">Hardware</label>
+              <select id="aiHardware">
+                <option value="auto" selected>Auto from CPU</option>
+                <option value="software">CPU only</option>
+                <option value="qsv">Intel QSV</option>
+              </select>
+            </div>
+
+            <label class="toggle-line">
+              <input id="aiCopyAudio" type="checkbox">
+              Copy audio
+            </label>
+
+            <div class="wizard-field">
+              <label for="aiAudioScope">Audio tracks</label>
+              <select id="aiAudioScope">
+                <option value="first" selected>First matching</option>
+                <option value="all">All matching</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="audioLanguages">Audio languages</label>
+              <input id="audioLanguages" type="text" value="eng" placeholder="eng, jpn, spa">
+            </div>
+
+            <div class="wizard-field">
+              <label for="aiSubtitleScope">Subtitles</label>
+              <select id="aiSubtitleScope">
+                <option value="none" selected>None</option>
+                <option value="first">First matching</option>
+                <option value="all">All matching</option>
+              </select>
+            </div>
+
+            <div class="wizard-field">
+              <label for="subtitleLanguages">Subtitle languages</label>
+              <input id="subtitleLanguages" type="text" value="eng" placeholder="eng, jpn, spa">
+            </div>
+          </div>
+        </div>
+
         <div class="wizard-group">
           <h3>Target</h3>
           <div class="wizard-form-grid">
@@ -595,6 +664,10 @@
             <strong id="metricEncoder">-</strong>
           </div>
           <div class="metric-row">
+            <span>AI choice</span>
+            <strong id="metricAi">-</strong>
+          </div>
+          <div class="metric-row">
             <span>ETA</span>
             <strong id="metricEta">-</strong>
           </div>
@@ -638,6 +711,14 @@
 
   <script>
     const defaultOptions = {
+      ai_mode: false,
+      ai_goal: "balanced",
+      ai_hardware: "auto",
+      ai_copy_audio: false,
+      ai_audio_scope: "first",
+      ai_subtitle_scope: "none",
+      audio_languages: ["eng"],
+      subtitle_languages: ["eng"],
       preset: "auto",
       target_size_value: 5,
       target_size_unit: "GB",
@@ -659,6 +740,14 @@
     };
 
     const controlIds = [
+      "aiMode",
+      "aiGoal",
+      "aiHardware",
+      "aiCopyAudio",
+      "aiAudioScope",
+      "audioLanguages",
+      "aiSubtitleScope",
+      "subtitleLanguages",
       "preset",
       "sizeValue",
       "sizeUnit",
@@ -841,6 +930,11 @@
       return `${Math.round(n)} kbps`;
     }
 
+    function languagesForInput(value) {
+      if (Array.isArray(value)) return value.join(", ");
+      return value == null ? "" : String(value);
+    }
+
     function qualityText(estimates) {
       const map = {
         good: "Good",
@@ -854,14 +948,27 @@
     }
 
     function buildRecipeName(payload) {
+      if (payload.ai_mode) {
+        const goal = String(payload.ai_goal || "balanced").replace(/^\w/, (c) => c.toUpperCase());
+        return `AI ${goal} ${payload.target_size_value}${payload.target_size_unit}`;
+      }
       const codec = payload.video_codec === "h264" ? "H.264" : "H.265";
       const encoder = payload.encoder_family === "qsv" ? "QSV" : "CPU";
       return `${codec} ${encoder} ${payload.target_size_value}${payload.target_size_unit}`;
     }
 
     function currentPayload() {
+      const aiEnabled = el("aiMode").checked;
       return {
         src: el("src").value,
+        ai_mode: aiEnabled,
+        ai_goal: el("aiGoal").value,
+        ai_hardware: el("aiHardware").value,
+        ai_copy_audio: el("aiCopyAudio").checked,
+        ai_audio_scope: el("aiAudioScope").value,
+        ai_subtitle_scope: el("aiSubtitleScope").value,
+        audio_languages: aiEnabled ? el("audioLanguages").value : "",
+        subtitle_languages: aiEnabled ? el("subtitleLanguages").value : "",
         preset: el("preset").value,
         target_size_value: Number(el("sizeValue").value || defaultOptions.target_size_value),
         target_size_unit: el("sizeUnit").value,
@@ -892,6 +999,14 @@
 
     function applyWizardOptions(options = {}) {
       const o = { ...defaultOptions, ...options };
+      setChecked("aiMode", o.ai_mode);
+      setValue("aiGoal", o.ai_goal);
+      setValue("aiHardware", o.ai_hardware);
+      setChecked("aiCopyAudio", o.ai_copy_audio);
+      setValue("aiAudioScope", o.ai_audio_scope);
+      setValue("aiSubtitleScope", o.ai_subtitle_scope);
+      setValue("audioLanguages", languagesForInput(o.audio_languages));
+      setValue("subtitleLanguages", languagesForInput(o.subtitle_languages));
       setValue("preset", o.preset);
       setValue("sizeValue", o.target_size_value);
       setValue("sizeUnit", o.target_size_unit);
@@ -921,6 +1036,32 @@
     }
 
     function updateControlStates() {
+      const isAi = el("aiMode").checked;
+      [
+        "quality",
+        "resolutionMode",
+        "videoCodec",
+        "encoderFamily",
+        "bitDepth",
+        "encoderSpeed",
+        "audioMode",
+        "audioBitrate",
+        "audioTracks",
+        "subtitleMode",
+        "framerateMode",
+        "framerate",
+        "deinterlace",
+        "cropMode",
+        "twoPass"
+      ].forEach((id) => {
+        const node = el(id);
+        if (node) node.disabled = isAi;
+      });
+
+      if (isAi) {
+        return;
+      }
+
       const isH264 = el("videoCodec").value === "h264";
       if (isH264) el("bitDepth").value = "8";
       el("bitDepth").disabled = isH264;
@@ -1058,6 +1199,7 @@
       el("metricQuality").textContent = "-";
       el("metricOutput").textContent = "-";
       el("metricEncoder").textContent = "-";
+      el("metricAi").textContent = "-";
       el("metricEta").textContent = "-";
       el("decisionNote").textContent = "";
       el("argsPreview").textContent = "-";
@@ -1087,8 +1229,9 @@
       el("metricQuality").textContent = qualityText(e);
       el("metricOutput").textContent = `${output.width || "-"}x${output.height || "-"} (${e.decision || "keep"})`;
       el("metricEncoder").textContent = `${e.encoder_label || e.encoder || "-"}${e.encoder_preset ? ` / ${e.encoder_preset}` : ""}`;
+      el("metricAi").textContent = e.ai_mode ? (e.ai_summary || "AI mode active") : "Manual";
       el("metricEta").textContent = `${e.eta_human || "-"}${e.est_fps ? ` at about ${e.est_fps} fps` : ""}`;
-      el("decisionNote").textContent = e.decision_note || "Keeping the selected resolution plan.";
+      el("decisionNote").textContent = [e.decision_note, e.ai_summary].filter(Boolean).join(" ");
       el("argsPreview").textContent = args.length ? args.join(" ") : "-";
     }
 
