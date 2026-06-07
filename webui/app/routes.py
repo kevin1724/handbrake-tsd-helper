@@ -725,12 +725,13 @@ WIZARD_DEFAULT_OPTIONS = {
     "ai_mode": False,
     "ai_goal": "balanced",
     "ai_hardware": "auto",
-    "ai_copy_audio": False,
-    "ai_audio_scope": "first",
-    "ai_subtitle_scope": "none",
-    "audio_languages": [],
-    "subtitle_languages": [],
+    "ai_copy_audio": True,
+    "ai_audio_scope": "all",
+    "ai_subtitle_scope": "all",
+    "audio_languages": ["eng", "spa"],
+    "subtitle_languages": ["eng", "spa"],
     "preset": "auto",
+    "target_size_auto": True,
     "target_size_value": 5.0,
     "target_size_unit": "GB",
     "quality": "balanced",
@@ -739,16 +740,28 @@ WIZARD_DEFAULT_OPTIONS = {
     "bit_depth": "10",
     "encoder_speed": "auto",
     "resolution_mode": "auto",
-    "audio_mode": "auto",
+    "audio_mode": "copy",
     "audio_bitrate": "auto",
-    "audio_tracks": "first",
-    "subtitle_mode": "none",
+    "audio_tracks": "all",
+    "subtitle_mode": "all",
     "framerate_mode": "same",
     "framerate": "23.976",
     "deinterlace": "off",
     "crop_mode": "auto",
     "two_pass": False,
 }
+
+WIZARD_SOURCE_TARGETS = {
+    "movie": {"label": "Movie", "target_size_value": 5.0, "target_size_unit": "GB", "target_mb": 5120.0},
+    "show": {"label": "Show", "target_size_value": 800.0, "target_size_unit": "MB", "target_mb": 800.0},
+}
+
+WIZARD_SHOW_PATTERNS = [
+    re.compile(r"(?:^|[ ._\-\[\(])s\d{1,2}e\d{1,3}(?:\D|$)", re.IGNORECASE),
+    re.compile(r"(?:^|[ ._\-\[\(])\d{1,2}x\d{1,3}(?:\D|$)", re.IGNORECASE),
+    re.compile(r"(?:^|[ ._\-\[\(])season[ ._\-]*\d+", re.IGNORECASE),
+    re.compile(r"(?:^|[ ._\-\[\(])episode[ ._\-]*\d+", re.IGNORECASE),
+]
 
 
 def _choice(value, allowed: set[str], default: str) -> str:
@@ -834,6 +847,58 @@ def _wizard_languages(value) -> list[str]:
         out.append(token)
         if len(out) >= 12:
             break
+    return out
+
+
+def _wizard_source_target(kind: str) -> dict:
+    target = WIZARD_SOURCE_TARGETS.get(kind) or WIZARD_SOURCE_TARGETS["movie"]
+    return {
+        "label": target["label"],
+        "target_size_value": target["target_size_value"],
+        "target_size_unit": target["target_size_unit"],
+        "target_mb": target["target_mb"],
+    }
+
+
+def _wizard_detect_source_type(src_path: str, duration_sec: float | None = None) -> dict:
+    base = os.path.basename(src_path or "")
+    lower_base = base.lower()
+    lower_path = (src_path or "").replace("\\", "/").lower()
+    path_parts = [part for part in re.split(r"[\\/]+", lower_path) if part]
+
+    for pattern in WIZARD_SHOW_PATTERNS:
+        if pattern.search(lower_base):
+            target = _wizard_source_target("show")
+            return {"kind": "show", "reason": "episode filename pattern", **target}
+
+    if any(part in {"tv", "tv shows", "shows", "show", "series", "seasons"} for part in path_parts):
+        target = _wizard_source_target("show")
+        return {"kind": "show", "reason": "show folder path", **target}
+
+    if any(part in {"movie", "movies", "film", "films"} for part in path_parts):
+        target = _wizard_source_target("movie")
+        return {"kind": "movie", "reason": "movie folder path", **target}
+
+    try:
+        duration = float(duration_sec or 0.0)
+    except Exception:
+        duration = 0.0
+
+    if 0 < duration <= 75 * 60:
+        target = _wizard_source_target("show")
+        return {"kind": "show", "reason": "runtime under 75 minutes", **target}
+
+    target = _wizard_source_target("movie")
+    reason = "runtime over 75 minutes" if duration > 0 else "default"
+    return {"kind": "movie", "reason": reason, **target}
+
+
+def _wizard_apply_source_target(options: dict, source_type: dict) -> dict:
+    if not options.get("target_size_auto"):
+        return options
+    out = options.copy()
+    out["target_size_value"] = source_type["target_size_value"]
+    out["target_size_unit"] = source_type["target_size_unit"]
     return out
 
 
@@ -998,6 +1063,8 @@ def _wizard_ai_choices(options: dict, cpu, cpu_override: float, src_w: int, src_
 def _wizard_normalize_options(data: dict) -> dict:
     data = data or {}
     options = WIZARD_DEFAULT_OPTIONS.copy()
+    audio_language_value = data["audio_languages"] if "audio_languages" in data else options["audio_languages"]
+    subtitle_language_value = data["subtitle_languages"] if "subtitle_languages" in data else options["subtitle_languages"]
 
     preset = _choice(data.get("preset"), {"1080", "4k", "auto"}, options["preset"])
     unit = str(data.get("target_size_unit") or options["target_size_unit"]).strip().upper()
@@ -1019,9 +1086,10 @@ def _wizard_normalize_options(data: dict) -> dict:
             "ai_copy_audio": _truthy(data.get("ai_copy_audio"), options["ai_copy_audio"]),
             "ai_audio_scope": _choice(data.get("ai_audio_scope"), WIZARD_AI_TRACK_SCOPES, options["ai_audio_scope"]),
             "ai_subtitle_scope": _choice(data.get("ai_subtitle_scope"), WIZARD_AI_SUBTITLE_SCOPES, options["ai_subtitle_scope"]),
-            "audio_languages": _wizard_languages(data.get("audio_languages")),
-            "subtitle_languages": _wizard_languages(data.get("subtitle_languages")),
+            "audio_languages": _wizard_languages(audio_language_value),
+            "subtitle_languages": _wizard_languages(subtitle_language_value),
             "preset": preset,
+            "target_size_auto": _truthy(data.get("target_size_auto"), options["target_size_auto"]),
             "target_size_value": size_value,
             "target_size_unit": unit,
             "quality": _choice(data.get("quality"), WIZARD_QUALITIES, options["quality"]),
@@ -1140,6 +1208,9 @@ def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h
         elif options["subtitle_mode"] == "all":
             args.append("--all-subtitles")
 
+        if options["subtitle_mode"] != "none":
+            args.append("--subtitle-burned=none")
+
         if options["two_pass"] and options["encoder_family"] == "software":
             args.append("--two-pass")
 
@@ -1163,13 +1234,22 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
     if effective_preset == "auto":
         effective_preset = guess_preset_from_filename(base)
 
-    info = probe_func(src)
+    info = dict(probe_func(src) or {})
+    source_size_bytes = int(os.path.getsize(src))
+    info["source_size_bytes"] = source_size_bytes
+    info["source_size_mb"] = round(source_size_bytes / (1024.0 * 1024.0), 2)
     duration_sec = float(info.get("duration_sec") or 0.0)
     src_w = int(info.get("width") or 0)
     src_h = int(info.get("height") or 0)
     fps = float(info.get("fps") or 0.0) or 24.0
     if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
         raise RuntimeError("probe incomplete")
+
+    source_type = _wizard_detect_source_type(src, duration_sec)
+    options = _wizard_apply_source_target(options, source_type)
+    info["source_type"] = source_type["kind"]
+    info["source_type_label"] = source_type["label"]
+    info["source_type_reason"] = source_type["reason"]
 
     settings = load_settings()
     cpu = get_cpu_profile(settings.get("cpu_profile"))
@@ -1223,6 +1303,8 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
             "ai_mode": bool(options.get("ai_mode")),
             "ai_summary": "; ".join(ai_notes),
             "ai_decisions": ai_notes,
+            "source_type": source_type,
+            "target_size_auto": bool(options.get("target_size_auto")),
             "eta_seconds": int(round(eta_sec)),
             "eta_human": f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m" if eta_sec >= 3600 else f"{int(eta_sec//60)}m",
             "cpu_profile": cpu.id,
@@ -1238,7 +1320,10 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
 
 
 def _wizard_public_options(options: dict) -> dict:
-    return _wizard_normalize_options(options)
+    normalized = _wizard_normalize_options(options)
+    if isinstance(options, dict) and "target_size_auto" not in options and "target_size_value" in options:
+        normalized["target_size_auto"] = False
+    return normalized
 
 
 def _load_wizard_presets() -> list[dict]:

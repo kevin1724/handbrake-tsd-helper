@@ -424,35 +424,35 @@
             </div>
 
             <label class="toggle-line">
-              <input id="aiCopyAudio" type="checkbox">
+              <input id="aiCopyAudio" type="checkbox" checked>
               Copy audio
             </label>
 
             <div class="wizard-field">
               <label for="aiAudioScope">Audio tracks</label>
               <select id="aiAudioScope">
-                <option value="first" selected>First matching</option>
-                <option value="all">All matching</option>
+                <option value="first">First matching</option>
+                <option value="all" selected>All matching</option>
               </select>
             </div>
 
             <div class="wizard-field">
               <label for="audioLanguages">Audio languages</label>
-              <input id="audioLanguages" type="text" value="eng" placeholder="eng, jpn, spa">
+              <input id="audioLanguages" type="text" value="eng, spa" placeholder="eng, spa, jpn">
             </div>
 
             <div class="wizard-field">
               <label for="aiSubtitleScope">Subtitles</label>
               <select id="aiSubtitleScope">
-                <option value="none" selected>None</option>
+                <option value="none">None</option>
                 <option value="first">First matching</option>
-                <option value="all">All matching</option>
+                <option value="all" selected>All matching</option>
               </select>
             </div>
 
             <div class="wizard-field">
               <label for="subtitleLanguages">Subtitle languages</label>
-              <input id="subtitleLanguages" type="text" value="eng" placeholder="eng, jpn, spa">
+              <input id="subtitleLanguages" type="text" value="eng, spa" placeholder="eng, spa, jpn">
             </div>
           </div>
         </div>
@@ -478,6 +478,11 @@
                   <option value="MB">MB</option>
                 </select>
               </div>
+              <label class="toggle-line">
+                <input id="targetSizeAuto" type="checkbox" checked>
+                Auto size by movie/show
+              </label>
+              <div id="targetSizeHint" class="small status-text"></div>
             </div>
 
             <div class="wizard-field">
@@ -571,9 +576,9 @@
             <div class="wizard-field">
               <label for="audioMode">Audio</label>
               <select id="audioMode">
-                <option value="auto" selected>AAC auto</option>
+                <option value="auto">AAC auto</option>
                 <option value="aac">AAC custom bitrate</option>
-                <option value="copy">Copy source audio</option>
+                <option value="copy" selected>Copy source audio</option>
               </select>
             </div>
 
@@ -591,17 +596,17 @@
             <div class="wizard-field">
               <label for="audioTracks">Audio tracks</label>
               <select id="audioTracks">
-                <option value="first" selected>First track</option>
-                <option value="all">All tracks</option>
+                <option value="first">First track</option>
+                <option value="all" selected>All tracks</option>
               </select>
             </div>
 
             <div class="wizard-field">
               <label for="subtitleMode">Subtitles</label>
               <select id="subtitleMode">
-                <option value="none" selected>None</option>
+                <option value="none">None</option>
                 <option value="first">First track</option>
-                <option value="all">All tracks</option>
+                <option value="all" selected>All tracks</option>
               </select>
             </div>
 
@@ -639,6 +644,14 @@
         <div id="previewBox" class="small">Waiting for a selected file.</div>
 
         <div class="metric-list" aria-live="polite">
+          <div class="metric-row">
+            <span>Current size</span>
+            <strong id="metricSourceSize">-</strong>
+          </div>
+          <div class="metric-row">
+            <span>Detected type</span>
+            <strong id="metricSourceType">-</strong>
+          </div>
           <div class="metric-row">
             <span>Target</span>
             <strong id="metricTarget">-</strong>
@@ -714,12 +727,13 @@
       ai_mode: false,
       ai_goal: "balanced",
       ai_hardware: "auto",
-      ai_copy_audio: false,
-      ai_audio_scope: "first",
-      ai_subtitle_scope: "none",
-      audio_languages: ["eng"],
-      subtitle_languages: ["eng"],
+      ai_copy_audio: true,
+      ai_audio_scope: "all",
+      ai_subtitle_scope: "all",
+      audio_languages: ["eng", "spa"],
+      subtitle_languages: ["eng", "spa"],
       preset: "auto",
+      target_size_auto: true,
       target_size_value: 5,
       target_size_unit: "GB",
       quality: "balanced",
@@ -728,10 +742,10 @@
       bit_depth: "10",
       encoder_speed: "auto",
       resolution_mode: "auto",
-      audio_mode: "auto",
+      audio_mode: "copy",
       audio_bitrate: "auto",
-      audio_tracks: "first",
-      subtitle_mode: "none",
+      audio_tracks: "all",
+      subtitle_mode: "all",
       framerate_mode: "same",
       framerate: "23.976",
       deinterlace: "off",
@@ -749,6 +763,7 @@
       "aiSubtitleScope",
       "subtitleLanguages",
       "preset",
+      "targetSizeAuto",
       "sizeValue",
       "sizeUnit",
       "quality",
@@ -776,6 +791,16 @@
     let imgFetchController = null;
     let isDragging = false;
     let pos01 = 0.5;
+    const sourceTypeTargets = {
+      movie: { kind: "movie", label: "Movie", target_size_value: 5, target_size_unit: "GB", target_mb: 5120, reason: "default" },
+      show: { kind: "show", label: "Show", target_size_value: 800, target_size_unit: "MB", target_mb: 800, reason: "episode filename pattern" }
+    };
+    const showNamePatterns = [
+      /(?:^|[ ._\-\[\(])s\d{1,2}e\d{1,3}(?:\D|$)/i,
+      /(?:^|[ ._\-\[\(])\d{1,2}x\d{1,3}(?:\D|$)/i,
+      /(?:^|[ ._\-\[\(])season[ ._\-]*\d+/i,
+      /(?:^|[ ._\-\[\(])episode[ ._\-]*\d+/i
+    ];
 
     function el(id) {
       return document.getElementById(id);
@@ -924,6 +949,81 @@
       return `${Math.round(value)} MB`;
     }
 
+    function fmtBytes(bytes) {
+      const value = Number(bytes || 0);
+      if (!Number.isFinite(value) || value <= 0) return "-";
+      const gb = value / (1024 ** 3);
+      if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 1 : 2)} GB`;
+      const mb = value / (1024 ** 2);
+      if (mb >= 1) return `${mb.toFixed(mb >= 10 ? 1 : 2)} MB`;
+      const kb = value / 1024;
+      if (kb >= 1) return `${kb.toFixed(1)} KB`;
+      return `${Math.round(value)} B`;
+    }
+
+    function cloneSourceProfile(kind, reason = "") {
+      const base = sourceTypeTargets[kind] || sourceTypeTargets.movie;
+      return { ...base, reason: reason || base.reason };
+    }
+
+    function detectSourceProfile(path) {
+      const raw = String(path || "");
+      const base = basename(raw).toLowerCase();
+      const parts = raw.replace(/\\/g, "/").toLowerCase().split("/").filter(Boolean);
+
+      if (showNamePatterns.some((pattern) => pattern.test(base))) {
+        return cloneSourceProfile("show", "episode filename pattern");
+      }
+      if (parts.some((part) => ["tv", "tv shows", "shows", "show", "series", "seasons"].includes(part))) {
+        return cloneSourceProfile("show", "show folder path");
+      }
+      if (parts.some((part) => ["movie", "movies", "film", "films"].includes(part))) {
+        return cloneSourceProfile("movie", "movie folder path");
+      }
+      return cloneSourceProfile("movie", "default");
+    }
+
+    function sourceProfileFromPlan(data, fallbackPath) {
+      const estimates = data?.estimates || {};
+      const profile = estimates.source_type || {};
+      const kind = profile.kind === "show" ? "show" : (profile.kind === "movie" ? "movie" : "");
+      if (!kind) return detectSourceProfile(fallbackPath);
+      return {
+        ...cloneSourceProfile(kind, profile.reason),
+        label: profile.label || sourceTypeTargets[kind].label,
+        target_size_value: profile.target_size_value || sourceTypeTargets[kind].target_size_value,
+        target_size_unit: profile.target_size_unit || sourceTypeTargets[kind].target_size_unit,
+        target_mb: profile.target_mb || sourceTypeTargets[kind].target_mb
+      };
+    }
+
+    function sourceProfileText(profile) {
+      if (!profile) return "-";
+      const target = fmtMb(profile.target_mb);
+      return `${profile.label || "Movie"} (${target})`;
+    }
+
+    function updateTargetSizeHint(profile = null) {
+      const node = el("targetSizeHint");
+      if (!node) return;
+      if (!el("targetSizeAuto").checked) {
+        node.textContent = "Custom target";
+        return;
+      }
+      const chosen = profile || detectSourceProfile(el("src").value);
+      node.textContent = `Auto: ${sourceProfileText(chosen)}`;
+    }
+
+    function applyAutoTargetForSource(path, profile = null) {
+      const chosen = profile || detectSourceProfile(path);
+      if (el("targetSizeAuto").checked) {
+        setValue("sizeValue", chosen.target_size_value);
+        setValue("sizeUnit", chosen.target_size_unit);
+      }
+      updateTargetSizeHint(chosen);
+      return chosen;
+    }
+
     function fmtKbps(value) {
       const n = Number(value || 0);
       if (n >= 1000) return `${(n / 1000).toFixed(2)} Mbps`;
@@ -967,9 +1067,10 @@
         ai_copy_audio: el("aiCopyAudio").checked,
         ai_audio_scope: el("aiAudioScope").value,
         ai_subtitle_scope: el("aiSubtitleScope").value,
-        audio_languages: aiEnabled ? el("audioLanguages").value : "",
-        subtitle_languages: aiEnabled ? el("subtitleLanguages").value : "",
+        audio_languages: el("audioLanguages").value,
+        subtitle_languages: el("subtitleLanguages").value,
         preset: el("preset").value,
+        target_size_auto: el("targetSizeAuto").checked,
         target_size_value: Number(el("sizeValue").value || defaultOptions.target_size_value),
         target_size_unit: el("sizeUnit").value,
         quality: el("quality").value,
@@ -1008,6 +1109,7 @@
       setValue("audioLanguages", languagesForInput(o.audio_languages));
       setValue("subtitleLanguages", languagesForInput(o.subtitle_languages));
       setValue("preset", o.preset);
+      setChecked("targetSizeAuto", o.target_size_auto !== false);
       setValue("sizeValue", o.target_size_value);
       setValue("sizeUnit", o.target_size_unit);
       setValue("quality", o.quality);
@@ -1025,6 +1127,11 @@
       setValue("deinterlace", o.deinterlace);
       setValue("cropMode", o.crop_mode);
       setChecked("twoPass", o.two_pass);
+      if (el("targetSizeAuto").checked && el("src").value) {
+        applyAutoTargetForSource(el("src").value);
+      } else {
+        updateTargetSizeHint();
+      }
       updateControlStates();
       schedulePreview();
     }
@@ -1055,8 +1162,13 @@
         "twoPass"
       ].forEach((id) => {
         const node = el(id);
-        if (node) node.disabled = isAi;
+      if (node) node.disabled = isAi;
       });
+
+      const autoTarget = el("targetSizeAuto").checked;
+      el("sizeValue").disabled = autoTarget;
+      el("sizeUnit").disabled = autoTarget;
+      updateTargetSizeHint();
 
       if (isAi) {
         return;
@@ -1135,6 +1247,7 @@
 
       el("src").value = handoff.src;
       if (handoff.preset) el("preset").value = handoff.preset;
+      applyAutoTargetForSource(handoff.src);
       updateSelectedFileLabel();
       setStatus("sourceStatus", "Loaded last file from Jobs.", "ok");
       schedulePreview();
@@ -1193,6 +1306,8 @@
 
     function resetPlan(message) {
       el("previewBox").textContent = message || "Waiting for a selected file.";
+      el("metricSourceSize").textContent = "-";
+      el("metricSourceType").textContent = "-";
       el("metricTarget").textContent = "-";
       el("metricVideoBitrate").textContent = "-";
       el("metricAudioBitrate").textContent = "-";
@@ -1203,6 +1318,7 @@
       el("metricEta").textContent = "-";
       el("decisionNote").textContent = "";
       el("argsPreview").textContent = "-";
+      updateTargetSizeHint();
     }
 
     function showNoSourceState() {
@@ -1220,9 +1336,19 @@
       const output = e.output_resolution || {};
       const inputs = data.inputs || {};
       const args = Array.isArray(data.suggested_extra_args) ? data.suggested_extra_args : [];
-      const sourceLine = `${basename(payload.src)} | ${fmtSeconds(p.duration_sec)} | ${p.width || "-"}x${p.height || "-"} @ ${Number(p.fps || 0).toFixed(2)} fps`;
+      const sourceSize = fmtBytes(p.source_size_bytes);
+      const sourceProfile = sourceProfileFromPlan(data, payload.src);
+      const sourceLine = `${basename(payload.src)} | ${sourceSize} | ${fmtSeconds(p.duration_sec)} | ${p.width || "-"}x${p.height || "-"} @ ${Number(p.fps || 0).toFixed(2)} fps`;
+
+      if (e.target_size_auto) {
+        applyAutoTargetForSource(payload.src, sourceProfile);
+      } else {
+        updateTargetSizeHint(sourceProfile);
+      }
 
       el("previewBox").textContent = sourceLine;
+      el("metricSourceSize").textContent = sourceSize;
+      el("metricSourceType").textContent = sourceProfileText(sourceProfile);
       el("metricTarget").textContent = fmtMb(inputs.target_mb);
       el("metricVideoBitrate").textContent = fmtKbps(e.video_bitrate_kbps);
       el("metricAudioBitrate").textContent = fmtKbps(e.audio_bitrate_kbps);
@@ -1484,6 +1610,15 @@
       el("videoCodec").addEventListener("change", updateControlStates);
       el("audioMode").addEventListener("change", updateControlStates);
       el("framerateMode").addEventListener("change", updateControlStates);
+      el("targetSizeAuto").addEventListener("change", () => {
+        applyAutoTargetForSource(el("src").value);
+        updateControlStates();
+        schedulePreview();
+      });
+      ["sizeValue", "sizeUnit"].forEach((id) => {
+        el(id).addEventListener("input", () => updateTargetSizeHint());
+        el(id).addEventListener("change", () => updateTargetSizeHint());
+      });
       el("savedPresetSelect").addEventListener("change", updatePresetActionState);
       el("loadPresetBtn").addEventListener("click", loadSelectedWizardPreset);
       el("newPresetBtn").addEventListener("click", newWizardPresetDraft);
@@ -1521,12 +1656,14 @@
       if (srcQ) {
         el("src").value = srcQ;
         if (presetQ) el("preset").value = presetQ;
+        applyAutoTargetForSource(srcQ);
         rememberWizardHandoff(srcQ, presetQ || el("preset").value);
         safeRemoveStorage(wizardSessionStorage, "hbwiz_handoff");
         setStatus("sourceStatus", "Loaded from Jobs.", "ok");
       } else if (handoff && handoff.src) {
         el("src").value = handoff.src;
         if (handoff.preset) el("preset").value = handoff.preset;
+        applyAutoTargetForSource(handoff.src);
         setStatus("sourceStatus", "Recovered the last file from Jobs.", "ok");
       } else {
         showNoSourceState();
