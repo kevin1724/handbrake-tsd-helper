@@ -74,6 +74,66 @@ button {
   background: rgba(255, 255, 255, 0.03);
 }
 
+.history-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.history-limit-control {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clear-confirm-controls {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.clear-confirm-controls[hidden] {
+  display: none;
+}
+
+.history-table-pane {
+  margin-top: 10px;
+  overflow: auto;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: var(--bg-alt);
+}
+
+.history-table-pane .simple-table {
+  border: 0;
+  background: transparent;
+}
+
+.history-table-pane .simple-table th,
+.history-table-pane .simple-table td {
+  height: 34px;
+  box-sizing: border-box;
+  white-space: nowrap;
+}
+
+.history-table-pane .simple-table thead th {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: #222;
+}
+
+.history-file-cell,
+.history-message-cell {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.history-file-cell {
+  min-width: 260px;
+}
+
 button.danger {
   background: #6b0000;
   color: #fff;

@@ -1,0 +1,58 @@
+{
+  "PresetList": [
+    {
+      "PresetName": "Plex-AV1-4K-CFR-CRF24-Preset4-ENG-SPA",
+      "PresetDescription": "AV1 (SVT-AV1 10-bit) 4K preset, CRF 24, preset 4 for better quality, optimized for Plex",
+      "Type": 1,
+      "Default": false,
+      "FileFormat": "av_mkv",
+      "Optimize": false,
+      "ChapterMarkers": true,
+      "MetadataPassthru": true,
+      "AudioCopyMask": [
+        "copy:aac",
+        "copy:ac3",
+        "copy:eac3",
+        "copy:truehd",
+        "copy:dts",
+        "copy:dtshd",
+        "copy:mp2",
+        "copy:mp3",
+        "copy:flac"
+      ],
+      "AudioEncoderFallback": "av_aac",
+      "AudioTrackSelectionBehavior": "all",
+      "AudioLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "AudioList": [
+        {
+          "AudioEncoder": "copy"
+        }
+      ],
+      "VideoEncoder": "svt_av1_10bit",
+      "VideoProfile": "main",
+      "VideoLevel": "auto",
+      "VideoPreset": "4",
+      "VideoTune": "ssim",
+      "VideoQualityType": 2,
+      "VideoQualitySlider": 24,
+      "VideoMultiPass": true,
+      "VideoFramerateMode": "cfr",
+      "VideoFramerate": "auto",
+      "PictureWidth": 0,
+      "PictureHeight": 0,
+      "PictureKeepRatio": true,
+      "PictureAllowUpscaling": false,
+      "SubtitleTrackSelectionBehavior": "selected",
+      "SubtitleLanguageList": [
+        "eng",
+        "spa"
+      ]
+    }
+  ],
+  "VersionMajor": 59,
+  "VersionMinor": 0,
+  "VersionMicro": 0
+}

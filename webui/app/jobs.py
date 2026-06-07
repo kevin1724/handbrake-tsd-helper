@@ -563,6 +563,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     base = os.path.basename(src_path)
     name, ext = os.path.splitext(base)
     out_path = os.path.join(d, f"{name}-{suffix}{ext}")
+    out_path_existed_before = os.path.exists(out_path)
     job["out_path"] = out_path
 
     log_event(
@@ -728,12 +729,38 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             )
 
     if job.get("status") == "error":
+        deleted_failed_output = False
+
+        if out_path and not out_path_existed_before:
+            try:
+                if os.path.isfile(out_path):
+                    os.remove(out_path)
+                    deleted_failed_output = True
+            except Exception as e:
+                log_event(
+                    "job_cleanup_error",
+                    f"Failed to delete failed output: {os.path.basename(out_path)} ({e})",
+                    level="warn",
+                    job_id=job_id,
+                    src=src_path,
+                    extra={
+                        "out_path": out_path,
+                    },
+                )
+
+        msg = f"Error: {os.path.basename(src_path)} (exit {ret})"
+        if deleted_failed_output:
+            msg += " - deleted failed output"
         log_event(
             "job_error",
-            f"Error: {os.path.basename(src_path)} (exit {ret})",
+            msg,
             level="error",
             job_id=job_id,
             src=src_path,
+            extra={
+                "out_path": out_path,
+                "deleted_failed_output": deleted_failed_output,
+            },
         )
 
     if job.get("status") == "canceled":
@@ -1195,5 +1222,4 @@ def clear_queued_jobs() -> int:
 
     save_jobs()
     return removed
-
 

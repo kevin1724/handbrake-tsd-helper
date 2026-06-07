@@ -128,13 +128,27 @@
     <h2>Events</h2>
     <p class="small">Recent activity (queue, encodes, errors, etc.).</p>
 
-    <div class="row">
+    <div class="row history-toolbar">
       <button id="refreshEventsBtn">Refresh</button>
       <button id="clearEventsBtn" class="danger">Clear</button>
+      <span id="clearEventsConfirm" class="clear-confirm-controls" hidden>
+        <span class="small">Are you sure?</span>
+        <button id="confirmClearEventsBtn" class="danger">Yes, clear</button>
+        <button id="cancelClearEventsBtn">Cancel</button>
+      </span>
+      <label class="history-limit-control" for="eventsVisibleRowsSelect">
+        Rows
+        <select id="eventsVisibleRowsSelect">
+          <option value="10" selected>10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
       <span id="eventsStatus" class="small"></span>
     </div>
 
-    <div class="row" style="margin-top:10px; overflow-x:auto;">
+    <div id="eventsTablePane" class="row history-table-pane">
       <table class="simple-table" style="width:100%; min-width:720px;">
         <thead>
           <tr>
@@ -165,13 +179,27 @@
       <span id="storageTotalCount" class="small">…</span>
     </div>
 
-    <div class="row" style="margin-top:10px;">
+    <div class="row history-toolbar" style="margin-top:10px;">
       <button id="refreshStorageBtn">Refresh</button>
       <button id="clearStorageBtn" class="danger">Clear</button>
+      <span id="clearStorageConfirm" class="clear-confirm-controls" hidden>
+        <span class="small">Are you sure?</span>
+        <button id="confirmClearStorageBtn" class="danger">Yes, clear</button>
+        <button id="cancelClearStorageBtn">Cancel</button>
+      </span>
+      <label class="history-limit-control" for="storageVisibleRowsSelect">
+        Rows
+        <select id="storageVisibleRowsSelect">
+          <option value="10" selected>10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
       <span id="storageStatus" class="small"></span>
     </div>
 
-    <div class="row" style="margin-top:10px; overflow-x:auto;">
+    <div id="storageTablePane" class="row history-table-pane">
       <table class="simple-table" style="width:100%; min-width:780px;">
         <thead>
           <tr>
@@ -454,13 +482,52 @@
       return (n / (1024 ** 3)).toFixed(3);
     }
 
+    const HISTORY_FETCH_LIMIT = 200;
+    const HISTORY_VISIBLE_ROW_OPTIONS = [10, 25, 50, 100];
+    const HISTORY_HEADER_PX = 38;
+    const HISTORY_ROW_PX = 34;
+
+    function getHistoryVisibleRows(selectId) {
+      const select = document.getElementById(selectId);
+      const value = parseInt(select?.value || "10", 10);
+      return HISTORY_VISIBLE_ROW_OPTIONS.includes(value) ? value : 10;
+    }
+
+    function resizeHistoryPane(paneId, selectId) {
+      const pane = document.getElementById(paneId);
+      if (!pane) return;
+
+      const visibleRows = getHistoryVisibleRows(selectId);
+      pane.style.maxHeight = `${HISTORY_HEADER_PX + (visibleRows * HISTORY_ROW_PX)}px`;
+    }
+
+    function appendTextCell(tr, text, className = "") {
+      const td = document.createElement("td");
+      td.textContent = text == null ? "" : String(text);
+      if (className) td.className = className;
+      tr.appendChild(td);
+      return td;
+    }
+
+    function showClearConfirm(confirmId, statusId) {
+      const confirm = document.getElementById(confirmId);
+      const status = document.getElementById(statusId);
+      if (confirm) confirm.hidden = false;
+      if (status) status.textContent = "";
+    }
+
+    function hideClearConfirm(confirmId) {
+      const confirm = document.getElementById(confirmId);
+      if (confirm) confirm.hidden = true;
+    }
+
     async function loadEvents() {
       const tbody = document.getElementById("eventsTbody");
       const status = document.getElementById("eventsStatus");
       if (!tbody) return;
       try {
         if (status) status.textContent = "Loading…";
-        const res = await fetch("/api/events?limit=200");
+        const res = await fetch("/api/events?limit=" + HISTORY_FETCH_LIMIT);
         if (!res.ok) throw new Error("HTTP " + res.status);
         const data = await res.json();
         const events = Array.isArray(data.events) ? data.events : [];
@@ -472,11 +539,10 @@
           events.forEach(ev => {
             const tr = document.createElement("tr");
             const level = (ev.level || "").toUpperCase();
-            tr.innerHTML =
-              `<td>${fmtTs(ev.ts)}</td>` +
-              `<td>${level}</td>` +
-              `<td>${ev.type || ""}</td>` +
-              `<td>${ev.message || ""}</td>`;
+            appendTextCell(tr, fmtTs(ev.ts));
+            appendTextCell(tr, level);
+            appendTextCell(tr, ev.type || "");
+            appendTextCell(tr, ev.message || "", "history-message-cell");
             tbody.appendChild(tr);
           });
         }
@@ -492,6 +558,7 @@
 
     async function clearEventsUI() {
       const status = document.getElementById("eventsStatus");
+      hideClearConfirm("clearEventsConfirm");
       try {
         if (status) status.textContent = "Clearing…";
         const res = await fetch("/api/events/clear", { method: "POST" });
@@ -523,7 +590,7 @@
         if (totalSaved) totalSaved.textContent = `${summary.saved_gb || 0} GB`;
         if (totalCount) totalCount.textContent = `${summary.count || 0}`;
 
-        const rRes = await fetch("/api/storage_stats?limit=200");
+        const rRes = await fetch("/api/storage_stats?limit=" + HISTORY_FETCH_LIMIT);
         if (!rRes.ok) throw new Error("HTTP " + rRes.status);
         const rData = await rRes.json();
         const rows = Array.isArray(rData.encodes) ? rData.encodes : [];
@@ -536,12 +603,11 @@
             rows.forEach(r => {
               const tr = document.createElement("tr");
               const file = (r.src || "").split("/").pop();
-              tr.innerHTML =
-                `<td>${fmtTs(r.ts)}</td>` +
-                `<td>${file || r.src || ""}</td>` +
-                `<td>${fmtGB(r.src_bytes)}</td>` +
-                `<td>${fmtGB(r.out_bytes)}</td>` +
-                `<td>${fmtGB(r.saved_bytes)}</td>`;
+              appendTextCell(tr, fmtTs(r.ts));
+              appendTextCell(tr, file || r.src || "", "history-file-cell");
+              appendTextCell(tr, fmtGB(r.src_bytes));
+              appendTextCell(tr, fmtGB(r.out_bytes));
+              appendTextCell(tr, fmtGB(r.saved_bytes));
               tbody.appendChild(tr);
             });
           }
@@ -556,6 +622,7 @@
 
     async function clearStorageUI() {
       const status = document.getElementById("storageStatus");
+      hideClearConfirm("clearStorageConfirm");
       try {
         if (status) status.textContent = "Clearing…";
         const res = await fetch("/api/storage_stats/clear", { method: "POST" });
@@ -579,6 +646,8 @@
       loadPresetConfigUI();
 
       // Events + Storage
+      resizeHistoryPane("eventsTablePane", "eventsVisibleRowsSelect");
+      resizeHistoryPane("storageTablePane", "storageVisibleRowsSelect");
       loadEvents();
       loadStorage();
 
@@ -598,12 +667,28 @@
       const refreshEventsBtn = document.getElementById("refreshEventsBtn");
       if (refreshEventsBtn) refreshEventsBtn.onclick = loadEvents;
       const clearEventsBtn = document.getElementById("clearEventsBtn");
-      if (clearEventsBtn) clearEventsBtn.onclick = clearEventsUI;
+      if (clearEventsBtn) clearEventsBtn.onclick = () => showClearConfirm("clearEventsConfirm", "eventsStatus");
+      const confirmClearEventsBtn = document.getElementById("confirmClearEventsBtn");
+      if (confirmClearEventsBtn) confirmClearEventsBtn.onclick = clearEventsUI;
+      const cancelClearEventsBtn = document.getElementById("cancelClearEventsBtn");
+      if (cancelClearEventsBtn) cancelClearEventsBtn.onclick = () => hideClearConfirm("clearEventsConfirm");
+      const eventsVisibleRowsSelect = document.getElementById("eventsVisibleRowsSelect");
+      if (eventsVisibleRowsSelect) {
+        eventsVisibleRowsSelect.onchange = () => resizeHistoryPane("eventsTablePane", "eventsVisibleRowsSelect");
+      }
 
       const refreshStorageBtn = document.getElementById("refreshStorageBtn");
       if (refreshStorageBtn) refreshStorageBtn.onclick = loadStorage;
       const clearStorageBtn = document.getElementById("clearStorageBtn");
-      if (clearStorageBtn) clearStorageBtn.onclick = clearStorageUI;
+      if (clearStorageBtn) clearStorageBtn.onclick = () => showClearConfirm("clearStorageConfirm", "storageStatus");
+      const confirmClearStorageBtn = document.getElementById("confirmClearStorageBtn");
+      if (confirmClearStorageBtn) confirmClearStorageBtn.onclick = clearStorageUI;
+      const cancelClearStorageBtn = document.getElementById("cancelClearStorageBtn");
+      if (cancelClearStorageBtn) cancelClearStorageBtn.onclick = () => hideClearConfirm("clearStorageConfirm");
+      const storageVisibleRowsSelect = document.getElementById("storageVisibleRowsSelect");
+      if (storageVisibleRowsSelect) {
+        storageVisibleRowsSelect.onchange = () => resizeHistoryPane("storageTablePane", "storageVisibleRowsSelect");
+      }
     });
   </script>
 </body>
