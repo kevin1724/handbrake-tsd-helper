@@ -10,8 +10,9 @@ Settings are stored as JSON on disk in settings.json.
 """
 
 import json
+import os
 
-from .config import DATA_DIR
+from .config import DATA_DIR, ROOTS
 from .cpu_profiles import CPU_PROFILES  # NEW
 
 # Where settings are stored on disk (inside /app/data by default)
@@ -30,6 +31,17 @@ DEFAULT_SETTINGS = {
     # buttons = classic button controls
     # drag_drop = grab rows and reorder visually
     "queue_ui_mode": "buttons",
+
+    # Poster metadata for the beta library page.
+    # TMDb is free for non-commercial use with attribution; blank disables lookups.
+    "tmdb_api_key": "",
+    "tmdb_bearer_token": "",
+
+    # Beta page folder mapping. These narrow Beta scans to the folders users care about.
+    "beta_media_folders": {
+        "movies": [],
+        "shows": [],
+    },
 }
 
 _settings_cache: dict | None = None
@@ -39,6 +51,67 @@ def _ensure_dict(obj) -> dict:
     if isinstance(obj, dict):
         return obj
     return {}
+
+
+def _path_is_under_allowed_root(path: str) -> bool:
+    if not path:
+        return False
+    try:
+        real = os.path.realpath(path)
+        for root_path, _label in ROOTS:
+            root_real = os.path.realpath(root_path)
+            try:
+                if os.path.commonpath([real, root_real]) == root_real:
+                    return True
+            except ValueError:
+                continue
+    except Exception:
+        return False
+    return False
+
+
+def _normalize_beta_folder_rows(rows, default_label: str) -> list[dict]:
+    out = []
+    seen = set()
+    if not isinstance(rows, list):
+        return out
+
+    for row in rows:
+        if isinstance(row, str):
+            path = row
+            label = ""
+        elif isinstance(row, dict):
+            path = row.get("path") or ""
+            label = row.get("label") or ""
+        else:
+            continue
+
+        path = str(path or "").strip()
+        if not path or not _path_is_under_allowed_root(path):
+            continue
+
+        real_key = os.path.normcase(os.path.realpath(path))
+        if real_key in seen:
+            continue
+        seen.add(real_key)
+
+        label = str(label or "").strip()
+        if not label:
+            label = os.path.basename(path.rstrip("/\\")) or default_label
+
+        out.append({"path": path, "label": label[:80]})
+        if len(out) >= 50:
+            break
+
+    return out
+
+
+def _normalize_beta_media_folders(value) -> dict:
+    value = _ensure_dict(value)
+    return {
+        "movies": _normalize_beta_folder_rows(value.get("movies"), "Movies"),
+        "shows": _normalize_beta_folder_rows(value.get("shows"), "Shows"),
+    }
 
 
 def load_settings() -> dict:
@@ -59,6 +132,7 @@ def load_settings() -> dict:
     data = _ensure_dict(data)
     merged = DEFAULT_SETTINGS.copy()
     merged.update(data)
+    merged["beta_media_folders"] = _normalize_beta_media_folders(merged.get("beta_media_folders"))
     _settings_cache = merged
     return merged
 
@@ -125,6 +199,22 @@ def save_settings(new_values: dict) -> dict:
     if queue_ui_mode not in {"buttons", "drag_drop"}:
         queue_ui_mode = "buttons"
     base["queue_ui_mode"] = queue_ui_mode
+
+    # ------------------------------------------------------------------
+    # Poster metadata credentials
+    # ------------------------------------------------------------------
+    for key in ("tmdb_api_key", "tmdb_bearer_token"):
+        value = new_values.get(key, base.get(key, ""))
+        base[key] = str(value or "").strip()
+
+    # ------------------------------------------------------------------
+    # Beta media folder mapping
+    # ------------------------------------------------------------------
+    beta_media_folders = new_values.get(
+        "beta_media_folders",
+        base.get("beta_media_folders", DEFAULT_SETTINGS["beta_media_folders"]),
+    )
+    base["beta_media_folders"] = _normalize_beta_media_folders(beta_media_folders)
 
     # ------------------------------------------------------------------
     # Persist

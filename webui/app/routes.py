@@ -39,6 +39,9 @@ import tempfile
 import uuid
 import signal
 import time
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 
 from flask import (
@@ -860,7 +863,7 @@ def _wizard_source_target(kind: str) -> dict:
     }
 
 
-def _wizard_detect_source_type(src_path: str, duration_sec: float | None = None) -> dict:
+def _wizard_detect_source_type(src_path: str, duration_sec=None) -> dict:
     base = os.path.basename(src_path or "")
     lower_base = base.lower()
     lower_path = (src_path or "").replace("\\", "/").lower()
@@ -1372,6 +1375,437 @@ def _clean_wizard_preset_name(name: str) -> str:
     return value[:80]
 
 
+BETA_SCAN_LIMIT = 800
+BETA_LIBRARY_CACHE_FILE = os.path.join(DATA_DIR, "beta_library_cache.json")
+BETA_POSTER_CACHE: dict[tuple, dict] = {}
+BETA_MEDIA_TAG_RE = re.compile(
+    r"\b(480p|576p|720p|1080p|2160p|4320p|4k|8k|uhd|hdr|hdr10|dv|"
+    r"bluray|blu-ray|brrip|webrip|web-dl|webdl|hdtv|remux|proper|repack|"
+    r"x264|x265|h264|h265|hevc|av1|aac|ac3|eac3|dts|truehd|atmos|"
+    r"extended|unrated|directors?\.?cut|theatrical)\b",
+    re.IGNORECASE,
+)
+
+
+def _beta_mapped_roots(settings=None) -> list[dict]:
+    settings = settings or load_settings()
+    folders = settings.get("beta_media_folders") or {}
+    out = []
+    seen = set()
+
+    for kind, prefix in (("movies", "Movies"), ("shows", "Shows")):
+        rows = folders.get(kind) if isinstance(folders, dict) else []
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            path = str(row.get("path") or "").strip()
+            if not path:
+                continue
+            key = os.path.normcase(os.path.realpath(path))
+            if key in seen:
+                continue
+            seen.add(key)
+            label = str(row.get("label") or "").strip() or os.path.basename(path.rstrip("/\\")) or prefix
+            out.append({"path": path, "label": f"{prefix}: {label}", "kind": kind})
+
+    return out
+
+
+def _beta_roots_payload(settings=None) -> list[dict]:
+    return _beta_mapped_roots(settings)
+
+
+def _beta_root_is_mapped(root_path: str, settings=None) -> bool:
+    target = os.path.normcase(os.path.realpath(root_path or ""))
+    return any(os.path.normcase(os.path.realpath(row["path"])) == target for row in _beta_mapped_roots(settings))
+
+
+def _beta_empty_library(settings=None) -> dict:
+    settings = settings or {}
+    return {
+        "scope": "empty",
+        "root": "",
+        "roots": [],
+        "recursive": True,
+        "limit": BETA_SCAN_LIMIT,
+        "generated_at": 0,
+        "stats": {
+            "movies": 0,
+            "shows": 0,
+            "episodes": 0,
+            "scanned": 0,
+            "skipped_tsd": 0,
+            "limited": False,
+        },
+        "tmdb_configured": bool(_beta_tmdb_config(settings)),
+        "movies": [],
+        "shows": [],
+    }
+
+
+def _beta_load_library_cache(settings=None) -> dict:
+    settings = settings or {}
+    try:
+        with open(BETA_LIBRARY_CACHE_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return _beta_empty_library(settings)
+    except Exception as e:
+        print(f"[WARN] Failed to load beta library cache: {e}", flush=True)
+        return _beta_empty_library(settings)
+
+    if not isinstance(data, dict):
+        return _beta_empty_library(settings)
+
+    data.setdefault("movies", [])
+    data.setdefault("shows", [])
+    data.setdefault("stats", {})
+    data["tmdb_configured"] = bool(_beta_tmdb_config(settings))
+    return data
+
+
+def _beta_save_library_cache(data: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(BETA_LIBRARY_CACHE_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def _beta_clean_title(value: str) -> str:
+    text = os.path.splitext(os.path.basename(value or ""))[0]
+    text = re.sub(r"[-_.]+", " ", text)
+    text = re.sub(r"\bTSD\b$", " ", text, flags=re.IGNORECASE)
+    text = BETA_MEDIA_TAG_RE.sub(" ", text)
+    text = re.sub(r"[\[\]\(\)\{\}]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip(" -._")
+    return text or "Unknown Title"
+
+
+def _beta_title_from_path(src_path: str, title_part: str, media_type: str) -> str:
+    if title_part and len(title_part.strip()) >= 2:
+        return _beta_clean_title(title_part)
+
+    parent = os.path.basename(os.path.dirname(src_path))
+    grandparent = os.path.basename(os.path.dirname(os.path.dirname(src_path)))
+    parent_l = parent.lower()
+
+    if media_type == "show":
+        if re.search(r"season\s*\d+|^s\d+$", parent_l, re.IGNORECASE) and grandparent:
+            return _beta_clean_title(grandparent)
+        if parent:
+            return _beta_clean_title(parent)
+
+    return _beta_clean_title(os.path.basename(src_path))
+
+
+def _beta_parse_media(src_path: str) -> dict:
+    filename = os.path.basename(src_path)
+    name_only, _ext = os.path.splitext(filename)
+    source_type = _wizard_detect_source_type(src_path)
+    media_type = "show" if source_type["kind"] == "show" else "movie"
+
+    season = episode = None
+    title_part = name_only
+    show_match = re.search(r"(?i)(?:^|[ ._\-\[\(])s(\d{1,2})e(\d{1,3})(?:\D|$)", name_only)
+    if not show_match:
+        show_match = re.search(r"(?i)(?:^|[ ._\-\[\(])(\d{1,2})x(\d{1,3})(?:\D|$)", name_only)
+    if show_match:
+        media_type = "show"
+        season = int(show_match.group(1))
+        episode = int(show_match.group(2))
+        title_part = name_only[: show_match.start()]
+
+    year = None
+    year_match = re.search(r"(?:^|[ ._\-\[\(])((?:19|20)\d{2})(?:\D|$)", name_only)
+    if year_match:
+        year = int(year_match.group(1))
+        if media_type == "movie":
+            title_part = name_only[: year_match.start()]
+
+    title = _beta_title_from_path(src_path, title_part, media_type)
+    try:
+        size_bytes = int(os.path.getsize(src_path))
+    except Exception:
+        size_bytes = 0
+
+    return {
+        "id": uuid.uuid5(uuid.NAMESPACE_URL, src_path).hex,
+        "type": media_type,
+        "title": title,
+        "year": year,
+        "season": season,
+        "episode": episode,
+        "filename": filename,
+        "path": src_path,
+        "folder": os.path.dirname(src_path),
+        "size_bytes": size_bytes,
+        "detected_reason": source_type.get("reason") or "filename",
+        "target": _wizard_source_target("show" if media_type == "show" else "movie"),
+    }
+
+
+def _beta_tmdb_config(settings: dict):
+    bearer = str(settings.get("tmdb_bearer_token") or "").strip()
+    api_key = str(settings.get("tmdb_api_key") or "").strip()
+    if bearer:
+        return {"Authorization": f"Bearer {bearer}"}, {}
+    if api_key:
+        return {}, {"api_key": api_key}
+    return None
+
+
+def _beta_tmdb_search(media_type: str, title: str, year=None, settings=None) -> dict:
+    settings = settings or {}
+    auth = _beta_tmdb_config(settings)
+    if not auth or not title:
+        return {"configured": bool(auth), "poster_url": "", "source": "placeholder"}
+
+    cache_key = (media_type, title.lower(), str(year or ""), bool(settings.get("tmdb_bearer_token")))
+    cached = BETA_POSTER_CACHE.get(cache_key)
+    if cached:
+        return cached.copy()
+
+    headers, extra_params = auth
+    endpoint = "tv" if media_type == "show" else "movie"
+    params = {
+        "query": title,
+        "include_adult": "false",
+        "language": "en-US",
+        "page": "1",
+        **extra_params,
+    }
+    if year:
+        params["first_air_date_year" if media_type == "show" else "year"] = str(year)
+
+    url = f"https://api.themoviedb.org/3/search/{endpoint}?{urlencode(params)}"
+    req = Request(url, headers={"accept": "application/json", **headers})
+    try:
+        with urlopen(req, timeout=8) as res:
+            payload = json.loads(res.read().decode("utf-8", errors="replace"))
+    except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
+        result = {"configured": True, "poster_url": "", "source": "tmdb_error", "error": str(e)[:180]}
+        BETA_POSTER_CACHE[cache_key] = result
+        return result.copy()
+
+    rows = payload.get("results") if isinstance(payload, dict) else []
+    rows = rows if isinstance(rows, list) else []
+    best = next((row for row in rows if row.get("poster_path")), rows[0] if rows else None)
+    if not isinstance(best, dict):
+        result = {"configured": True, "poster_url": "", "source": "tmdb_empty"}
+        BETA_POSTER_CACHE[cache_key] = result
+        return result.copy()
+
+    poster_path = best.get("poster_path") or ""
+    poster_url = f"https://image.tmdb.org/t/p/w342{poster_path}" if poster_path else ""
+    result = {
+        "configured": True,
+        "poster_url": poster_url,
+        "source": "tmdb" if poster_url else "tmdb_no_poster",
+        "tmdb_id": best.get("id"),
+        "tmdb_title": best.get("name") or best.get("title") or "",
+        "tmdb_year": (best.get("first_air_date") or best.get("release_date") or "")[:4],
+    }
+    BETA_POSTER_CACHE[cache_key] = result
+    return result.copy()
+
+
+def _beta_scan_library(root_path: str, *, recursive: bool, limit: int, posters: bool, settings: dict, root_kind: str = "") -> dict:
+    movies = []
+    shows = {}
+    scanned = 0
+    skipped_tsd = 0
+
+    walker = os.walk(root_path) if recursive else [(root_path, [], os.listdir(root_path))]
+    for root_dir, _dirs, names in walker:
+        for name in sorted(names):
+            if not name.lower().endswith(VIDEO_EXTS):
+                continue
+            full = os.path.join(root_dir, name)
+            if not os.path.isfile(full):
+                continue
+            if os.path.splitext(name)[0].lower().endswith("-tsd"):
+                skipped_tsd += 1
+                continue
+
+            item = _beta_parse_media(full)
+            if root_kind == "movies":
+                item["type"] = "movie"
+                item["target"] = _wizard_source_target("movie")
+            elif root_kind == "shows":
+                item["type"] = "show"
+                item["target"] = _wizard_source_target("show")
+            scanned += 1
+            if item["type"] == "show":
+                key = f"{item['title'].lower()}::{item.get('year') or ''}"
+                group = shows.setdefault(
+                    key,
+                    {
+                        "id": uuid.uuid5(uuid.NAMESPACE_DNS, key).hex,
+                        "type": "show",
+                        "title": item["title"],
+                        "year": item.get("year"),
+                        "episode_count": 0,
+                        "season_count": 0,
+                        "seasons": [],
+                        "total_size_bytes": 0,
+                        "files": [],
+                        "target": _wizard_source_target("show"),
+                    },
+                )
+                group["episode_count"] += 1
+                group["total_size_bytes"] += item["size_bytes"]
+                group["files"].append(item)
+            else:
+                movies.append(item)
+
+            if scanned >= limit:
+                break
+        if scanned >= limit:
+            break
+
+    for group in shows.values():
+        seasons = sorted({ep["season"] for ep in group["files"] if ep.get("season") is not None})
+        group["season_count"] = len(seasons)
+        group["seasons"] = seasons
+        group["files"].sort(key=lambda ep: (ep.get("season") or 0, ep.get("episode") or 0, ep["filename"].lower()))
+        if posters:
+            group.update(_beta_tmdb_search("show", group["title"], group.get("year"), settings))
+
+    if posters:
+        for item in movies:
+            item.update(_beta_tmdb_search("movie", item["title"], item.get("year"), settings))
+
+    movies.sort(key=lambda item: ((item.get("title") or "").lower(), item.get("year") or 0))
+    show_rows = sorted(shows.values(), key=lambda item: ((item.get("title") or "").lower(), item.get("year") or 0))
+
+    return {
+        "scope": "root",
+        "root": root_path,
+        "roots": [next((row for row in _beta_mapped_roots(settings) if row["path"] == root_path), {"path": root_path, "label": root_path})],
+        "recursive": recursive,
+        "limit": limit,
+        "stats": {
+            "movies": len(movies),
+            "shows": len(show_rows),
+            "episodes": sum(row["episode_count"] for row in show_rows),
+            "scanned": scanned,
+            "skipped_tsd": skipped_tsd,
+            "limited": scanned >= limit,
+        },
+        "tmdb_configured": bool(_beta_tmdb_config(settings)),
+        "movies": movies,
+        "shows": show_rows,
+    }
+
+
+def _beta_merge_show_group(groups: dict, incoming: dict) -> None:
+    key = f"{str(incoming.get('title') or '').lower()}::{incoming.get('year') or ''}"
+    group = groups.setdefault(
+        key,
+        {
+            "id": incoming.get("id") or uuid.uuid5(uuid.NAMESPACE_DNS, key).hex,
+            "type": "show",
+            "title": incoming.get("title") or "Unknown Title",
+            "year": incoming.get("year"),
+            "episode_count": 0,
+            "season_count": 0,
+            "seasons": [],
+            "total_size_bytes": 0,
+            "files": [],
+            "target": incoming.get("target") or _wizard_source_target("show"),
+        },
+    )
+
+    group["episode_count"] += int(incoming.get("episode_count") or 0)
+    group["total_size_bytes"] += int(incoming.get("total_size_bytes") or 0)
+    group["files"].extend(incoming.get("files") or [])
+
+    for key_name in ("poster_url", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error"):
+        if not group.get(key_name) and incoming.get(key_name):
+            group[key_name] = incoming.get(key_name)
+
+    seasons = sorted({ep["season"] for ep in group["files"] if ep.get("season") is not None})
+    group["season_count"] = len(seasons)
+    group["seasons"] = seasons
+    group["files"].sort(key=lambda ep: (ep.get("season") or 0, ep.get("episode") or 0, ep.get("filename", "").lower()))
+
+
+def _beta_combine_library_scans(scans: list[dict], *, recursive: bool, limit: int, settings: dict) -> dict:
+    movies = []
+    show_groups = {}
+    roots = []
+    skipped_tsd = 0
+    scanned = 0
+    limited = False
+
+    for scan in scans:
+        if not isinstance(scan, dict):
+            continue
+        roots.extend(scan.get("roots") or [])
+        movies.extend(scan.get("movies") or [])
+        for show in scan.get("shows") or []:
+            _beta_merge_show_group(show_groups, show)
+        stats = scan.get("stats") or {}
+        skipped_tsd += int(stats.get("skipped_tsd") or 0)
+        scanned += int(stats.get("scanned") or 0)
+        limited = limited or bool(stats.get("limited"))
+
+    movies.sort(key=lambda item: ((item.get("title") or "").lower(), item.get("year") or 0))
+    show_rows = sorted(show_groups.values(), key=lambda item: ((item.get("title") or "").lower(), item.get("year") or 0))
+
+    return {
+        "scope": "all",
+        "root": "__all__",
+        "roots": roots,
+        "recursive": recursive,
+        "limit": limit,
+        "stats": {
+            "movies": len(movies),
+            "shows": len(show_rows),
+            "episodes": sum(int(row.get("episode_count") or 0) for row in show_rows),
+            "scanned": scanned,
+            "skipped_tsd": skipped_tsd,
+            "limited": limited or scanned >= limit,
+        },
+        "tmdb_configured": bool(_beta_tmdb_config(settings)),
+        "movies": movies,
+        "shows": show_rows,
+    }
+
+
+def _beta_scan_all_libraries(*, recursive: bool, limit: int, posters: bool, settings: dict) -> dict:
+    scans = []
+    scanned = 0
+    for row in _beta_mapped_roots(settings):
+        root_path = row["path"]
+        if not root_path or not is_allowed_path(root_path) or not os.path.isdir(root_path):
+            continue
+        remaining = max(0, limit - scanned)
+        if remaining <= 0:
+            break
+        scan = _beta_scan_library(
+            root_path,
+            recursive=recursive,
+            limit=remaining,
+            posters=posters,
+            settings=settings,
+            root_kind=row.get("kind") or "",
+        )
+        scans.append(scan)
+        scanned += int((scan.get("stats") or {}).get("scanned") or 0)
+        if scanned >= limit:
+            break
+
+    return _beta_combine_library_scans(scans, recursive=recursive, limit=limit, settings=settings)
+
+
+def _beta_stamp_library_scan(data: dict) -> dict:
+    data = data if isinstance(data, dict) else {}
+    data["generated_at"] = time.time()
+    return data
+
+
 # -------------------------------------------------------------------
 # Side-by-side preview helpers
 # -------------------------------------------------------------------
@@ -1591,6 +2025,67 @@ def register_routes(app):
         """Render the Size Wizard page (prefill via query string)."""
         return render_template("size_wizard.html")
 
+    @app.route("/beta")
+    def beta_page():
+        """Render the experimental media organizer page."""
+        settings = load_settings()
+        return render_template(
+            "beta.html",
+            roots=_beta_roots_payload(settings),
+            tmdb_configured=bool(_beta_tmdb_config(settings)),
+        )
+
+    @app.route("/api/beta/library")
+    def beta_library_api():
+        """Scan an allowed media root and group videos into movies and shows."""
+        root = request.args.get("root") or "__all__"
+        if not root:
+            return jsonify(error="no media roots configured"), 400
+        settings = load_settings()
+        if root != "__all__":
+            if not _beta_root_is_mapped(root, settings):
+                return jsonify(error="root is not mapped for Beta scanning"), 400
+            if not is_allowed_path(root) or not os.path.isdir(root):
+                return jsonify(error="root path not allowed or not a directory"), 400
+
+        recursive = str(request.args.get("recursive", "1")).lower() not in {"0", "false", "no"}
+        posters = str(request.args.get("posters", "1")).lower() not in {"0", "false", "no"}
+        try:
+            limit = int(request.args.get("limit") or BETA_SCAN_LIMIT)
+        except ValueError:
+            limit = BETA_SCAN_LIMIT
+        limit = max(1, min(2000, limit))
+
+        try:
+            if root == "__all__":
+                data = _beta_scan_all_libraries(
+                    recursive=recursive,
+                    limit=limit,
+                    posters=posters,
+                    settings=settings,
+                )
+            else:
+                mapped_root = next((row for row in _beta_mapped_roots(settings) if row["path"] == root), {})
+                data = _beta_scan_library(
+                    root,
+                    recursive=recursive,
+                    limit=limit,
+                    posters=posters,
+                    settings=settings,
+                    root_kind=mapped_root.get("kind") or "",
+                )
+            data = _beta_stamp_library_scan(data)
+            _beta_save_library_cache(data)
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+
+        return jsonify(data)
+
+    @app.route("/api/beta/library_cache")
+    def beta_library_cache_api():
+        """Return the last saved Beta library scan without touching the filesystem tree."""
+        return jsonify(_beta_load_library_cache(load_settings()))
+
     @app.route("/api/wizard_presets", methods=["GET", "POST"])
     def wizard_presets_api():
         """List or save Size Wizard recipes."""
@@ -1657,6 +2152,8 @@ def register_routes(app):
             settings=settings,
             preset_files=preset_files,
             preset_dir=PRESET_DIR,
+            roots=_beta_roots_payload(settings),
+            allowed_roots=[{"path": path, "label": label or path} for path, label in ROOTS],
         )
 
     @app.route("/debug_config")

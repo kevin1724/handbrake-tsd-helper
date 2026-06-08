@@ -1,0 +1,600 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HandBrake TSD Helper - Beta</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <style>
+    body.beta-page {
+      min-width: 0;
+    }
+
+    .beta-shell {
+      max-width: 1480px;
+      margin: 0 auto;
+    }
+
+    .beta-toolbar {
+      display: grid;
+      grid-template-columns: minmax(260px, 1fr) repeat(3, minmax(120px, auto));
+      gap: 10px;
+      align-items: end;
+    }
+
+    .beta-field {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+      min-width: 0;
+    }
+
+    .beta-field label,
+    .beta-label {
+      font-size: 12px;
+      color: rgba(229,229,229,0.7);
+    }
+
+    .beta-field select,
+    .beta-field input[type="search"],
+    .beta-field input[type="number"] {
+      width: 100%;
+      min-height: 34px;
+    }
+
+    .beta-toggle {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      white-space: nowrap;
+      color: rgba(229,229,229,0.82);
+    }
+
+    .beta-stats {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .beta-stat {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 10px;
+      background: rgba(255,255,255,0.035);
+    }
+
+    .beta-stat span {
+      display: block;
+      font-size: 12px;
+      color: rgba(229,229,229,0.62);
+    }
+
+    .beta-stat strong {
+      display: block;
+      margin-top: 3px;
+      font-size: 20px;
+      color: #fff;
+    }
+
+    .beta-layout {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      align-items: start;
+      margin-top: 14px;
+    }
+
+    .beta-column {
+      min-width: 0;
+    }
+
+    .beta-column-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 10px;
+    }
+
+    .beta-column-header h2 {
+      margin: 0;
+    }
+
+    .beta-count {
+      color: rgba(229,229,229,0.66);
+      font-size: 12px;
+    }
+
+    .beta-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(178px, 1fr));
+      gap: 10px;
+      max-height: calc(100vh - 330px);
+      min-height: 320px;
+      overflow: auto;
+      padding-right: 4px;
+    }
+
+    .beta-card {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      background: rgba(255,255,255,0.035);
+      overflow: hidden;
+      min-width: 0;
+    }
+
+    .beta-poster {
+      position: relative;
+      width: 100%;
+      aspect-ratio: 2 / 3;
+      background: linear-gradient(145deg, #20252c, #3d4a45);
+      overflow: hidden;
+    }
+
+    .beta-poster img {
+      width: 100%;
+      height: 100%;
+      display: block;
+      object-fit: cover;
+    }
+
+    .beta-placeholder {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 16px;
+      text-align: center;
+      color: rgba(255,255,255,0.9);
+      font-weight: 700;
+      font-size: 22px;
+      line-height: 1.1;
+      background:
+        linear-gradient(135deg, rgba(255,255,255,0.08), rgba(255,255,255,0.02)),
+        #27303a;
+    }
+
+    .beta-badge {
+      position: absolute;
+      left: 8px;
+      top: 8px;
+      padding: 3px 7px;
+      border-radius: 999px;
+      font-size: 11px;
+      background: rgba(0,0,0,0.62);
+      color: #fff;
+    }
+
+    .beta-card-body {
+      padding: 9px;
+    }
+
+    .beta-card-title {
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+      line-height: 1.25;
+      overflow-wrap: anywhere;
+    }
+
+    .beta-card-meta {
+      margin-top: 6px;
+      display: grid;
+      gap: 3px;
+      color: rgba(229,229,229,0.68);
+      font-size: 12px;
+    }
+
+    .beta-card-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .beta-card-actions button {
+      flex: 1;
+      min-width: 0;
+    }
+
+    .beta-empty {
+      color: rgba(229,229,229,0.66);
+      border: 1px dashed rgba(255,255,255,0.16);
+      border-radius: 8px;
+      padding: 18px;
+      min-height: 120px;
+    }
+
+    .beta-attribution {
+      margin-top: 10px;
+      color: rgba(229,229,229,0.58);
+      font-size: 12px;
+    }
+
+    @media (max-width: 980px) {
+      .beta-toolbar,
+      .beta-layout,
+      .beta-stats {
+        grid-template-columns: 1fr;
+      }
+
+      .beta-grid {
+        max-height: none;
+      }
+    }
+  </style>
+</head>
+<body class="beta-page">
+  <nav class="top-nav">
+    <a href="/" class="nav-link">Jobs</a>
+    <a href="/size_wizard" class="nav-link">Size Wizard</a>
+    <a href="/beta" class="nav-link nav-link-active">Beta</a>
+    <a href="/settings" class="nav-link">Settings</a>
+  </nav>
+
+  <main class="beta-shell">
+    <h1>Beta</h1>
+
+    <section class="section-card">
+      <div class="beta-toolbar">
+        <div class="beta-field">
+          <label for="rootSelect">Library scope</label>
+          <select id="rootSelect"></select>
+        </div>
+
+        <div class="beta-field">
+          <label for="limitInput">Scan limit</label>
+          <input id="limitInput" type="number" min="1" max="2000" step="50" value="800">
+        </div>
+
+        <label class="beta-toggle">
+          <input id="posterToggle" type="checkbox" checked>
+          Posters
+        </label>
+
+        <button id="scanBtn" type="button">Refresh Scan</button>
+      </div>
+
+      <div class="beta-toolbar" style="margin-top:10px;">
+        <div class="beta-field">
+          <label for="searchInput">Filter</label>
+          <input id="searchInput" type="search" placeholder="Title, year, filename">
+        </div>
+
+        <label class="beta-toggle">
+          <input id="recursiveToggle" type="checkbox" checked>
+          Recursive
+        </label>
+
+        <span id="betaStatus" class="small"></span>
+      </div>
+
+      <div class="beta-stats">
+        <div class="beta-stat"><span>Movies</span><strong id="statMovies">0</strong></div>
+        <div class="beta-stat"><span>Shows</span><strong id="statShows">0</strong></div>
+        <div class="beta-stat"><span>Episodes</span><strong id="statEpisodes">0</strong></div>
+        <div class="beta-stat"><span>Scanned</span><strong id="statScanned">0</strong></div>
+      </div>
+
+      <div id="tmdbNotice" class="beta-attribution"></div>
+    </section>
+
+    <section class="beta-layout">
+      <div class="beta-column">
+        <div class="beta-column-header">
+          <h2>Movies</h2>
+          <span id="movieCount" class="beta-count">0</span>
+        </div>
+        <div id="moviesGrid" class="beta-grid"></div>
+      </div>
+
+      <div class="beta-column">
+        <div class="beta-column-header">
+          <h2>Shows</h2>
+          <span id="showCount" class="beta-count">0</span>
+        </div>
+        <div id="showsGrid" class="beta-grid"></div>
+      </div>
+    </section>
+  </main>
+
+  <script>
+    const roots = {{ roots|tojson }};
+    const tmdbConfigured = {{ tmdb_configured|tojson }};
+    let libraryData = { movies: [], shows: [], stats: {} };
+
+    function el(id) {
+      return document.getElementById(id);
+    }
+
+    function fmtBytes(bytes) {
+      const value = Number(bytes || 0);
+      if (!Number.isFinite(value) || value <= 0) return "-";
+      const gb = value / (1024 ** 3);
+      if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 1 : 2)} GB`;
+      const mb = value / (1024 ** 2);
+      if (mb >= 1) return `${mb.toFixed(mb >= 10 ? 1 : 2)} MB`;
+      const kb = value / 1024;
+      if (kb >= 1) return `${kb.toFixed(1)} KB`;
+      return `${Math.round(value)} B`;
+    }
+
+    function fmtDateTime(ts) {
+      const n = Number(ts || 0);
+      if (!Number.isFinite(n) || n <= 0) return "";
+      const d = new Date(n * 1000);
+      if (Number.isNaN(d.getTime())) return "";
+      return d.toLocaleString();
+    }
+
+    function initials(title) {
+      return String(title || "?")
+        .split(/\s+/)
+        .filter(Boolean)
+        .slice(0, 3)
+        .map((part) => part[0]?.toUpperCase() || "")
+        .join("") || "?";
+    }
+
+    function includesFilter(item, needle) {
+      if (!needle) return true;
+      const blob = [
+        item.title,
+        item.year,
+        item.filename,
+        item.path,
+        item.tmdb_title
+      ].join(" ").toLowerCase();
+      return blob.includes(needle);
+    }
+
+    function cardPoster(item, label) {
+      const poster = document.createElement("div");
+      poster.className = "beta-poster";
+
+      if (item.poster_url) {
+        const img = document.createElement("img");
+        img.src = item.poster_url;
+        img.alt = `${item.title} poster`;
+        img.loading = "lazy";
+        poster.appendChild(img);
+      } else {
+        const ph = document.createElement("div");
+        ph.className = "beta-placeholder";
+        ph.textContent = initials(item.title);
+        poster.appendChild(ph);
+      }
+
+      const badge = document.createElement("div");
+      badge.className = "beta-badge";
+      badge.textContent = label;
+      poster.appendChild(badge);
+      return poster;
+    }
+
+    function openInWizard(path) {
+      try {
+        const handoff = JSON.stringify({ src: path, preset: "auto", saved_at: Date.now() });
+        sessionStorage.setItem("hbwiz_handoff", handoff);
+        localStorage.setItem("hbwiz_last_handoff", handoff);
+      } catch (e) {}
+      window.location.assign("/size_wizard?src=" + encodeURIComponent(path) + "&preset=auto");
+    }
+
+    function makeMovieCard(item) {
+      const card = document.createElement("article");
+      card.className = "beta-card";
+      card.appendChild(cardPoster(item, "Movie"));
+
+      const body = document.createElement("div");
+      body.className = "beta-card-body";
+
+      const title = document.createElement("div");
+      title.className = "beta-card-title";
+      title.textContent = `${item.title}${item.year ? ` (${item.year})` : ""}`;
+      body.appendChild(title);
+
+      const meta = document.createElement("div");
+      meta.className = "beta-card-meta";
+      meta.innerHTML = `
+        <span>${fmtBytes(item.size_bytes)} source</span>
+        <span>${item.target?.label || "Movie"} target: ${item.target?.target_size_value || 5}${item.target?.target_size_unit || "GB"}</span>
+        <span>${item.filename || ""}</span>
+      `;
+      body.appendChild(meta);
+
+      const actions = document.createElement("div");
+      actions.className = "beta-card-actions";
+      const wizard = document.createElement("button");
+      wizard.type = "button";
+      wizard.textContent = "Wizard";
+      wizard.onclick = () => openInWizard(item.path);
+      actions.appendChild(wizard);
+      body.appendChild(actions);
+
+      card.appendChild(body);
+      return card;
+    }
+
+    function makeShowCard(item) {
+      const card = document.createElement("article");
+      card.className = "beta-card";
+      card.appendChild(cardPoster(item, "Show"));
+
+      const body = document.createElement("div");
+      body.className = "beta-card-body";
+
+      const title = document.createElement("div");
+      title.className = "beta-card-title";
+      title.textContent = `${item.title}${item.year ? ` (${item.year})` : ""}`;
+      body.appendChild(title);
+
+      const seasonText = item.season_count === 1 ? "1 season" : `${item.season_count || 0} seasons`;
+      const meta = document.createElement("div");
+      meta.className = "beta-card-meta";
+      meta.innerHTML = `
+        <span>${item.episode_count || 0} episodes / ${seasonText}</span>
+        <span>${fmtBytes(item.total_size_bytes)} source total</span>
+        <span>Episode target: ${item.target?.target_size_value || 800}${item.target?.target_size_unit || "MB"}</span>
+      `;
+      body.appendChild(meta);
+
+      const first = Array.isArray(item.files) ? item.files[0] : null;
+      if (first) {
+        const actions = document.createElement("div");
+        actions.className = "beta-card-actions";
+        const wizard = document.createElement("button");
+        wizard.type = "button";
+        wizard.textContent = "First Episode";
+        wizard.onclick = () => openInWizard(first.path);
+        actions.appendChild(wizard);
+        body.appendChild(actions);
+      }
+
+      card.appendChild(body);
+      return card;
+    }
+
+    function renderEmpty(grid, message) {
+      const empty = document.createElement("div");
+      empty.className = "beta-empty";
+      empty.textContent = message;
+      grid.appendChild(empty);
+    }
+
+    function renderLibrary() {
+      const needle = el("searchInput").value.trim().toLowerCase();
+      const movies = (libraryData.movies || []).filter((item) => includesFilter(item, needle));
+      const shows = (libraryData.shows || []).filter((item) => includesFilter(item, needle));
+
+      el("moviesGrid").innerHTML = "";
+      el("showsGrid").innerHTML = "";
+      movies.forEach((item) => el("moviesGrid").appendChild(makeMovieCard(item)));
+      shows.forEach((item) => el("showsGrid").appendChild(makeShowCard(item)));
+
+      if (!movies.length) renderEmpty(el("moviesGrid"), "No movies found.");
+      if (!shows.length) renderEmpty(el("showsGrid"), "No shows found.");
+
+      el("movieCount").textContent = `${movies.length} shown`;
+      el("showCount").textContent = `${shows.length} shown`;
+    }
+
+    function renderStats(stats = {}) {
+      el("statMovies").textContent = stats.movies || 0;
+      el("statShows").textContent = stats.shows || 0;
+      el("statEpisodes").textContent = stats.episodes || 0;
+      el("statScanned").textContent = stats.scanned || 0;
+    }
+
+    function renderTmdbNotice(data = {}) {
+      const scannedAt = fmtDateTime(data.generated_at);
+      const scanText = scannedAt ? ` Last scan: ${scannedAt}.` : " No saved scan yet.";
+      if (data.tmdb_configured) {
+        el("tmdbNotice").textContent = "This product uses the TMDb API but is not endorsed or certified by TMDb." + scanText;
+      } else {
+        el("tmdbNotice").textContent = "Poster lookup is off. Add TMDb credentials in Settings for live posters." + scanText;
+      }
+    }
+
+    function applyCachedScope(data = {}) {
+      if (data.scope === "all") {
+        el("rootSelect").value = "__all__";
+      } else if (data.root) {
+        const option = Array.from(el("rootSelect").options).find((opt) => opt.value === data.root);
+        if (option) el("rootSelect").value = data.root;
+      }
+    }
+
+    async function loadCachedLibrary() {
+      el("betaStatus").textContent = "Loading saved scan...";
+      try {
+        const res = await fetch("/api/beta/library_cache");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to load saved scan");
+        libraryData = data;
+        applyCachedScope(data);
+        renderStats(data.stats || {});
+        renderTmdbNotice(data);
+        renderLibrary();
+        el("betaStatus").textContent = data.generated_at ? "Loaded saved scan." : "No saved scan yet.";
+      } catch (e) {
+        el("betaStatus").textContent = e.message || "Failed to load saved scan";
+        libraryData = { movies: [], shows: [], stats: {} };
+        renderStats({});
+        renderLibrary();
+      }
+    }
+
+    async function scanLibrary() {
+      const root = el("rootSelect").value;
+      const limit = Math.max(1, Math.min(2000, Number(el("limitInput").value || 800)));
+      const params = new URLSearchParams({
+        root,
+        limit: String(limit),
+        recursive: el("recursiveToggle").checked ? "1" : "0",
+        posters: el("posterToggle").checked ? "1" : "0"
+      });
+
+      el("scanBtn").disabled = true;
+      el("betaStatus").textContent = root === "__all__" ? "Scanning all libraries..." : "Scanning library...";
+
+      try {
+        const res = await fetch("/api/beta/library?" + params.toString());
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Scan failed");
+        libraryData = data;
+        renderStats(data.stats || {});
+        renderTmdbNotice(data);
+        renderLibrary();
+        el("betaStatus").textContent = data.stats?.limited ? "Saved limited scan." : "Saved scan.";
+      } catch (e) {
+        el("betaStatus").textContent = e.message || "Scan failed";
+        libraryData = { movies: [], shows: [], stats: {} };
+        renderStats({});
+        renderLibrary();
+      } finally {
+        el("scanBtn").disabled = false;
+      }
+    }
+
+    function initRoots() {
+      const select = el("rootSelect");
+      select.innerHTML = "";
+      const allOpt = document.createElement("option");
+      allOpt.value = "__all__";
+      allOpt.textContent = "All mapped folders";
+      select.appendChild(allOpt);
+      roots.forEach((root) => {
+        const opt = document.createElement("option");
+        opt.value = root.path;
+        opt.textContent = root.label || root.path;
+        select.appendChild(opt);
+      });
+    }
+
+    function start() {
+      initRoots();
+      renderStats({});
+      renderTmdbNotice({ tmdb_configured: tmdbConfigured });
+      renderLibrary();
+      el("scanBtn").addEventListener("click", scanLibrary);
+      el("searchInput").addEventListener("input", renderLibrary);
+      el("posterToggle").checked = true;
+      if (roots.length) {
+        loadCachedLibrary();
+      } else {
+        el("scanBtn").disabled = true;
+        el("betaStatus").textContent = "No Beta folders mapped. Use Settings > Map drives and folders.";
+      }
+    }
+
+    if (document.readyState === "loading") {
+      document.addEventListener("DOMContentLoaded", start);
+    } else {
+      start();
+    }
+  </script>
+</body>
+</html>

@@ -4,12 +4,205 @@
   <meta charset="utf-8">
   <title>HandBrake TSD Helper – Settings</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <style>
+    .settings-modal-backdrop {
+      position: fixed;
+      inset: 0;
+      background: rgba(0,0,0,0.68);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 18px;
+      z-index: 1000;
+    }
+
+    .settings-modal-backdrop[hidden] {
+      display: none;
+    }
+
+    .settings-modal {
+      width: min(920px, 100%);
+      max-height: min(760px, 92vh);
+      overflow: auto;
+      border: 1px solid rgba(255,255,255,0.12);
+      border-radius: 8px;
+      background: #181c21;
+      box-shadow: 0 18px 60px rgba(0,0,0,0.55);
+      padding: 18px;
+    }
+
+    .settings-modal-header,
+    .settings-modal-actions,
+    .folder-map-row {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+    }
+
+    .settings-modal-header {
+      justify-content: space-between;
+      margin-bottom: 12px;
+    }
+
+    .settings-modal-header h2 {
+      margin: 0;
+    }
+
+    .folder-map-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 14px;
+      margin-top: 12px;
+    }
+
+    .folder-map-panel {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 12px;
+      background: rgba(255,255,255,0.03);
+      min-width: 0;
+    }
+
+    .folder-map-row {
+      margin-top: 8px;
+    }
+
+    .folder-map-row input {
+      min-width: 0;
+    }
+
+    .folder-map-path {
+      flex: 1.4;
+    }
+
+    .folder-map-label {
+      flex: 0.8;
+    }
+
+    .allowed-roots-list {
+      margin-top: 8px;
+      max-height: 95px;
+      overflow: auto;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 6px;
+      padding: 8px;
+      color: rgba(229,229,229,0.72);
+      background: rgba(0,0,0,0.16);
+    }
+
+    .allowed-root-row,
+    .folder-browser-toolbar,
+    .folder-browser-item {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+
+    .allowed-root-row {
+      justify-content: space-between;
+      padding: 4px 0;
+    }
+
+    .allowed-root-actions,
+    .folder-browser-actions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+
+    .allowed-root-text,
+    .folder-browser-name {
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .folder-browser-panel {
+      margin-top: 12px;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      background: rgba(0,0,0,0.18);
+      padding: 12px;
+    }
+
+    .folder-browser-panel[hidden] {
+      display: none;
+    }
+
+    .folder-browser-heading {
+      margin-bottom: 8px;
+    }
+
+    .folder-browser-heading h3 {
+      margin: 0;
+    }
+
+    .folder-browser-current-path {
+      min-height: 20px;
+      margin-bottom: 8px;
+      overflow-wrap: anywhere;
+    }
+
+    .folder-browser-toolbar {
+      flex-wrap: wrap;
+      margin-bottom: 10px;
+    }
+
+    .folder-browser-list {
+      max-height: 260px;
+      overflow: auto;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 6px;
+      background: rgba(0,0,0,0.18);
+    }
+
+    .folder-browser-item {
+      justify-content: space-between;
+      padding: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.06);
+    }
+
+    .folder-browser-item:last-child {
+      border-bottom: 0;
+    }
+
+    .folder-browser-tag {
+      flex: 0 0 auto;
+      color: rgba(229,229,229,0.58);
+      font-size: 12px;
+    }
+
+    @media (max-width: 860px) {
+      .folder-map-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .folder-map-row {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .allowed-root-row,
+      .folder-browser-item {
+        align-items: stretch;
+        flex-direction: column;
+      }
+
+      .allowed-root-actions,
+      .folder-browser-actions {
+        justify-content: flex-start;
+      }
+    }
+  </style>
 </head>
 <body>
 
   <nav class="top-nav">
     <a href="/" class="nav-link">Jobs</a>
     <a href="/size_wizard" class="nav-link">Size Wizard</a>
+    <a href="/beta" class="nav-link">Beta</a>
     <a href="/settings" class="nav-link nav-link-active">Settings</a>
   </nav>
 
@@ -95,6 +288,49 @@
   </div>
 
   <!-- ============================================================
+       Beta folder mapping
+       ------------------------------------------------------------ -->
+  <div class="section-card">
+    <h2>Beta library folders</h2>
+    <p class="small">
+      Map the exact movie and show folders Beta should scan. This keeps Beta away from unrelated folders.
+    </p>
+    <div class="row">
+      <button id="mapFoldersBtn">Map drives and folders</button>
+      <span id="folderMapSummary" class="small"></span>
+    </div>
+  </div>
+
+  <!-- ============================================================
+       Poster metadata
+       ------------------------------------------------------------ -->
+  <div class="section-card">
+    <h2>Poster metadata</h2>
+    <p class="small">
+      Optional TMDb credentials for the Beta page. Blank fields keep poster lookup off and use local placeholders.
+    </p>
+
+    <div class="row">
+      <label for="tmdbApiKeyInput"><strong>TMDb API key</strong>:</label>
+      <input id="tmdbApiKeyInput" type="password" autocomplete="off" style="min-width:360px;">
+    </div>
+
+    <div class="row" style="margin-top:10px;">
+      <label for="tmdbBearerTokenInput"><strong>TMDb read token</strong>:</label>
+      <input id="tmdbBearerTokenInput" type="password" autocomplete="off" style="min-width:360px;">
+    </div>
+
+    <p class="small">
+      This product uses the TMDb API but is not endorsed or certified by TMDb.
+    </p>
+
+    <div class="row" style="margin-top:12px;">
+      <button id="savePosterSettingsBtn">Save poster settings</button>
+      <span id="posterSettingsSaveStatus" class="small"></span>
+    </div>
+  </div>
+
+  <!-- ============================================================
        UI settings
        ------------------------------------------------------------ -->
   <div class="section-card">
@@ -118,6 +354,59 @@
     <div class="row" style="margin-top:12px;">
       <button id="saveUiSettingsBtn">Save UI settings</button>
       <span id="uiSettingsSaveStatus" class="small"></span>
+    </div>
+  </div>
+
+  <div id="folderMapModal" class="settings-modal-backdrop" hidden>
+    <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="folderMapTitle">
+      <div class="settings-modal-header">
+        <h2 id="folderMapTitle">Map drives and folders</h2>
+        <button id="closeFolderMapBtn" type="button">Close</button>
+      </div>
+
+      <p class="small">
+        Add only the folders Beta should scan. Movie folders and show folders are kept separate so detection starts with the right type.
+      </p>
+
+      <div class="small">
+        Allowed roots
+        <div id="allowedRootsList" class="allowed-roots-list"></div>
+      </div>
+
+      <div id="folderBrowserPanel" class="folder-browser-panel" hidden>
+        <div class="settings-modal-header folder-browser-heading">
+          <h3 id="folderBrowserTitle">Choose folder</h3>
+          <button id="folderBrowserCancelBtn" type="button">Hide browser</button>
+        </div>
+        <div id="folderBrowserPath" class="folder-browser-current-path small"></div>
+        <div class="folder-browser-toolbar">
+          <button id="folderBrowserUpBtn" type="button">Up one folder</button>
+          <button id="folderBrowserUseBtn" type="button">Use current folder</button>
+          <button id="folderBrowserManualBtn" type="button">Type path manually</button>
+          <span id="folderBrowserStatus" class="small"></span>
+        </div>
+        <div id="folderBrowserList" class="folder-browser-list"></div>
+      </div>
+
+      <div class="folder-map-grid">
+        <div class="folder-map-panel">
+          <h3>Movie folders</h3>
+          <div id="movieFolderRows"></div>
+          <button id="addMovieFolderBtn" type="button" style="margin-top:10px;">Add movie folder</button>
+        </div>
+
+        <div class="folder-map-panel">
+          <h3>Show folders</h3>
+          <div id="showFolderRows"></div>
+          <button id="addShowFolderBtn" type="button" style="margin-top:10px;">Add show folder</button>
+        </div>
+      </div>
+
+      <div class="settings-modal-actions" style="margin-top:14px;">
+        <button id="saveFolderMapBtn" type="button">Save folder map</button>
+        <button id="cancelFolderMapBtn" type="button">Cancel</button>
+        <span id="folderMapStatus" class="small"></span>
+      </div>
     </div>
   </div>
 
@@ -222,9 +511,462 @@
     // Data injected from Flask
     const initialSettings = {{ settings|tojson }};
     const initialPresetFiles = {{ preset_files|tojson }};
+    const allowedRoots = {{ allowed_roots|default([], true)|tojson }};
 
     // Keep an up-to-date list of available preset JSON files.
     let presetFiles = Array.isArray(initialPresetFiles) ? initialPresetFiles.slice() : [];
+    let betaMediaFolders = normalizeBetaMediaFolders(initialSettings?.beta_media_folders);
+    let folderBrowserKind = "movies";
+    let folderBrowserPath = "";
+
+    function normalizeFolderRows(rows) {
+      if (!Array.isArray(rows)) return [];
+      return rows
+        .map(row => {
+          if (typeof row === "string") return { path: row, label: "" };
+          if (row && typeof row === "object") {
+            return {
+              path: String(row.path || ""),
+              label: String(row.label || "")
+            };
+          }
+          return null;
+        })
+        .filter(row => row && row.path.trim());
+    }
+
+    function normalizeBetaMediaFolders(value) {
+      const data = value && typeof value === "object" ? value : {};
+      return {
+        movies: normalizeFolderRows(data.movies),
+        shows: normalizeFolderRows(data.shows)
+      };
+    }
+
+    function getFolderKindRows(kind) {
+      return kind === "shows" ? betaMediaFolders.shows : betaMediaFolders.movies;
+    }
+
+    function folderKindLabel(kind) {
+      return kind === "shows" ? "Show" : "Movie";
+    }
+
+    function getAllowedRootRows() {
+      if (!Array.isArray(allowedRoots)) return [];
+      return allowedRoots
+        .map(root => {
+          if (typeof root === "string") return { path: root, label: root };
+          if (Array.isArray(root)) return { path: String(root[0] || ""), label: String(root[1] || root[0] || "") };
+          if (root && typeof root === "object") {
+            return {
+              path: String(root.path || ""),
+              label: String(root.label || root.path || "")
+            };
+          }
+          return null;
+        })
+        .filter(root => root && root.path.trim());
+    }
+
+    function normalizePathForCompare(path) {
+      const normalized = String(path || "").replace(/\\/g, "/").replace(/\/+$/, "");
+      return (normalized || "/").toLowerCase();
+    }
+
+    function folderBasename(path) {
+      const cleaned = String(path || "").replace(/[\\/]+$/, "").replace(/\\/g, "/");
+      const parts = cleaned.split("/").filter(Boolean);
+      return parts.length ? parts[parts.length - 1] : cleaned;
+    }
+
+    function joinFolderPath(base, name) {
+      const cleanBase = String(base || "").replace(/[\\/]+$/, "");
+      if (!cleanBase) return String(name || "");
+      const sep = cleanBase.includes("\\") && !cleanBase.includes("/") ? "\\" : "/";
+      return `${cleanBase}${sep}${name}`;
+    }
+
+    function parentFolderPath(path) {
+      const raw = String(path || "").replace(/[\\/]+$/, "");
+      if (!raw) return "";
+      const slash = Math.max(raw.lastIndexOf("/"), raw.lastIndexOf("\\"));
+      if (slash <= 0) return raw.startsWith("/") ? "/" : "";
+      return raw.slice(0, slash);
+    }
+
+    function folderPathIsAllowedRoot(path) {
+      const current = normalizePathForCompare(path);
+      return getAllowedRootRows().some(root => normalizePathForCompare(root.path) === current);
+    }
+
+    function setFolderBrowserStatus(text) {
+      const status = document.getElementById("folderBrowserStatus");
+      if (status) status.textContent = text || "";
+    }
+
+    function addMappedFolder(kind, path, label) {
+      const cleanPath = String(path || "").trim();
+      if (!cleanPath) return false;
+      const rows = getFolderKindRows(kind);
+      const target = normalizePathForCompare(cleanPath);
+      const exists = rows.some(row => normalizePathForCompare(row.path) === target);
+      if (!exists) {
+        rows.push({
+          path: cleanPath,
+          label: String(label || folderBasename(cleanPath) || folderKindLabel(kind)).trim()
+        });
+        renderFolderRows(kind);
+        updateFolderMapSummary();
+      }
+      const status = document.getElementById("folderMapStatus");
+      if (status) {
+        status.textContent = exists
+          ? `${folderKindLabel(kind)} folder is already mapped.`
+          : `${folderKindLabel(kind)} folder added.`;
+      }
+      return !exists;
+    }
+
+    function updateFolderMapSummary() {
+      const node = document.getElementById("folderMapSummary");
+      if (!node) return;
+      const movieCount = betaMediaFolders.movies.length;
+      const showCount = betaMediaFolders.shows.length;
+      node.textContent = `${movieCount} movie folder${movieCount === 1 ? "" : "s"}, ${showCount} show folder${showCount === 1 ? "" : "s"} mapped`;
+    }
+
+    function renderAllowedRoots() {
+      const node = document.getElementById("allowedRootsList");
+      if (!node) return;
+      const roots = getAllowedRootRows();
+      if (roots.length === 0) {
+        node.textContent = "No allowed roots are configured.";
+        return;
+      }
+      node.innerHTML = "";
+      roots.forEach(root => {
+        const div = document.createElement("div");
+        div.className = "allowed-root-row";
+
+        const text = document.createElement("div");
+        text.className = "allowed-root-text";
+        text.textContent = `${root.label || root.path}: ${root.path}`;
+
+        const actions = document.createElement("div");
+        actions.className = "allowed-root-actions";
+
+        const browseBtn = document.createElement("button");
+        browseBtn.type = "button";
+        browseBtn.textContent = "Browse";
+        browseBtn.onclick = () => showFolderBrowser(folderBrowserKind, root.path);
+
+        const addMovieBtn = document.createElement("button");
+        addMovieBtn.type = "button";
+        addMovieBtn.textContent = "Add movie";
+        addMovieBtn.onclick = () => addMappedFolder("movies", root.path, root.label);
+
+        const addShowBtn = document.createElement("button");
+        addShowBtn.type = "button";
+        addShowBtn.textContent = "Add show";
+        addShowBtn.onclick = () => addMappedFolder("shows", root.path, root.label);
+
+        actions.appendChild(browseBtn);
+        actions.appendChild(addMovieBtn);
+        actions.appendChild(addShowBtn);
+        div.appendChild(text);
+        div.appendChild(actions);
+        node.appendChild(div);
+      });
+    }
+
+    function renderFolderRows(kind) {
+      const wrap = document.getElementById(kind === "shows" ? "showFolderRows" : "movieFolderRows");
+      if (!wrap) return;
+      const rows = getFolderKindRows(kind);
+      wrap.innerHTML = "";
+
+      if (rows.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "small";
+        empty.textContent = kind === "shows" ? "No show folders mapped." : "No movie folders mapped.";
+        wrap.appendChild(empty);
+      }
+
+      rows.forEach((row, index) => {
+        const line = document.createElement("div");
+        line.className = "folder-map-row";
+
+        const pathInput = document.createElement("input");
+        pathInput.className = "folder-map-path";
+        pathInput.type = "text";
+        pathInput.placeholder = kind === "shows" ? "/media/shows" : "/media/movies";
+        pathInput.value = row.path || "";
+        pathInput.addEventListener("input", () => {
+          rows[index].path = pathInput.value;
+        });
+
+        const labelInput = document.createElement("input");
+        labelInput.className = "folder-map-label";
+        labelInput.type = "text";
+        labelInput.placeholder = "Label";
+        labelInput.value = row.label || "";
+        labelInput.addEventListener("input", () => {
+          rows[index].label = labelInput.value;
+        });
+
+        const removeBtn = document.createElement("button");
+        removeBtn.type = "button";
+        removeBtn.textContent = "Remove";
+        removeBtn.onclick = () => {
+          rows.splice(index, 1);
+          renderFolderRows(kind);
+          updateFolderMapSummary();
+        };
+
+        line.appendChild(pathInput);
+        line.appendChild(labelInput);
+        line.appendChild(removeBtn);
+        wrap.appendChild(line);
+      });
+    }
+
+    function renderFolderMapModal() {
+      renderAllowedRoots();
+      renderFolderRows("movies");
+      renderFolderRows("shows");
+      updateFolderMapSummary();
+    }
+
+    function openFolderMapModal() {
+      renderFolderMapModal();
+      const modal = document.getElementById("folderMapModal");
+      if (modal) modal.hidden = false;
+      const status = document.getElementById("folderMapStatus");
+      if (status) status.textContent = "";
+    }
+
+    function closeFolderMapModal() {
+      const modal = document.getElementById("folderMapModal");
+      if (modal) modal.hidden = true;
+      hideFolderBrowser();
+    }
+
+    function addFolderRow(kind) {
+      showFolderBrowser(kind);
+    }
+
+    function addManualFolderRow(kind) {
+      getFolderKindRows(kind).push({ path: "", label: "" });
+      renderFolderRows(kind);
+      updateFolderMapSummary();
+      hideFolderBrowser();
+    }
+
+    function hideFolderBrowser() {
+      const panel = document.getElementById("folderBrowserPanel");
+      if (panel) panel.hidden = true;
+      folderBrowserPath = "";
+      setFolderBrowserStatus("");
+    }
+
+    function showFolderBrowser(kind, startPath) {
+      folderBrowserKind = kind === "shows" ? "shows" : "movies";
+      const panel = document.getElementById("folderBrowserPanel");
+      const title = document.getElementById("folderBrowserTitle");
+      if (panel) panel.hidden = false;
+      if (title) title.textContent = `Choose ${folderKindLabel(folderBrowserKind).toLowerCase()} folder`;
+      if (startPath) {
+        loadFolderBrowserPath(startPath);
+      } else {
+        renderFolderBrowserRoots();
+      }
+    }
+
+    function setFolderBrowserButtons() {
+      const upBtn = document.getElementById("folderBrowserUpBtn");
+      const useBtn = document.getElementById("folderBrowserUseBtn");
+      if (upBtn) {
+        upBtn.disabled = !folderBrowserPath;
+        upBtn.textContent = folderPathIsAllowedRoot(folderBrowserPath) ? "Back to roots" : "Up one folder";
+      }
+      if (useBtn) {
+        useBtn.disabled = !folderBrowserPath;
+        useBtn.textContent = folderBrowserPath
+          ? `Use current for ${folderKindLabel(folderBrowserKind).toLowerCase()} folder`
+          : "Use current folder";
+      }
+    }
+
+    function renderFolderBrowserRoots() {
+      folderBrowserPath = "";
+      const pathNode = document.getElementById("folderBrowserPath");
+      const list = document.getElementById("folderBrowserList");
+      if (pathNode) pathNode.textContent = "Allowed roots";
+      if (!list) return;
+      list.innerHTML = "";
+      setFolderBrowserStatus("");
+      setFolderBrowserButtons();
+
+      const roots = getAllowedRootRows();
+      if (roots.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "folder-browser-item small";
+        empty.textContent = "No folders are available to browse.";
+        list.appendChild(empty);
+        return;
+      }
+
+      roots.forEach(root => {
+        const item = document.createElement("div");
+        item.className = "folder-browser-item";
+
+        const name = document.createElement("div");
+        name.className = "folder-browser-name";
+        name.textContent = `${root.label || root.path}: ${root.path}`;
+
+        const actions = document.createElement("div");
+        actions.className = "folder-browser-actions";
+
+        const openBtn = document.createElement("button");
+        openBtn.type = "button";
+        openBtn.textContent = "Open";
+        openBtn.onclick = () => loadFolderBrowserPath(root.path);
+
+        const useBtn = document.createElement("button");
+        useBtn.type = "button";
+        useBtn.textContent = `Use for ${folderKindLabel(folderBrowserKind).toLowerCase()}`;
+        useBtn.onclick = () => {
+          addMappedFolder(folderBrowserKind, root.path, root.label);
+          hideFolderBrowser();
+        };
+
+        actions.appendChild(openBtn);
+        actions.appendChild(useBtn);
+        item.appendChild(name);
+        item.appendChild(actions);
+        list.appendChild(item);
+      });
+    }
+
+    function renderFolderBrowserDirectory(data) {
+      const list = document.getElementById("folderBrowserList");
+      const pathNode = document.getElementById("folderBrowserPath");
+      folderBrowserPath = String(data?.path || folderBrowserPath || "");
+      if (pathNode) pathNode.textContent = folderBrowserPath || "Allowed roots";
+      if (!list) return;
+      list.innerHTML = "";
+      setFolderBrowserButtons();
+
+      const dirs = Array.isArray(data?.dirs) ? data.dirs : [];
+      if (dirs.length === 0) {
+        const empty = document.createElement("div");
+        empty.className = "folder-browser-item small";
+        empty.textContent = "No folders inside this folder.";
+        list.appendChild(empty);
+        return;
+      }
+
+      dirs.forEach(dirName => {
+        const fullPath = joinFolderPath(folderBrowserPath, dirName);
+        const item = document.createElement("div");
+        item.className = "folder-browser-item";
+
+        const name = document.createElement("div");
+        name.className = "folder-browser-name";
+        name.textContent = dirName;
+
+        const tag = document.createElement("span");
+        tag.className = "folder-browser-tag";
+        tag.textContent = "folder";
+
+        const actions = document.createElement("div");
+        actions.className = "folder-browser-actions";
+
+        const openBtn = document.createElement("button");
+        openBtn.type = "button";
+        openBtn.textContent = "Open";
+        openBtn.onclick = () => loadFolderBrowserPath(fullPath);
+
+        const useBtn = document.createElement("button");
+        useBtn.type = "button";
+        useBtn.textContent = "Use";
+        useBtn.onclick = () => {
+          addMappedFolder(folderBrowserKind, fullPath, dirName);
+          hideFolderBrowser();
+        };
+
+        name.appendChild(document.createTextNode(" "));
+        name.appendChild(tag);
+        actions.appendChild(openBtn);
+        actions.appendChild(useBtn);
+        item.appendChild(name);
+        item.appendChild(actions);
+        list.appendChild(item);
+      });
+    }
+
+    async function loadFolderBrowserPath(path) {
+      const cleanPath = String(path || "").trim();
+      if (!cleanPath) {
+        renderFolderBrowserRoots();
+        return;
+      }
+      folderBrowserPath = cleanPath;
+      const pathNode = document.getElementById("folderBrowserPath");
+      const list = document.getElementById("folderBrowserList");
+      if (pathNode) pathNode.textContent = cleanPath;
+      if (list) {
+        list.innerHTML = "";
+        const loading = document.createElement("div");
+        loading.className = "folder-browser-item small";
+        loading.textContent = "Loading folders...";
+        list.appendChild(loading);
+      }
+      setFolderBrowserButtons();
+      setFolderBrowserStatus("Loading...");
+      try {
+        const res = await fetch(`/list?path=${encodeURIComponent(cleanPath)}`, { cache: "no-store" });
+        const data = await res.json().catch(() => ({}));
+        if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+        renderFolderBrowserDirectory(data);
+        setFolderBrowserStatus("");
+      } catch (err) {
+        console.error(err);
+        setFolderBrowserStatus(err.message || "Could not load folder.");
+      }
+    }
+
+    function useCurrentFolderBrowserPath() {
+      if (!folderBrowserPath) return;
+      addMappedFolder(folderBrowserKind, folderBrowserPath, folderBasename(folderBrowserPath));
+      hideFolderBrowser();
+    }
+
+    function goUpFolderBrowser() {
+      if (!folderBrowserPath) return;
+      if (folderPathIsAllowedRoot(folderBrowserPath)) {
+        renderFolderBrowserRoots();
+        return;
+      }
+      const parent = parentFolderPath(folderBrowserPath);
+      if (parent) loadFolderBrowserPath(parent);
+    }
+
+    function cleanFolderRows(rows) {
+      return rows
+        .map(row => ({
+          path: String(row.path || "").trim(),
+          label: String(row.label || "").trim()
+        }))
+        .filter(row => row.path);
+    }
+
+    function getBetaMediaFoldersForSave() {
+      return {
+        movies: cleanFolderRows(betaMediaFolders.movies),
+        shows: cleanFolderRows(betaMediaFolders.shows)
+      };
+    }
 
     // -------------------------------
     // Init encoding settings
@@ -238,6 +980,12 @@
       if (queueUiModeSelect) {
         queueUiModeSelect.value = initialSettings?.queue_ui_mode || "buttons";
       }
+
+      const tmdbApiKeyInput = document.getElementById("tmdbApiKeyInput");
+      if (tmdbApiKeyInput) tmdbApiKeyInput.value = initialSettings?.tmdb_api_key || "";
+
+      const tmdbBearerTokenInput = document.getElementById("tmdbBearerTokenInput");
+      if (tmdbBearerTokenInput) tmdbBearerTokenInput.value = initialSettings?.tmdb_bearer_token || "";
     }
 
     async function loadCpuProfiles() {
@@ -282,6 +1030,8 @@
       const threadsRaw = document.getElementById("hbThreadsInput").value.trim();
       const cpuProfile = document.getElementById("cpuProfileSelect").value || "";
       const queueUiMode = document.getElementById("queueUiModeSelect")?.value || "buttons";
+      const tmdbApiKey = document.getElementById("tmdbApiKeyInput")?.value || "";
+      const tmdbBearerToken = document.getElementById("tmdbBearerTokenInput")?.value || "";
 
       let threads = parseInt(threadsRaw, 10);
       if (isNaN(threads) || threads < 0) threads = 0;
@@ -295,19 +1045,29 @@
           body: JSON.stringify({
             hb_threads: threads,
             cpu_profile: cpuProfile,
-            queue_ui_mode: queueUiMode
+            queue_ui_mode: queueUiMode,
+            tmdb_api_key: tmdbApiKey,
+            tmdb_bearer_token: tmdbBearerToken,
+            beta_media_folders: getBetaMediaFoldersForSave()
           })
         });
 
         if (!res.ok) throw new Error("HTTP " + res.status);
+        const data = await res.json();
+        if (data && data.settings) {
+          betaMediaFolders = normalizeBetaMediaFolders(data.settings.beta_media_folders);
+          renderFolderMapModal();
+        }
 
         if (statusEl) {
           statusEl.textContent = "Saved.";
           setTimeout(() => { statusEl.textContent = ""; }, 3000);
         }
+        return true;
       } catch (err) {
         console.error(err);
         if (statusEl) statusEl.textContent = "Error saving settings";
+        return false;
       }
     }
 
@@ -659,6 +1419,44 @@
       const saveUiSettingsBtn = document.getElementById("saveUiSettingsBtn");
       if (saveUiSettingsBtn) {
         saveUiSettingsBtn.onclick = () => saveSettings("uiSettingsSaveStatus");
+      }
+
+      const savePosterSettingsBtn = document.getElementById("savePosterSettingsBtn");
+      if (savePosterSettingsBtn) {
+        savePosterSettingsBtn.onclick = () => saveSettings("posterSettingsSaveStatus");
+      }
+
+      updateFolderMapSummary();
+      const mapFoldersBtn = document.getElementById("mapFoldersBtn");
+      if (mapFoldersBtn) mapFoldersBtn.onclick = openFolderMapModal;
+      const closeFolderMapBtn = document.getElementById("closeFolderMapBtn");
+      if (closeFolderMapBtn) closeFolderMapBtn.onclick = closeFolderMapModal;
+      const cancelFolderMapBtn = document.getElementById("cancelFolderMapBtn");
+      if (cancelFolderMapBtn) cancelFolderMapBtn.onclick = closeFolderMapModal;
+      const addMovieFolderBtn = document.getElementById("addMovieFolderBtn");
+      if (addMovieFolderBtn) addMovieFolderBtn.onclick = () => addFolderRow("movies");
+      const addShowFolderBtn = document.getElementById("addShowFolderBtn");
+      if (addShowFolderBtn) addShowFolderBtn.onclick = () => addFolderRow("shows");
+      const folderBrowserUpBtn = document.getElementById("folderBrowserUpBtn");
+      if (folderBrowserUpBtn) folderBrowserUpBtn.onclick = goUpFolderBrowser;
+      const folderBrowserUseBtn = document.getElementById("folderBrowserUseBtn");
+      if (folderBrowserUseBtn) folderBrowserUseBtn.onclick = useCurrentFolderBrowserPath;
+      const folderBrowserManualBtn = document.getElementById("folderBrowserManualBtn");
+      if (folderBrowserManualBtn) folderBrowserManualBtn.onclick = () => addManualFolderRow(folderBrowserKind);
+      const folderBrowserCancelBtn = document.getElementById("folderBrowserCancelBtn");
+      if (folderBrowserCancelBtn) folderBrowserCancelBtn.onclick = hideFolderBrowser;
+      const saveFolderMapBtn = document.getElementById("saveFolderMapBtn");
+      if (saveFolderMapBtn) {
+        saveFolderMapBtn.onclick = async () => {
+          const ok = await saveSettings("folderMapStatus");
+          if (ok) setTimeout(closeFolderMapModal, 500);
+        };
+      }
+      const folderMapModal = document.getElementById("folderMapModal");
+      if (folderMapModal) {
+        folderMapModal.addEventListener("click", (ev) => {
+          if (ev.target === folderMapModal) closeFolderMapModal();
+        });
       }
 
       document.getElementById("uploadPresetBtn").onclick = uploadPreset;
