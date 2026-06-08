@@ -2,18 +2,13 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HandBrake TSD Helper - Size Wizard</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
 
   <style>
-    body.size-wizard-page {
-      min-width: 0;
-    }
-
     .wizard-page {
-      max-width: 1440px;
-      margin: 0 auto;
+      max-width: none;
+      margin: 0;
     }
 
     .wizard-heading {
@@ -321,7 +316,7 @@
       background: #000;
     }
 
-    @media (max-width: 980px) {
+    @media (max-width: 860px) {
       .wizard-layout {
         grid-template-columns: 1fr;
       }
@@ -685,6 +680,10 @@
             <span>ETA</span>
             <strong id="metricEta">-</strong>
           </div>
+          <div class="metric-row">
+            <span>History estimate</span>
+            <strong id="metricHistory">-</strong>
+          </div>
         </div>
 
         <div id="decisionNote" class="small plan-note"></div>
@@ -960,6 +959,25 @@
       const kb = value / 1024;
       if (kb >= 1) return `${kb.toFixed(1)} KB`;
       return `${Math.round(value)} B`;
+    }
+
+    function historyPredictionText(prediction) {
+      if (!prediction || !prediction.available) {
+        return "Need more history";
+      }
+      const parts = [
+        `${fmtBytes(prediction.estimated_out_bytes)} out`,
+        `${fmtBytes(prediction.estimated_saved_bytes)} saved`
+      ];
+      if (prediction.estimated_runtime_seconds !== null && prediction.estimated_runtime_seconds !== undefined) {
+        parts.push(fmtSeconds(prediction.estimated_runtime_seconds));
+      }
+      const samples = Number(prediction.sample_count || 0);
+      const confidence = prediction.confidence ? String(prediction.confidence) : "low";
+      if (samples > 0) {
+        parts.push(`${confidence}, ${samples} sample${samples === 1 ? "" : "s"}`);
+      }
+      return parts.join(" / ");
     }
 
     function cloneSourceProfile(kind, reason = "") {
@@ -1317,6 +1335,7 @@
       el("metricEncoder").textContent = "-";
       el("metricAi").textContent = "-";
       el("metricEta").textContent = "-";
+      el("metricHistory").textContent = "-";
       el("decisionNote").textContent = "";
       el("argsPreview").textContent = "-";
       updateTargetSizeHint();
@@ -1349,7 +1368,7 @@
 
       el("previewBox").textContent = sourceLine;
       el("metricSourceSize").textContent = sourceSize;
-      el("metricSourceType").textContent = sourceProfileText(sourceProfile);
+      el("metricSourceType").textContent = `${sourceProfileText(sourceProfile)} / ${p.is_hdr ? "HDR" : "SDR"}`;
       el("metricTarget").textContent = fmtMb(inputs.target_mb);
       el("metricVideoBitrate").textContent = fmtKbps(e.video_bitrate_kbps);
       el("metricAudioBitrate").textContent = fmtKbps(e.audio_bitrate_kbps);
@@ -1358,6 +1377,7 @@
       el("metricEncoder").textContent = `${e.encoder_label || e.encoder || "-"}${e.encoder_preset ? ` / ${e.encoder_preset}` : ""}`;
       el("metricAi").textContent = e.ai_mode ? (e.ai_summary || "AI mode active") : "Manual";
       el("metricEta").textContent = `${e.eta_human || "-"}${e.est_fps ? ` at about ${e.est_fps} fps` : ""}`;
+      el("metricHistory").textContent = historyPredictionText(e.history_prediction);
       el("decisionNote").textContent = [e.decision_note, e.ai_summary].filter(Boolean).join(" ");
       el("argsPreview").textContent = args.length ? args.join(" ") : "-";
     }

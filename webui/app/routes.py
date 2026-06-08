@@ -39,6 +39,7 @@ import tempfile
 import uuid
 import signal
 import time
+import hashlib
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -447,7 +448,8 @@ def _ffprobe_media_fast(src_path: str):
         "ffprobe",
         "-v", "error",
         "-select_streams", "v:0",
-        "-show_entries", "format=duration:stream=width,height,r_frame_rate",
+        "-show_entries",
+        "format=duration:stream=width,height,r_frame_rate,pix_fmt,color_space,color_transfer,color_primaries,side_data_list",
         "-of", "json",
         src_path,
     ]
@@ -482,11 +484,15 @@ def _ffprobe_media_fast(src_path: str):
     if duration_sec <= 0 or width <= 0 or height <= 0:
         raise RuntimeError("ffprobe returned incomplete video info")
 
+    is_hdr, hdr_reason = _detect_hdr_from_video_info(v0, src_path)
+
     return {
         "duration_sec": duration_sec,
         "width": width,
         "height": height,
         "fps": fps or 24.0,
+        "is_hdr": is_hdr,
+        "hdr_reason": hdr_reason,
     }
 
 
@@ -642,6 +648,8 @@ def _probe_media(src_path):
         "height": int(h),
         "fps": float(fps),
         "video_codec": codec,
+        "is_hdr": _path_looks_hdr(src_path),
+        "hdr_reason": "filename" if _path_looks_hdr(src_path) else "",
     }
 
 
@@ -1241,6 +1249,9 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
     source_size_bytes = int(os.path.getsize(src))
     info["source_size_bytes"] = source_size_bytes
     info["source_size_mb"] = round(source_size_bytes / (1024.0 * 1024.0), 2)
+    info["is_hdr"] = bool(info.get("is_hdr") or _path_looks_hdr(src))
+    if info["is_hdr"] and not info.get("hdr_reason"):
+        info["hdr_reason"] = "filename"
     duration_sec = float(info.get("duration_sec") or 0.0)
     src_w = int(info.get("width") or 0)
     src_h = int(info.get("height") or 0)
@@ -1280,8 +1291,11 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
     base_est_fps = _estimate_encode_fps(out_w, out_h, encoder_preset)
     if options["encoder_family"] == "qsv":
         base_est_fps *= 3.0
+    if info.get("is_hdr"):
+        base_est_fps *= 0.88
     est_fps = max(1.0, min(base_est_fps * float(cpu.speed_index) * cpu_override_f, 500.0))
     eta_sec = (duration_sec * fps) / est_fps if est_fps > 0 else 0.0
+    history_prediction = _history_prediction_for(source_size_bytes, effective_preset, bool(info.get("is_hdr")))
 
     return {
         "src": src,
@@ -1310,6 +1324,7 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
             "target_size_auto": bool(options.get("target_size_auto")),
             "eta_seconds": int(round(eta_sec)),
             "eta_human": f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m" if eta_sec >= 3600 else f"{int(eta_sec//60)}m",
+            "history_prediction": history_prediction,
             "cpu_profile": cpu.id,
             "cpu_label": cpu.label,
             "cpu_speed_index": float(cpu.speed_index),
@@ -1385,6 +1400,203 @@ BETA_MEDIA_TAG_RE = re.compile(
     r"extended|unrated|directors?\.?cut|theatrical)\b",
     re.IGNORECASE,
 )
+HDR_PATH_RE = re.compile(
+    r"(?:^|[ ._\-\[\(])(?:hdr|hdr10|hdr10\+|hlg|dolby[ ._\-]*vision|dovi|bt2020)(?:\D|$)"
+    r"|(?:^|[ ._\-\[\(])dv(?:[ ._\-\]\)]|$)",
+    re.IGNORECASE,
+)
+
+
+def _path_looks_hdr(path: str) -> bool:
+    text = f"{os.path.basename(path or '')} {path or ''}"
+    return bool(HDR_PATH_RE.search(text))
+
+
+def _detect_hdr_from_video_info(stream: dict, path: str = "") -> tuple[bool, str]:
+    stream = stream if isinstance(stream, dict) else {}
+    transfer = str(stream.get("color_transfer") or "").lower()
+    primaries = str(stream.get("color_primaries") or "").lower()
+    color_space = str(stream.get("color_space") or "").lower()
+    pix_fmt = str(stream.get("pix_fmt") or "").lower()
+    side_data = stream.get("side_data_list") if isinstance(stream.get("side_data_list"), list) else []
+    side_text = json.dumps(side_data).lower() if side_data else ""
+
+    if transfer in {"smpte2084", "arib-std-b67"}:
+        return True, transfer
+    if "mastering display metadata" in side_text or "content light level" in side_text:
+        return True, "hdr metadata"
+    if "bt2020" in primaries or "bt2020" in color_space:
+        return True, "bt2020"
+    if "p010" in pix_fmt and _path_looks_hdr(path):
+        return True, "10-bit hdr filename"
+    if _path_looks_hdr(path):
+        return True, "filename"
+    return False, ""
+
+
+def _median(values: list[float]) -> float | None:
+    values = sorted(v for v in values if isinstance(v, (int, float)) and math.isfinite(float(v)))
+    if not values:
+        return None
+    mid = len(values) // 2
+    if len(values) % 2:
+        return float(values[mid])
+    return (float(values[mid - 1]) + float(values[mid])) / 2.0
+
+
+def _history_prediction_model() -> dict:
+    jobs_by_id = {row.get("id"): row for row in list_jobs_for_api()}
+    buckets: dict[tuple[str, object], list[dict]] = {}
+
+    for row in list_storage_encodes(limit=5000):
+        if not isinstance(row, dict):
+            continue
+        try:
+            src_bytes = int(row.get("src_bytes") or 0)
+            out_bytes = int(row.get("out_bytes") or 0)
+        except Exception:
+            continue
+        if src_bytes <= 0 or out_bytes <= 0:
+            continue
+
+        job = jobs_by_id.get(row.get("job_id")) or {}
+        preset = str(row.get("preset") or job.get("preset") or "").strip().lower()
+        if preset not in {"1080", "4k"}:
+            preset = guess_preset_from_filename(os.path.basename(row.get("src") or ""))
+
+        duration_seconds = row.get("duration_seconds")
+        if duration_seconds is None:
+            duration_seconds = job.get("duration_seconds")
+        try:
+            duration_seconds = float(duration_seconds or 0.0)
+        except Exception:
+            duration_seconds = 0.0
+
+        is_hdr = row.get("is_hdr")
+        if is_hdr is None:
+            is_hdr = job.get("is_hdr")
+        if is_hdr is None:
+            is_hdr = _path_looks_hdr(str(row.get("src") or row.get("out") or ""))
+        is_hdr = bool(is_hdr)
+
+        out_ratio = out_bytes / float(src_bytes)
+        if out_ratio <= 0 or out_ratio > 2.0:
+            continue
+
+        src_gb = src_bytes / float(1024**3)
+        sample = {
+            "preset": preset,
+            "is_hdr": is_hdr,
+            "out_ratio": out_ratio,
+            "saved_ratio": max(0.0, (src_bytes - out_bytes) / float(src_bytes)),
+            "seconds_per_gb": (duration_seconds / src_gb) if duration_seconds > 0 and src_gb > 0 else None,
+        }
+
+        for key in ((preset, is_hdr), (preset, None), ("any", is_hdr), ("any", None)):
+            buckets.setdefault(key, []).append(sample)
+
+    return {"buckets": buckets}
+
+
+def _history_stats_from_samples(samples: list[dict]) -> dict | None:
+    if not samples:
+        return None
+    out_ratio = _median([float(s.get("out_ratio") or 0.0) for s in samples])
+    saved_ratio = _median([float(s.get("saved_ratio") or 0.0) for s in samples])
+    seconds_per_gb = _median([
+        float(s.get("seconds_per_gb") or 0.0)
+        for s in samples
+        if s.get("seconds_per_gb")
+    ])
+    if out_ratio is None:
+        return None
+    return {
+        "sample_count": len(samples),
+        "runtime_sample_count": len([s for s in samples if s.get("seconds_per_gb")]),
+        "out_ratio": max(0.01, min(1.5, float(out_ratio))),
+        "saved_ratio": max(0.0, min(1.0, float(saved_ratio or 0.0))),
+        "seconds_per_gb": seconds_per_gb,
+    }
+
+
+def _history_prediction_for(src_bytes: int, preset: str, is_hdr: bool, model: dict | None = None) -> dict:
+    try:
+        src_bytes_i = int(src_bytes or 0)
+    except Exception:
+        src_bytes_i = 0
+    if src_bytes_i <= 0:
+        return {"available": False, "sample_count": 0, "reason": "missing source size"}
+
+    preset_key = preset if preset in {"1080", "4k"} else "1080"
+    model = model or _history_prediction_model()
+    buckets = model.get("buckets") or {}
+    match = "none"
+    stats = None
+    for key, label in (
+        ((preset_key, bool(is_hdr)), "preset+hdr"),
+        ((preset_key, None), "preset"),
+        (("any", bool(is_hdr)), "hdr"),
+        (("any", None), "all"),
+    ):
+        stats = _history_stats_from_samples(buckets.get(key) or [])
+        if stats:
+            match = label
+            break
+
+    if not stats:
+        return {"available": False, "sample_count": 0, "reason": "not enough history", "preset": preset_key, "is_hdr": bool(is_hdr)}
+
+    estimated_out = int(round(src_bytes_i * stats["out_ratio"]))
+    estimated_saved = max(0, src_bytes_i - estimated_out)
+    src_gb = src_bytes_i / float(1024**3)
+    estimated_runtime = None
+    if stats.get("seconds_per_gb"):
+        estimated_runtime = int(round(src_gb * float(stats["seconds_per_gb"])))
+
+    sample_count = int(stats.get("sample_count") or 0)
+    confidence = "low"
+    if match == "preset+hdr" and sample_count >= 8:
+        confidence = "high"
+    elif match in {"preset+hdr", "preset"} and sample_count >= 3:
+        confidence = "medium"
+
+    return {
+        "available": True,
+        "preset": preset_key,
+        "is_hdr": bool(is_hdr),
+        "match": match,
+        "confidence": confidence,
+        "sample_count": sample_count,
+        "runtime_sample_count": int(stats.get("runtime_sample_count") or 0),
+        "estimated_out_bytes": estimated_out,
+        "estimated_saved_bytes": estimated_saved,
+        "estimated_runtime_seconds": estimated_runtime,
+        "out_ratio": round(float(stats["out_ratio"]), 4),
+        "saved_ratio": round(float(stats.get("saved_ratio") or 0.0), 4),
+    }
+
+
+def _combine_history_predictions(predictions: list[dict], total_size_bytes: int = 0) -> dict:
+    usable = [p for p in predictions if isinstance(p, dict) and p.get("available")]
+    if not usable:
+        return {"available": False, "sample_count": 0, "reason": "not enough history"}
+
+    estimated_out = sum(int(p.get("estimated_out_bytes") or 0) for p in usable)
+    estimated_saved = sum(int(p.get("estimated_saved_bytes") or 0) for p in usable)
+    runtime_values = [p.get("estimated_runtime_seconds") for p in usable if p.get("estimated_runtime_seconds") is not None]
+    total_runtime = sum(int(v or 0) for v in runtime_values) if runtime_values else None
+    sample_count = sum(int(p.get("sample_count") or 0) for p in usable)
+
+    return {
+        "available": True,
+        "confidence": "medium" if len(usable) >= 3 else "low",
+        "sample_count": sample_count,
+        "items_predicted": len(usable),
+        "items_total": len(predictions),
+        "estimated_out_bytes": estimated_out,
+        "estimated_saved_bytes": estimated_saved if estimated_saved else max(0, int(total_size_bytes or 0) - estimated_out),
+        "estimated_runtime_seconds": total_runtime,
+    }
 
 
 def _beta_mapped_roots(settings=None) -> list[dict]:
@@ -1463,13 +1675,22 @@ def _beta_load_library_cache(settings=None) -> dict:
     data.setdefault("shows", [])
     data.setdefault("stats", {})
     data["tmdb_configured"] = bool(_beta_tmdb_config(settings))
-    return data
+    return _beta_refresh_predictions(data)
 
 
 def _beta_save_library_cache(data: dict) -> None:
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(BETA_LIBRARY_CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
+
+def _beta_clear_library_cache() -> None:
+    try:
+        os.remove(BETA_LIBRARY_CACHE_FILE)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[WARN] Failed to clear beta library cache: {e}", flush=True)
 
 
 def _beta_clean_title(value: str) -> str:
@@ -1540,19 +1761,47 @@ def _beta_parse_media(src_path: str) -> dict:
         "path": src_path,
         "folder": os.path.dirname(src_path),
         "size_bytes": size_bytes,
+        "is_hdr": _path_looks_hdr(src_path),
+        "hdr_reason": "filename" if _path_looks_hdr(src_path) else "",
         "detected_reason": source_type.get("reason") or "filename",
         "target": _wizard_source_target("show" if media_type == "show" else "movie"),
     }
 
 
+def _beta_clean_tmdb_secret(value: str) -> str:
+    value = str(value or "").strip()
+    if value.lower().startswith("bearer "):
+        value = value[7:].strip()
+    return value
+
+
+def _beta_looks_like_tmdb_bearer(value: str) -> bool:
+    value = _beta_clean_tmdb_secret(value)
+    return value.startswith("eyJ") or value.count(".") >= 2
+
+
 def _beta_tmdb_config(settings: dict):
-    bearer = str(settings.get("tmdb_bearer_token") or "").strip()
-    api_key = str(settings.get("tmdb_api_key") or "").strip()
+    bearer = _beta_clean_tmdb_secret(settings.get("tmdb_bearer_token") or "")
+    api_key = _beta_clean_tmdb_secret(settings.get("tmdb_api_key") or "")
+    if not bearer and _beta_looks_like_tmdb_bearer(api_key):
+        bearer = api_key
+        api_key = ""
     if bearer:
         return {"Authorization": f"Bearer {bearer}"}, {}
     if api_key:
         return {}, {"api_key": api_key}
     return None
+
+
+def _beta_tmdb_auth_cache_tag(settings: dict) -> str:
+    auth = _beta_tmdb_config(settings or {})
+    if not auth:
+        return "off"
+    headers, extra_params = auth
+    secret = headers.get("Authorization") or extra_params.get("api_key") or ""
+    if not secret:
+        return "off"
+    return hashlib.sha256(secret.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
 
 def _beta_tmdb_search(media_type: str, title: str, year=None, settings=None) -> dict:
@@ -1561,7 +1810,7 @@ def _beta_tmdb_search(media_type: str, title: str, year=None, settings=None) -> 
     if not auth or not title:
         return {"configured": bool(auth), "poster_url": "", "source": "placeholder"}
 
-    cache_key = (media_type, title.lower(), str(year or ""), bool(settings.get("tmdb_bearer_token")))
+    cache_key = (media_type, title.lower(), str(year or ""), _beta_tmdb_auth_cache_tag(settings))
     cached = BETA_POSTER_CACHE.get(cache_key)
     if cached:
         return cached.copy()
@@ -1772,6 +2021,46 @@ def _beta_combine_library_scans(scans: list[dict], *, recursive: bool, limit: in
         "movies": movies,
         "shows": show_rows,
     }
+
+
+def _beta_refresh_predictions(data: dict) -> dict:
+    data = data if isinstance(data, dict) else {}
+    model = _history_prediction_model()
+
+    for item in data.get("movies") or []:
+        if not isinstance(item, dict):
+            continue
+        path = str(item.get("path") or "")
+        preset = guess_preset_from_filename(os.path.basename(path))
+        is_hdr = bool(item.get("is_hdr") or _path_looks_hdr(path))
+        item["is_hdr"] = is_hdr
+        if is_hdr and not item.get("hdr_reason"):
+            item["hdr_reason"] = "filename"
+        item["prediction"] = _history_prediction_for(int(item.get("size_bytes") or 0), preset, is_hdr, model)
+
+    for show in data.get("shows") or []:
+        if not isinstance(show, dict):
+            continue
+        file_predictions = []
+        show_is_hdr = bool(show.get("is_hdr"))
+        for ep in show.get("files") or []:
+            if not isinstance(ep, dict):
+                continue
+            path = str(ep.get("path") or "")
+            preset = guess_preset_from_filename(os.path.basename(path))
+            is_hdr = bool(ep.get("is_hdr") or _path_looks_hdr(path))
+            ep["is_hdr"] = is_hdr
+            if is_hdr and not ep.get("hdr_reason"):
+                ep["hdr_reason"] = "filename"
+            show_is_hdr = show_is_hdr or is_hdr
+            ep["prediction"] = _history_prediction_for(int(ep.get("size_bytes") or 0), preset, is_hdr, model)
+            file_predictions.append(ep["prediction"])
+        show["is_hdr"] = bool(show_is_hdr)
+        if show["is_hdr"] and not show.get("hdr_reason"):
+            show["hdr_reason"] = "episode"
+        show["prediction"] = _combine_history_predictions(file_predictions, int(show.get("total_size_bytes") or 0))
+
+    return data
 
 
 def _beta_scan_all_libraries(*, recursive: bool, limit: int, posters: bool, settings: dict) -> dict:
@@ -2074,6 +2363,7 @@ def register_routes(app):
                     settings=settings,
                     root_kind=mapped_root.get("kind") or "",
                 )
+            data = _beta_refresh_predictions(data)
             data = _beta_stamp_library_scan(data)
             _beta_save_library_cache(data)
         except Exception as e:
@@ -2085,6 +2375,58 @@ def register_routes(app):
     def beta_library_cache_api():
         """Return the last saved Beta library scan without touching the filesystem tree."""
         return jsonify(_beta_load_library_cache(load_settings()))
+
+    @app.route("/api/beta/queue", methods=["POST"])
+    def beta_queue_api():
+        """Queue selected Beta library files using the normal Jobs presets."""
+        data = request.get_json(force=True) or {}
+        preset = str(data.get("preset") or "auto").strip().lower()
+        if preset not in {"auto", "1080", "4k"}:
+            return jsonify(error="invalid preset"), 400
+
+        raw_paths = data.get("paths")
+        if isinstance(raw_paths, str):
+            raw_paths = [raw_paths]
+        if not isinstance(raw_paths, list):
+            return jsonify(error="missing paths"), 400
+
+        seen = set()
+        to_create = []
+        skipped = []
+        for raw in raw_paths[:500]:
+            src = str(raw or "").strip()
+            if not src or src in seen:
+                continue
+            seen.add(src)
+
+            reason = ""
+            if not os.path.isfile(src):
+                reason = "not a file"
+            elif not is_allowed_path(src):
+                reason = "path not allowed"
+            elif not src.lower().endswith(VIDEO_EXTS):
+                reason = "not a video"
+            elif os.path.splitext(os.path.basename(src))[0].lower().endswith("-tsd"):
+                reason = "already tagged -TSD"
+
+            if reason:
+                skipped.append({"path": src, "reason": reason})
+                continue
+
+            effective_preset = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
+            to_create.append((src, effective_preset))
+
+        if not to_create:
+            return jsonify(error="no queueable files selected", skipped=skipped), 400
+
+        count = create_jobs_batch(to_create)
+        return jsonify(
+            ok=True,
+            count=count,
+            requested=len(seen),
+            skipped=skipped,
+            preset=preset,
+        )
 
     @app.route("/api/wizard_presets", methods=["GET", "POST"])
     def wizard_presets_api():
@@ -2176,8 +2518,13 @@ def register_routes(app):
             return jsonify(settings=settings)
 
         data = request.get_json(silent=True) or {}
+        old_tmdb_tag = _beta_tmdb_auth_cache_tag(load_settings())
         new_settings = save_settings(data)
-        return jsonify(settings=new_settings)
+        tmdb_changed = _beta_tmdb_auth_cache_tag(new_settings) != old_tmdb_tag
+        if tmdb_changed:
+            BETA_POSTER_CACHE.clear()
+            _beta_clear_library_cache()
+        return jsonify(settings=new_settings, tmdb_changed=tmdb_changed)
 
     # ------------- CPU profiles (JSON API) -------------
 

@@ -2,17 +2,12 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HandBrake TSD Helper - Beta</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
   <style>
-    body.beta-page {
-      min-width: 0;
-    }
-
     .beta-shell {
-      max-width: 1480px;
-      margin: 0 auto;
+      max-width: none;
+      margin: 0;
     }
 
     .beta-toolbar {
@@ -78,6 +73,22 @@
       color: #fff;
     }
 
+    .beta-bulkbar {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 8px;
+      margin-top: 10px;
+      padding: 8px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 6px;
+      background: rgba(0,0,0,0.14);
+    }
+
+    .beta-bulkbar select {
+      min-height: 32px;
+    }
+
     .beta-layout {
       display: grid;
       grid-template-columns: 1fr 1fr;
@@ -123,6 +134,11 @@
       background: rgba(255,255,255,0.035);
       overflow: hidden;
       min-width: 0;
+    }
+
+    .beta-card-selected {
+      outline: 2px solid rgba(0,188,212,0.78);
+      outline-offset: -2px;
     }
 
     .beta-poster {
@@ -188,6 +204,15 @@
       font-size: 12px;
     }
 
+    .beta-select-line {
+      display: flex;
+      gap: 7px;
+      align-items: center;
+      margin-bottom: 7px;
+      color: rgba(229,229,229,0.82);
+      font-size: 12px;
+    }
+
     .beta-card-actions {
       display: flex;
       gap: 6px;
@@ -213,7 +238,7 @@
       font-size: 12px;
     }
 
-    @media (max-width: 980px) {
+    @media (max-width: 860px) {
       .beta-toolbar,
       .beta-layout,
       .beta-stats {
@@ -222,6 +247,11 @@
 
       .beta-grid {
         max-height: none;
+      }
+
+      .beta-bulkbar {
+        align-items: stretch;
+        flex-direction: column;
       }
     }
   </style>
@@ -271,6 +301,20 @@
         <span id="betaStatus" class="small"></span>
       </div>
 
+      <div class="beta-bulkbar">
+        <label class="beta-toggle" for="queuePresetSelect">
+          Queue preset
+          <select id="queuePresetSelect">
+            <option value="auto" selected>Auto</option>
+            <option value="1080">1080p</option>
+            <option value="4k">4K</option>
+          </select>
+        </label>
+        <button id="queueSelectedBtn" type="button" disabled>Queue selected</button>
+        <button id="clearSelectedBtn" type="button">Clear selection</button>
+        <span id="selectedCount" class="small">0 selected</span>
+      </div>
+
       <div class="beta-stats">
         <div class="beta-stat"><span>Movies</span><strong id="statMovies">0</strong></div>
         <div class="beta-stat"><span>Shows</span><strong id="statShows">0</strong></div>
@@ -304,6 +348,7 @@
     const roots = {{ roots|tojson }};
     const tmdbConfigured = {{ tmdb_configured|tojson }};
     let libraryData = { movies: [], shows: [], stats: {} };
+    const selectedPaths = new Set();
 
     function el(id) {
       return document.getElementById(id);
@@ -319,6 +364,15 @@
       const kb = value / 1024;
       if (kb >= 1) return `${kb.toFixed(1)} KB`;
       return `${Math.round(value)} B`;
+    }
+
+    function fmtDuration(seconds) {
+      const total = Number(seconds || 0);
+      if (!Number.isFinite(total) || total <= 0) return "";
+      const h = Math.floor(total / 3600);
+      const m = Math.round((total % 3600) / 60);
+      if (h > 0) return `${h}h ${m}m`;
+      return `${Math.max(1, m)}m`;
     }
 
     function fmtDateTime(ts) {
@@ -348,6 +402,108 @@
         item.tmdb_title
       ].join(" ").toLowerCase();
       return blob.includes(needle);
+    }
+
+    function appendMetaLine(meta, text) {
+      const span = document.createElement("span");
+      span.textContent = text;
+      meta.appendChild(span);
+    }
+
+    function itemPaths(item) {
+      if (!item) return [];
+      if (Array.isArray(item.files)) {
+        return item.files.map((file) => file.path).filter(Boolean);
+      }
+      return item.path ? [item.path] : [];
+    }
+
+    function selectionCount() {
+      return selectedPaths.size;
+    }
+
+    function itemIsSelected(item) {
+      const paths = itemPaths(item);
+      return paths.length > 0 && paths.every((path) => selectedPaths.has(path));
+    }
+
+    function setItemSelected(item, checked) {
+      itemPaths(item).forEach((path) => {
+        if (checked) selectedPaths.add(path);
+        else selectedPaths.delete(path);
+      });
+      updateSelectionUi();
+      renderLibrary();
+    }
+
+    function clearSelection() {
+      selectedPaths.clear();
+      updateSelectionUi();
+      renderLibrary();
+    }
+
+    function updateSelectionUi() {
+      const count = selectionCount();
+      el("selectedCount").textContent = `${count} selected`;
+      el("queueSelectedBtn").disabled = count === 0;
+    }
+
+    function predictionText(prediction) {
+      if (!prediction || !prediction.available) return "Prediction: learning from job history";
+      const parts = [
+        `${fmtBytes(prediction.estimated_out_bytes)} predicted`,
+        `${fmtBytes(prediction.estimated_saved_bytes)} saved`
+      ];
+      const runtime = fmtDuration(prediction.estimated_runtime_seconds);
+      if (runtime) parts.push(runtime);
+      const samples = Number(prediction.sample_count || 0);
+      const confidence = prediction.confidence || "low";
+      return `${parts.join(" / ")} (${samples} sample${samples === 1 ? "" : "s"}, ${confidence})`;
+    }
+
+    function addSelectLine(body, item, label) {
+      const wrap = document.createElement("label");
+      wrap.className = "beta-select-line";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = itemIsSelected(item);
+      checkbox.addEventListener("change", () => setItemSelected(item, checkbox.checked));
+      wrap.appendChild(checkbox);
+      wrap.appendChild(document.createTextNode(label));
+      body.appendChild(wrap);
+    }
+
+    async function queuePaths(paths, label = "selection") {
+      const cleanPaths = Array.from(new Set((paths || []).filter(Boolean)));
+      if (!cleanPaths.length) {
+        el("betaStatus").textContent = "Nothing selected to queue.";
+        return;
+      }
+      const preset = el("queuePresetSelect").value || "auto";
+      el("betaStatus").textContent = `Queuing ${label}...`;
+      el("queueSelectedBtn").disabled = true;
+      try {
+        const res = await fetch("/api/beta/queue", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ paths: cleanPaths, preset })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Queue failed");
+        const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
+        el("betaStatus").textContent = `Queued ${data.count || 0} file${data.count === 1 ? "" : "s"}${skipped ? `, skipped ${skipped}` : ""}.`;
+        cleanPaths.forEach((path) => selectedPaths.delete(path));
+        updateSelectionUi();
+        renderLibrary();
+      } catch (e) {
+        el("betaStatus").textContent = e.message || "Queue failed";
+      } finally {
+        updateSelectionUi();
+      }
+    }
+
+    function queueSelected() {
+      queuePaths(Array.from(selectedPaths), "selected files");
     }
 
     function cardPoster(item, label) {
@@ -386,10 +542,12 @@
     function makeMovieCard(item) {
       const card = document.createElement("article");
       card.className = "beta-card";
+      if (itemIsSelected(item)) card.classList.add("beta-card-selected");
       card.appendChild(cardPoster(item, "Movie"));
 
       const body = document.createElement("div");
       body.className = "beta-card-body";
+      addSelectLine(body, item, "Select movie");
 
       const title = document.createElement("div");
       title.className = "beta-card-title";
@@ -398,11 +556,11 @@
 
       const meta = document.createElement("div");
       meta.className = "beta-card-meta";
-      meta.innerHTML = `
-        <span>${fmtBytes(item.size_bytes)} source</span>
-        <span>${item.target?.label || "Movie"} target: ${item.target?.target_size_value || 5}${item.target?.target_size_unit || "GB"}</span>
-        <span>${item.filename || ""}</span>
-      `;
+      appendMetaLine(meta, `${fmtBytes(item.size_bytes)} source`);
+      appendMetaLine(meta, `${item.is_hdr ? "HDR" : "SDR"} source`);
+      appendMetaLine(meta, predictionText(item.prediction));
+      appendMetaLine(meta, `${item.target?.label || "Movie"} target: ${item.target?.target_size_value || 5}${item.target?.target_size_unit || "GB"}`);
+      appendMetaLine(meta, item.filename || "");
       body.appendChild(meta);
 
       const actions = document.createElement("div");
@@ -412,6 +570,11 @@
       wizard.textContent = "Wizard";
       wizard.onclick = () => openInWizard(item.path);
       actions.appendChild(wizard);
+      const queue = document.createElement("button");
+      queue.type = "button";
+      queue.textContent = "Queue";
+      queue.onclick = () => queuePaths([item.path], item.title || "movie");
+      actions.appendChild(queue);
       body.appendChild(actions);
 
       card.appendChild(body);
@@ -421,10 +584,12 @@
     function makeShowCard(item) {
       const card = document.createElement("article");
       card.className = "beta-card";
+      if (itemIsSelected(item)) card.classList.add("beta-card-selected");
       card.appendChild(cardPoster(item, "Show"));
 
       const body = document.createElement("div");
       body.className = "beta-card-body";
+      addSelectLine(body, item, "Select episodes");
 
       const title = document.createElement("div");
       title.className = "beta-card-title";
@@ -434,24 +599,29 @@
       const seasonText = item.season_count === 1 ? "1 season" : `${item.season_count || 0} seasons`;
       const meta = document.createElement("div");
       meta.className = "beta-card-meta";
-      meta.innerHTML = `
-        <span>${item.episode_count || 0} episodes / ${seasonText}</span>
-        <span>${fmtBytes(item.total_size_bytes)} source total</span>
-        <span>Episode target: ${item.target?.target_size_value || 800}${item.target?.target_size_unit || "MB"}</span>
-      `;
+      appendMetaLine(meta, `${item.episode_count || 0} episodes / ${seasonText}`);
+      appendMetaLine(meta, `${fmtBytes(item.total_size_bytes)} source total`);
+      appendMetaLine(meta, `${item.is_hdr ? "HDR" : "SDR"} source`);
+      appendMetaLine(meta, predictionText(item.prediction));
+      appendMetaLine(meta, `Episode target: ${item.target?.target_size_value || 800}${item.target?.target_size_unit || "MB"}`);
       body.appendChild(meta);
 
       const first = Array.isArray(item.files) ? item.files[0] : null;
+      const actions = document.createElement("div");
+      actions.className = "beta-card-actions";
       if (first) {
-        const actions = document.createElement("div");
-        actions.className = "beta-card-actions";
         const wizard = document.createElement("button");
         wizard.type = "button";
         wizard.textContent = "First Episode";
         wizard.onclick = () => openInWizard(first.path);
         actions.appendChild(wizard);
-        body.appendChild(actions);
       }
+      const queue = document.createElement("button");
+      queue.type = "button";
+      queue.textContent = "Queue Show";
+      queue.onclick = () => queuePaths(itemPaths(item), item.title || "show");
+      actions.appendChild(queue);
+      body.appendChild(actions);
 
       card.appendChild(body);
       return card;
@@ -488,11 +658,23 @@
       el("statScanned").textContent = stats.scanned || 0;
     }
 
+    function posterProblemText(data = {}) {
+      const rows = [
+        ...(Array.isArray(data.movies) ? data.movies : []),
+        ...(Array.isArray(data.shows) ? data.shows : [])
+      ];
+      const errors = rows.filter((item) => item.source === "tmdb_error");
+      if (!errors.length) return "";
+      const first = errors.find((item) => item.error)?.error || "TMDb lookup failed";
+      return ` Poster lookup had ${errors.length} error${errors.length === 1 ? "" : "s"}: ${first}`;
+    }
+
     function renderTmdbNotice(data = {}) {
       const scannedAt = fmtDateTime(data.generated_at);
       const scanText = scannedAt ? ` Last scan: ${scannedAt}.` : " No saved scan yet.";
+      const problemText = posterProblemText(data);
       if (data.tmdb_configured) {
-        el("tmdbNotice").textContent = "This product uses the TMDb API but is not endorsed or certified by TMDb." + scanText;
+        el("tmdbNotice").textContent = "This product uses the TMDb API but is not endorsed or certified by TMDb." + scanText + problemText;
       } else {
         el("tmdbNotice").textContent = "Poster lookup is off. Add TMDb credentials in Settings for live posters." + scanText;
       }
@@ -514,6 +696,7 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Failed to load saved scan");
         libraryData = data;
+        selectedPaths.clear();
         applyCachedScope(data);
         renderStats(data.stats || {});
         renderTmdbNotice(data);
@@ -545,6 +728,7 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Scan failed");
         libraryData = data;
+        selectedPaths.clear();
         renderStats(data.stats || {});
         renderTmdbNotice(data);
         renderLibrary();
@@ -581,7 +765,10 @@
       renderLibrary();
       el("scanBtn").addEventListener("click", scanLibrary);
       el("searchInput").addEventListener("input", renderLibrary);
+      el("queueSelectedBtn").addEventListener("click", queueSelected);
+      el("clearSelectedBtn").addEventListener("click", clearSelection);
       el("posterToggle").checked = true;
+      updateSelectionUi();
       if (roots.length) {
         loadCachedLibrary();
       } else {

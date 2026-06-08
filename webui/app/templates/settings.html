@@ -158,6 +158,22 @@
       background: rgba(0,0,0,0.18);
     }
 
+    .folder-add-choice {
+      display: flex;
+      gap: 10px;
+      align-items: center;
+      justify-content: space-between;
+      margin-bottom: 10px;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 6px;
+      padding: 8px;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .folder-add-choice[hidden] {
+      display: none;
+    }
+
     .folder-browser-item {
       justify-content: space-between;
       padding: 8px;
@@ -185,6 +201,7 @@
       }
 
       .allowed-root-row,
+      .folder-add-choice,
       .folder-browser-item {
         align-items: stretch;
         flex-direction: column;
@@ -381,9 +398,17 @@
         <div id="folderBrowserPath" class="folder-browser-current-path small"></div>
         <div class="folder-browser-toolbar">
           <button id="folderBrowserUpBtn" type="button">Up one folder</button>
-          <button id="folderBrowserUseBtn" type="button">Use current folder</button>
+          <button id="folderBrowserUseBtn" type="button">Add current folder</button>
           <button id="folderBrowserManualBtn" type="button">Type path manually</button>
           <span id="folderBrowserStatus" class="small"></span>
+        </div>
+        <div id="folderAddChoice" class="folder-add-choice" hidden>
+          <div id="folderAddChoiceText" class="small"></div>
+          <div class="folder-browser-actions">
+            <button id="folderAddMovieBtn" type="button">Movies</button>
+            <button id="folderAddShowBtn" type="button">Shows</button>
+            <button id="folderAddCancelBtn" type="button">Cancel</button>
+          </div>
         </div>
         <div id="folderBrowserList" class="folder-browser-list"></div>
       </div>
@@ -489,11 +514,14 @@
     </div>
 
     <div id="storageTablePane" class="row history-table-pane">
-      <table class="simple-table" style="width:100%; min-width:780px;">
+      <table class="simple-table" style="width:100%; min-width:980px;">
         <thead>
           <tr>
             <th style="width:170px;">Time</th>
             <th>Movie / File</th>
+            <th style="width:90px;">Preset</th>
+            <th style="width:110px;">Runtime</th>
+            <th style="width:80px;">HDR</th>
             <th style="width:110px;">Old (GB)</th>
             <th style="width:110px;">New (GB)</th>
             <th style="width:120px;">Saved (GB)</th>
@@ -518,6 +546,7 @@
     let betaMediaFolders = normalizeBetaMediaFolders(initialSettings?.beta_media_folders);
     let folderBrowserKind = "movies";
     let folderBrowserPath = "";
+    let pendingFolderAdd = null;
 
     function normalizeFolderRows(rows) {
       if (!Array.isArray(rows)) return [];
@@ -627,6 +656,35 @@
       return !exists;
     }
 
+    function hideFolderAddChoice() {
+      pendingFolderAdd = null;
+      const choice = document.getElementById("folderAddChoice");
+      if (choice) choice.hidden = true;
+      const text = document.getElementById("folderAddChoiceText");
+      if (text) text.textContent = "";
+    }
+
+    function showFolderAddChoice(path, label) {
+      const cleanPath = String(path || "").trim();
+      if (!cleanPath) return;
+      pendingFolderAdd = {
+        path: cleanPath,
+        label: String(label || folderBasename(cleanPath) || "").trim()
+      };
+      const choice = document.getElementById("folderAddChoice");
+      const text = document.getElementById("folderAddChoiceText");
+      if (text) text.textContent = `Add "${pendingFolderAdd.label || pendingFolderAdd.path}" as:`;
+      if (choice) choice.hidden = false;
+      setFolderBrowserStatus("");
+    }
+
+    function choosePendingFolderKind(kind) {
+      if (!pendingFolderAdd) return;
+      addMappedFolder(kind, pendingFolderAdd.path, pendingFolderAdd.label);
+      hideFolderAddChoice();
+      hideFolderBrowser();
+    }
+
     function updateFolderMapSummary() {
       const node = document.getElementById("folderMapSummary");
       if (!node) return;
@@ -660,19 +718,16 @@
         browseBtn.textContent = "Browse";
         browseBtn.onclick = () => showFolderBrowser(folderBrowserKind, root.path);
 
-        const addMovieBtn = document.createElement("button");
-        addMovieBtn.type = "button";
-        addMovieBtn.textContent = "Add movie";
-        addMovieBtn.onclick = () => addMappedFolder("movies", root.path, root.label);
-
-        const addShowBtn = document.createElement("button");
-        addShowBtn.type = "button";
-        addShowBtn.textContent = "Add show";
-        addShowBtn.onclick = () => addMappedFolder("shows", root.path, root.label);
+        const addBtn = document.createElement("button");
+        addBtn.type = "button";
+        addBtn.textContent = "Add";
+        addBtn.onclick = () => {
+          showFolderBrowser(folderBrowserKind);
+          showFolderAddChoice(root.path, root.label);
+        };
 
         actions.appendChild(browseBtn);
-        actions.appendChild(addMovieBtn);
-        actions.appendChild(addShowBtn);
+        actions.appendChild(addBtn);
         div.appendChild(text);
         div.appendChild(actions);
         node.appendChild(div);
@@ -766,6 +821,7 @@
       const panel = document.getElementById("folderBrowserPanel");
       if (panel) panel.hidden = true;
       folderBrowserPath = "";
+      hideFolderAddChoice();
       setFolderBrowserStatus("");
     }
 
@@ -774,7 +830,8 @@
       const panel = document.getElementById("folderBrowserPanel");
       const title = document.getElementById("folderBrowserTitle");
       if (panel) panel.hidden = false;
-      if (title) title.textContent = `Choose ${folderKindLabel(folderBrowserKind).toLowerCase()} folder`;
+      if (title) title.textContent = "Choose a folder to add";
+      hideFolderAddChoice();
       if (startPath) {
         loadFolderBrowserPath(startPath);
       } else {
@@ -792,8 +849,8 @@
       if (useBtn) {
         useBtn.disabled = !folderBrowserPath;
         useBtn.textContent = folderBrowserPath
-          ? `Use current for ${folderKindLabel(folderBrowserKind).toLowerCase()} folder`
-          : "Use current folder";
+          ? "Add current folder"
+          : "Add current folder";
       }
     }
 
@@ -834,11 +891,8 @@
 
         const useBtn = document.createElement("button");
         useBtn.type = "button";
-        useBtn.textContent = `Use for ${folderKindLabel(folderBrowserKind).toLowerCase()}`;
-        useBtn.onclick = () => {
-          addMappedFolder(folderBrowserKind, root.path, root.label);
-          hideFolderBrowser();
-        };
+        useBtn.textContent = "Add";
+        useBtn.onclick = () => showFolderAddChoice(root.path, root.label);
 
         actions.appendChild(openBtn);
         actions.appendChild(useBtn);
@@ -889,11 +943,8 @@
 
         const useBtn = document.createElement("button");
         useBtn.type = "button";
-        useBtn.textContent = "Use";
-        useBtn.onclick = () => {
-          addMappedFolder(folderBrowserKind, fullPath, dirName);
-          hideFolderBrowser();
-        };
+        useBtn.textContent = "Add";
+        useBtn.onclick = () => showFolderAddChoice(fullPath, dirName);
 
         name.appendChild(document.createTextNode(" "));
         name.appendChild(tag);
@@ -911,6 +962,7 @@
         renderFolderBrowserRoots();
         return;
       }
+      hideFolderAddChoice();
       folderBrowserPath = cleanPath;
       const pathNode = document.getElementById("folderBrowserPath");
       const list = document.getElementById("folderBrowserList");
@@ -938,8 +990,7 @@
 
     function useCurrentFolderBrowserPath() {
       if (!folderBrowserPath) return;
-      addMappedFolder(folderBrowserKind, folderBrowserPath, folderBasename(folderBrowserPath));
-      hideFolderBrowser();
+      showFolderAddChoice(folderBrowserPath, folderBasename(folderBrowserPath));
     }
 
     function goUpFolderBrowser() {
@@ -1060,7 +1111,9 @@
         }
 
         if (statusEl) {
-          statusEl.textContent = "Saved.";
+          statusEl.textContent = data.tmdb_changed
+            ? "Saved. Poster cache cleared; refresh Beta scan."
+            : "Saved.";
           setTimeout(() => { statusEl.textContent = ""; }, 3000);
         }
         return true;
@@ -1242,6 +1295,17 @@
       return (n / (1024 ** 3)).toFixed(3);
     }
 
+    function fmtDuration(seconds) {
+      if (seconds === null || seconds === undefined || seconds === "") return "";
+      const total = Math.max(0, Math.round(Number(seconds) || 0));
+      const h = Math.floor(total / 3600);
+      const m = Math.floor((total % 3600) / 60);
+      const s = total % 60;
+      if (h > 0) return `${h}h ${m}m`;
+      if (m > 0) return `${m}m ${s}s`;
+      return `${s}s`;
+    }
+
     const HISTORY_FETCH_LIMIT = 200;
     const HISTORY_VISIBLE_ROW_OPTIONS = [10, 25, 50, 100];
     const HISTORY_HEADER_PX = 38;
@@ -1358,13 +1422,16 @@
         if (tbody) {
           tbody.innerHTML = "";
           if (rows.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='5' class='small'>(no history yet)</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='8' class='small'>(no history yet)</td></tr>";
           } else {
             rows.forEach(r => {
               const tr = document.createElement("tr");
               const file = (r.src || "").split("/").pop();
               appendTextCell(tr, fmtTs(r.ts));
               appendTextCell(tr, file || r.src || "", "history-file-cell");
+              appendTextCell(tr, r.preset || "");
+              appendTextCell(tr, fmtDuration(r.duration_seconds));
+              appendTextCell(tr, r.is_hdr ? "HDR" : "SDR");
               appendTextCell(tr, fmtGB(r.src_bytes));
               appendTextCell(tr, fmtGB(r.out_bytes));
               appendTextCell(tr, fmtGB(r.saved_bytes));
@@ -1445,6 +1512,12 @@
       if (folderBrowserManualBtn) folderBrowserManualBtn.onclick = () => addManualFolderRow(folderBrowserKind);
       const folderBrowserCancelBtn = document.getElementById("folderBrowserCancelBtn");
       if (folderBrowserCancelBtn) folderBrowserCancelBtn.onclick = hideFolderBrowser;
+      const folderAddMovieBtn = document.getElementById("folderAddMovieBtn");
+      if (folderAddMovieBtn) folderAddMovieBtn.onclick = () => choosePendingFolderKind("movies");
+      const folderAddShowBtn = document.getElementById("folderAddShowBtn");
+      if (folderAddShowBtn) folderAddShowBtn.onclick = () => choosePendingFolderKind("shows");
+      const folderAddCancelBtn = document.getElementById("folderAddCancelBtn");
+      if (folderAddCancelBtn) folderAddCancelBtn.onclick = hideFolderAddChoice;
       const saveFolderMapBtn = document.getElementById("saveFolderMapBtn");
       if (saveFolderMapBtn) {
         saveFolderMapBtn.onclick = async () => {

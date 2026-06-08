@@ -16,7 +16,9 @@ Schema (loose):
        "preset": "1080"|"4k"|"auto",
        "src_bytes": 123,
        "out_bytes": 456,
-       "saved_bytes": 789
+       "saved_bytes": 789,
+       "duration_seconds": 1234.5,
+       "is_hdr": false
      }, ...
   ],
   "totals": {"count": 0, "saved_bytes": 0}
@@ -82,6 +84,8 @@ def record_encode(
     preset: str,
     src_bytes: int,
     out_bytes: int,
+    duration_seconds: float | None = None,
+    is_hdr: bool | None = None,
 ) -> dict:
     """Record a successful encode's storage savings."""
     try:
@@ -105,6 +109,13 @@ def record_encode(
         "out_bytes": out_bytes_i,
         "saved_bytes": saved,
     }
+    if duration_seconds is not None:
+        try:
+            row["duration_seconds"] = max(0.0, float(duration_seconds))
+        except Exception:
+            pass
+    if is_hdr is not None:
+        row["is_hdr"] = bool(is_hdr)
 
     data = _load()
     encodes = _ensure_list(data.get("encodes"))
