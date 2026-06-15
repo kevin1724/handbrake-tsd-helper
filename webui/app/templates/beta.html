@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>HandBrake TSD Helper - Beta</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
   <style>
     .beta-shell {
       max-width: none;
@@ -437,15 +438,30 @@
   </style>
 </head>
 <body class="beta-page">
-  <nav class="top-nav">
-    <a href="/" class="nav-link">Jobs</a>
-    <a href="/size_wizard" class="nav-link">Size Wizard</a>
-    <a href="/beta" class="nav-link nav-link-active">Beta</a>
-    <a href="/settings" class="nav-link">Settings</a>
+  <nav class="top-nav app-nav">
+    <a href="/" class="app-brand">
+      <span class="brand-mark">TSD</span>
+      <span class="brand-copy">
+        <strong>HandBrake TSD</strong>
+        <span>Media encode dashboard</span>
+      </span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="nav-link nav-jobs">Jobs</a>
+      <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
+      <a href="/beta" class="nav-link nav-library nav-link-active">Library</a>
+      <a href="/settings" class="nav-link nav-settings">Settings</a>
+    </div>
+    <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>
   </nav>
 
   <main class="beta-shell">
-    <h1>Beta</h1>
+    <header class="page-hero">
+      <div>
+        <h1>Library</h1>
+        <p class="page-subtitle">Scan mapped movie and show folders, find space savings, and queue encodes fast.</p>
+      </div>
+    </header>
 
     <section class="section-card">
       <div class="beta-toolbar">
@@ -766,6 +782,79 @@
       return `${parts.join(" / ")} (${samples} sample${samples === 1 ? "" : "s"}, ${confidence})`;
     }
 
+    function sourceCodec(item) {
+      const text = [item?.filename, item?.path, item?.title].join(" ").toLowerCase();
+      if (/\b(av1)\b/.test(text)) return "AV1";
+      if (/\b(hevc|h265|h\.265|x265)\b/.test(text)) return "HEVC";
+      if (/\b(h264|h\.264|x264)\b/.test(text)) return "H.264";
+      return "Source";
+    }
+
+    function qualityBadge(item) {
+      const text = [item?.filename, item?.path, item?.title].join(" ").toLowerCase();
+      if (/\b(2160p|4k|uhd)\b/.test(text)) return "2160p";
+      if (/\b(1080p|fhd)\b/.test(text)) return "1080p";
+      if (/\b(720p)\b/.test(text)) return "720p";
+      return item?.type === "show" ? "Show" : "Movie";
+    }
+
+    function targetCodec() {
+      return "H.265";
+    }
+
+    function savingsPercent(item) {
+      const source = sourceBytes(item);
+      const saved = predictedSavedBytes(item);
+      if (!source || !saved) return 0;
+      return Math.max(0, Math.min(100, (saved / source) * 100));
+    }
+
+    function mediaBadge(text, className = "") {
+      const span = document.createElement("span");
+      span.className = `media-badge ${className}`.trim();
+      span.textContent = text;
+      return span;
+    }
+
+    function addBadgeRow(parent, badges) {
+      const row = document.createElement("div");
+      row.className = "media-badge-row";
+      badges.filter(Boolean).forEach((badge) => row.appendChild(badge));
+      parent.appendChild(row);
+      return row;
+    }
+
+    function addMiniMetric(parent, label, value) {
+      const div = document.createElement("div");
+      div.className = "metric-mini";
+      const span = document.createElement("span");
+      span.textContent = label;
+      const strong = document.createElement("strong");
+      strong.textContent = value;
+      div.appendChild(span);
+      div.appendChild(strong);
+      parent.appendChild(div);
+    }
+
+    function makeSavingsBar(item) {
+      const wrap = document.createElement("div");
+      wrap.className = "show-progress";
+      const bar = document.createElement("div");
+      bar.className = "show-progress-bar";
+      const fill = document.createElement("div");
+      fill.className = "show-progress-fill";
+      fill.style.width = `${savingsPercent(item).toFixed(0)}%`;
+      bar.appendChild(fill);
+      const label = document.createElement("div");
+      label.className = "show-progress-label small";
+      label.textContent = predictedSavedBytes(item)
+        ? `${fmtBytes(predictedSavedBytes(item))} predicted saved`
+        : "Savings prediction learning";
+      wrap.appendChild(bar);
+      wrap.appendChild(label);
+      return wrap;
+    }
+
     function addSelectLine(body, item, label) {
       const wrap = document.createElement("label");
       wrap.className = "beta-select-line";
@@ -835,8 +924,10 @@
         el("betaStatus").textContent = tracked
           ? `${item.title} will auto-queue new episodes on future scans.`
           : `${item.title} tracking is off.`;
+        if (window.appToast) appToast(tracked ? `${item.title} tracking enabled.` : `${item.title} tracking disabled.`, "success");
       } catch (e) {
         el("betaStatus").textContent = e.message || "Tracking update failed";
+        if (window.appToast) appToast(e.message || "Tracking update failed.", "error");
         if (button) button.disabled = false;
       } finally {
         trackingBusy.delete(key);
@@ -862,11 +953,13 @@
         if (!res.ok) throw new Error(data.error || "Queue failed");
         const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
         el("betaStatus").textContent = `Queued ${data.count || 0} file${data.count === 1 ? "" : "s"}${skipped ? `, skipped ${skipped}` : ""}.`;
+        if (window.appToast) appToast(`Queued ${data.count || 0} file${data.count === 1 ? "" : "s"}.`, "success");
         cleanPaths.forEach((path) => selectedPaths.delete(path));
         updateSelectionUi();
         renderLibrary();
       } catch (e) {
         el("betaStatus").textContent = e.message || "Queue failed";
+        if (window.appToast) appToast(e.message || "Queue failed.", "error");
       } finally {
         updateSelectionUi();
       }
@@ -924,14 +1017,33 @@
       title.textContent = `${item.title}${item.year ? ` (${item.year})` : ""}`;
       body.appendChild(title);
 
+      addBadgeRow(body, [
+        mediaBadge("Movie"),
+        mediaBadge(qualityBadge(item)),
+        mediaBadge(item.is_hdr ? "HDR" : "SDR", item.is_hdr ? "badge-hdr" : "badge-sdr"),
+        mediaBadge(sourceCodec(item))
+      ]);
+
+      const metrics = document.createElement("div");
+      metrics.className = "movie-metrics";
+      addMiniMetric(metrics, "Source", fmtBytes(item.size_bytes));
+      addMiniMetric(metrics, "Predicted", item.prediction?.available ? fmtBytes(item.prediction.estimated_out_bytes) : "-");
+      addMiniMetric(metrics, "Saved", item.prediction?.available ? fmtBytes(item.prediction.estimated_saved_bytes) : "Learning");
+      addMiniMetric(metrics, "Target", targetCodec());
+      body.appendChild(metrics);
+
+      const details = document.createElement("details");
+      details.className = "media-details";
+      const summary = document.createElement("summary");
+      summary.textContent = "Technical details";
+      details.appendChild(summary);
       const meta = document.createElement("div");
       meta.className = "beta-card-meta";
-      appendMetaLine(meta, `${fmtBytes(item.size_bytes)} source`);
-      appendMetaLine(meta, `${item.is_hdr ? "HDR" : "SDR"} source`);
       appendMetaLine(meta, predictionText(item.prediction));
       appendMetaLine(meta, `${item.target?.label || "Movie"} target: ${item.target?.target_size_value || 5}${item.target?.target_size_unit || "GB"}`);
       appendMetaLine(meta, item.filename || "");
-      body.appendChild(meta);
+      details.appendChild(meta);
+      body.appendChild(details);
 
       const actions = document.createElement("div");
       actions.className = "beta-card-actions";
@@ -1073,6 +1185,13 @@
       title.className = "beta-card-title";
       title.textContent = `${item.title}${item.year ? ` (${item.year})` : ""}`;
       titleWrap.appendChild(title);
+      addBadgeRow(titleWrap, [
+        mediaBadge("Show"),
+        item.tracked ? mediaBadge("Tracked", "badge-sdr") : null,
+        mediaBadge(item.is_hdr ? "HDR" : "SDR", item.is_hdr ? "badge-hdr" : "badge-sdr"),
+        mediaBadge(sourceCodec(item)),
+        mediaBadge(`${targetCodec()} target`)
+      ]);
       top.appendChild(titleWrap);
 
       const controls = document.createElement("div");
@@ -1101,10 +1220,9 @@
       meta.className = "beta-card-meta";
       appendMetaLine(meta, `${item.episode_count || 0} episodes / ${seasonText}`);
       appendMetaLine(meta, `${fmtBytes(item.total_size_bytes)} source total`);
-      appendMetaLine(meta, `${item.is_hdr ? "HDR" : "SDR"} source`);
-      appendMetaLine(meta, predictionText(item.prediction));
       appendMetaLine(meta, `Episode target: ${item.target?.target_size_value || 800}${item.target?.target_size_unit || "MB"}`);
       body.appendChild(meta);
+      body.appendChild(makeSavingsBar(item));
 
       if (item.tracked) {
         const note = document.createElement("div");
@@ -1246,6 +1364,8 @@
       });
 
       el("scanBtn").disabled = true;
+      document.body.classList.add("is-loading");
+      if (window.setAppStatus) setAppStatus("Scanning", "scanning");
       el("betaStatus").textContent = root === "__all__" ? "Scanning all libraries..." : "Scanning library...";
 
       try {
@@ -1261,12 +1381,17 @@
         el("betaStatus").textContent = autoQueue.queued_count
           ? `Saved scan. Queued ${autoQueue.queued_count} new tracked episode${autoQueue.queued_count === 1 ? "" : "s"}.`
           : "Saved scan.";
+        if (window.setAppStatus) setAppStatus("Idle", "idle");
+        if (window.appToast) appToast(autoQueue.queued_count ? `Scan complete. Queued ${autoQueue.queued_count} new episode${autoQueue.queued_count === 1 ? "" : "s"}.` : "Library scan complete.", "success");
       } catch (e) {
         el("betaStatus").textContent = e.message || "Scan failed";
+        if (window.setAppStatus) setAppStatus("Error", "error");
+        if (window.appToast) appToast(e.message || "Library scan failed.", "error");
         libraryData = { movies: [], shows: [], stats: {} };
         renderStats({}, {});
         renderLibrary();
       } finally {
+        document.body.classList.remove("is-loading");
         el("scanBtn").disabled = false;
       }
     }

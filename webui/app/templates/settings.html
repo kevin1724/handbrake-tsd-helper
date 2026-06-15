@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>HandBrake TSD Helper – Settings</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
   <style>
     .settings-modal-backdrop {
       position: fixed;
@@ -214,16 +215,34 @@
     }
   </style>
 </head>
-<body>
+<body class="settings-page">
 
-  <nav class="top-nav">
-    <a href="/" class="nav-link">Jobs</a>
-    <a href="/size_wizard" class="nav-link">Size Wizard</a>
-    <a href="/beta" class="nav-link">Beta</a>
-    <a href="/settings" class="nav-link nav-link-active">Settings</a>
+  <nav class="top-nav app-nav">
+    <a href="/" class="app-brand">
+      <span class="brand-mark">TSD</span>
+      <span class="brand-copy">
+        <strong>HandBrake TSD</strong>
+        <span>Media encode dashboard</span>
+      </span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="nav-link nav-jobs">Jobs</a>
+      <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
+      <a href="/beta" class="nav-link nav-library">Library</a>
+      <a href="/settings" class="nav-link nav-settings nav-link-active">Settings</a>
+    </div>
+    <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>
   </nav>
 
-  <h1>Settings</h1>
+  <main class="settings-shell">
+    <header class="page-hero">
+      <div>
+        <h1>Settings</h1>
+        <p class="page-subtitle">Tune encoding defaults, presets, library folders, posters, and UI behavior.</p>
+      </div>
+    </header>
+
+    <div class="settings-grid">
 
   <!-- ============================================================
        Global encoding settings
@@ -372,6 +391,8 @@
       <button id="saveUiSettingsBtn">Save UI settings</button>
       <span id="uiSettingsSaveStatus" class="small"></span>
     </div>
+  </div>
+
   </div>
 
   <div id="folderMapModal" class="settings-modal-backdrop" hidden>
@@ -531,6 +552,8 @@
       </table>
     </div>
   </div>
+
+  </main>
 
   <!-- ============================================================
        Page script
@@ -1116,10 +1139,12 @@
             : "Saved.";
           setTimeout(() => { statusEl.textContent = ""; }, 3000);
         }
+        if (window.appToast) appToast(data.tmdb_changed ? "Settings saved. Poster cache cleared." : "Settings saved.", "success");
         return true;
       } catch (err) {
         console.error(err);
         if (statusEl) statusEl.textContent = "Error saving settings";
+        if (window.appToast) appToast("Error saving settings.", "error");
         return false;
       }
     }
@@ -1174,6 +1199,7 @@
         loadPresetConfigUI();
       }
       status.textContent = data.error ? data.error : "Uploaded";
+      if (window.appToast) appToast(data.error ? data.error : "Preset uploaded.", data.error ? "error" : "success");
       setTimeout(() => status.textContent = "", 3000);
     }
 
@@ -1191,6 +1217,7 @@
         presetFiles = data.preset_files;
         renderPresetFilesList(presetFiles);
         loadPresetConfigUI();
+        if (window.appToast) appToast("Preset deleted.", "success");
       }
     }
 
@@ -1264,15 +1291,18 @@
           if (!statusEl) return;
           if (data.error) {
             statusEl.textContent = "Failed to save preset settings: " + data.error;
+            if (window.appToast) appToast("Failed to save preset settings.", "error");
             return;
           }
           statusEl.textContent = "Preset settings saved.";
+          if (window.appToast) appToast("Preset settings saved.", "success");
           setTimeout(() => { statusEl.textContent = ""; }, 4000);
         })
         .catch(err => {
           console.error(err);
           if (!statusEl) return;
           statusEl.textContent = "Failed to save preset settings.";
+          if (window.appToast) appToast("Failed to save preset settings.", "error");
           setTimeout(() => { statusEl.textContent = ""; }, 4000);
         });
     }

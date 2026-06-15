@@ -4,123 +4,164 @@
   <meta charset="utf-8">
   <title>HandBrake TSD Helper</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 </head>
-<body>
-  <nav class="top-nav">
-    <a href="/" class="nav-link nav-link-active">Jobs</a>
-    <a href="/size_wizard" class="nav-link">Size Wizard</a>
-    <a href="/beta" class="nav-link">Beta</a>
-    <a href="/settings" class="nav-link">Settings</a>
+<body class="jobs-page">
+  <nav class="top-nav app-nav">
+    <a href="/" class="app-brand">
+      <span class="brand-mark">TSD</span>
+      <span class="brand-copy">
+        <strong>HandBrake TSD</strong>
+        <span>Media encode dashboard</span>
+      </span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="nav-link nav-jobs nav-link-active">Jobs</a>
+      <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
+      <a href="/beta" class="nav-link nav-library">Library</a>
+      <a href="/settings" class="nav-link nav-settings">Settings</a>
+    </div>
+    <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>
   </nav>
 
-  <h1>HandBrake One-shot Encoder (TSD)</h1>
-
-  <div class="section-card">
-    <h2>Browse &amp; Select File</h2>
-
-    <div class="row">
-      <label for="rootSelect">Root:</label>
-      <select id="rootSelect"></select>
-      <button id="upBtn">Up</button>
-    </div>
-
-    <div class="row">
-      <strong>Current path:</strong>
-      <span id="currentPath" class="small"></span>
-    </div>
-
-    <div class="row">
-      <label for="searchInput">Search filename:</label>
-      <input
-        id="searchInput"
-        type="text"
-        placeholder="e.g. S01E01, movie name"
-        style="width:260px;"
-      >
-      <button id="searchBtn">Search</button>
-      <span id="searchStatus" class="small"></span>
-    </div>
-
-    <div class="row" style="display:flex; gap:10px;">
-      <div style="flex:1;">
-        <strong>Folders</strong>
-        <ul id="dirs"></ul>
+  <main class="app-page jobs-shell">
+    <header class="page-hero">
+      <div>
+        <h1>Jobs</h1>
+        <p class="page-subtitle">Browse media, queue one-shot encodes, batch folders, and watch the queue move.</p>
       </div>
-      <div style="flex:1;">
-        <strong>Video files</strong>
-        <ul id="files"></ul>
+    </header>
+
+    <section class="section-card browser-card">
+      <div class="section-heading-row">
+        <div>
+          <h2>One-shot Encoder</h2>
+          <div class="small">Pick a source file, choose a preset mode, then send it to the normal queue.</div>
+        </div>
       </div>
-    </div>
 
-    <div class="row" id="searchResultsRow" style="display:none;">
-      <strong>Search results</strong>
-      <ul id="searchResults"></ul>
-    </div>
+      <div class="browser-controls">
+        <div class="field-stack">
+          <label for="rootSelect">Root</label>
+          <select id="rootSelect"></select>
+        </div>
+        <button id="upBtn" type="button">Up</button>
+        <div class="field-stack">
+          <label for="searchInput">Search filename</label>
+          <input id="searchInput" type="text" placeholder="S01E01, movie name">
+        </div>
+        <button id="searchBtn" type="button">Search</button>
+      </div>
 
-    <div class="row">
-      <label>Selected file:</label>
-      <input type="text" id="selectedFile" style="width:80%;" readonly>
-    </div>
+      <div class="breadcrumb-card">
+        <strong>Current path</strong>
+        <span id="currentPath" class="small"></span>
+        <span id="searchStatus" class="small"></span>
+      </div>
 
-    <div class="row">
-      <button id="openWizardBtn" disabled>Open in Size Wizard</button>
-      <span class="small">(Sends the selected file + preset mode to the wizard)</span>
-    </div>
+      <div class="file-manager">
+        <div class="file-pane">
+          <div class="file-pane-header">
+            <strong>Folders</strong>
+            <span class="small">Browse roots</span>
+          </div>
+          <ul id="dirs"></ul>
+        </div>
 
-    <div class="row">
-      <label for="presetSelect">Preset mode:</label>
-      <select id="presetSelect">
-        <option value="auto">Auto by filename (1080p vs 2160p/4K)</option>
-        <option value="1080">Force 1080p preset</option>
-        <option value="4k">Force 4K preset</option>
-      </select>
-    </div>
+        <div class="file-pane">
+          <div class="file-pane-header">
+            <strong>Video files</strong>
+            <span class="small">Click to select</span>
+          </div>
+          <ul id="files"></ul>
+        </div>
+      </div>
 
-    <div class="row">
-      <button id="startBtn">Start Encode (queue)</button>
-      <button id="cancelBtn" disabled>Cancel Encode</button>
-    </div>
+      <div class="row" id="searchResultsRow" style="display:none; margin-top:14px;">
+        <div class="file-pane">
+          <div class="file-pane-header">
+            <strong>Search results</strong>
+            <span class="small">Folders and video files</span>
+          </div>
+          <ul id="searchResults"></ul>
+        </div>
+      </div>
+    </section>
 
-    <div class="row">
-      <button id="batchEncodeBtn">Batch encode ALL videos in this folder (queued)</button>
-      <button id="batchEncodeRecursiveBtn">Batch encode this folder + subfolders (queued)</button>
-    </div>
+    <section class="jobs-action-grid">
+      <div class="selected-file-card">
+        <div class="action-card-header">
+          <h3>Selected File</h3>
+          <span class="small">Ready when a video is selected</span>
+        </div>
+        <input type="text" id="selectedFile" readonly placeholder="No file selected">
+        <button id="openWizardBtn" type="button" disabled>Open in Size Wizard</button>
+      </div>
 
-    <div class="row">
-      <progress id="progressBar" max="100" value="0" style="width:100%; display:none;"></progress>
-      <span id="progressLabel"></span>
-    </div>
+      <div class="action-card">
+        <div class="action-card-header">
+          <h3>Encode Actions</h3>
+          <span class="small">Queue uses the configured presets</span>
+        </div>
+        <div class="encode-actions">
+          <div class="field-stack">
+            <label for="presetSelect">Preset mode</label>
+            <select id="presetSelect">
+              <option value="auto">Auto by filename (1080p vs 2160p/4K)</option>
+              <option value="1080">Force 1080p preset</option>
+              <option value="4k">Force 4K preset</option>
+            </select>
+          </div>
+          <div class="button-row">
+            <button id="startBtn" type="button" disabled>Start Encode</button>
+            <button id="cancelBtn" type="button" disabled>Cancel Encode</button>
+          </div>
+          <progress id="progressBar" max="100" value="0" style="display:none;"></progress>
+          <span id="progressLabel" class="small"></span>
+        </div>
+      </div>
+    </section>
 
-    <div class="row">
-      <strong>Status / Log</strong>
-      <div id="statusText" class="small"></div>
+    <section class="section-card batch-tools-card">
+      <div class="section-heading-row">
+        <div>
+          <h2>Batch Tools</h2>
+          <div class="small">Run folder-level queue actions or tag completed files with <code>-TSD</code>.</div>
+        </div>
+      </div>
+      <div class="button-row">
+        <button id="batchEncodeBtn" type="button">Batch encode folder</button>
+        <button id="batchEncodeRecursiveBtn" type="button">Batch encode folder + subfolders</button>
+        <button id="batchRenameBtn" type="button" class="ghost-btn">Batch rename visible folder to -TSD</button>
+      </div>
+      <div id="batchRenameResult" class="small" style="margin-top:10px;"></div>
+    </section>
+
+    <section class="section-card">
+      <div class="section-heading-row">
+        <h2>Queue Dashboard</h2>
+      </div>
+      <div class="dashboard-metrics">
+        <div class="stat-chip stat-queued"><strong>Queued</strong><div id="summaryQueued">0</div></div>
+        <div class="stat-chip stat-running"><strong>Running</strong><div id="summaryRunning">0</div></div>
+        <div class="stat-chip stat-done"><strong>Completed</strong><div id="summaryDone">0</div></div>
+        <div class="stat-chip stat-error"><strong>Errors</strong><div id="summaryError">0</div></div>
+        <div class="stat-chip stat-saved"><strong>Saved</strong><div id="summarySaved">0 GB</div></div>
+        <div class="stat-chip stat-runtime"><strong>Total Runtime</strong><div id="summaryRuntime">0m</div></div>
+      </div>
+    </section>
+
+    <section class="section-card">
+      <div class="section-heading-row">
+        <div>
+          <h2>Status / Log</h2>
+          <div id="statusText" class="small"></div>
+        </div>
+      </div>
       <div id="statusBox"></div>
-    </div>
-  </div>
+    </section>
 
-  <div class="section-card">
-    <h2>Batch Rename Helper</h2>
-    <p class="small">
-      This will rename <strong>all video files</strong> in the current folder to add
-      <code>-TSD</code> before the extension (only if they don't already have it).
-    </p>
-    <button id="batchRenameBtn">Batch rename visible folder to -TSD</button>
-    <div id="batchRenameResult" class="small"></div>
-  </div>
-
-  <div class="section-card">
-    <h2>Queue Dashboard</h2>
-    <div class="row" style="display:flex; gap:12px; flex-wrap:wrap;">
-      <div class="stat-chip"><strong>Queued</strong><div id="summaryQueued">0</div></div>
-      <div class="stat-chip"><strong>Running</strong><div id="summaryRunning">0</div></div>
-      <div class="stat-chip"><strong>Completed</strong><div id="summaryDone">0</div></div>
-      <div class="stat-chip"><strong>Errors</strong><div id="summaryError">0</div></div>
-      <div class="stat-chip"><strong>Saved</strong><div id="summarySaved">0 GB</div></div>
-      <div class="stat-chip"><strong>Total runtime</strong><div id="summaryRuntime">0m</div></div>
-    </div>
-  </div>
-
-  <div class="section-card jobs-history-card">
+    <section class="section-card jobs-history-card">
     <div class="jobs-toolbar">
       <div>
         <h2 style="margin-bottom:6px;">Job History</h2>
@@ -185,7 +226,8 @@
         <tbody id="jobsTableBody"></tbody>
       </table>
     </div>
-  </div>
+    </section>
+  </main>
 
 <script>
 const roots = {{ roots|default([], true)|tojson|safe }};
@@ -247,8 +289,10 @@ function toggleJobsViewMode() {
 // --------------------------
 function updateWizardBtn() {
   const btn = document.getElementById('openWizardBtn');
+  const startBtn = document.getElementById('startBtn');
   const src = document.getElementById('selectedFile').value;
   if (btn) btn.disabled = !src;
+  if (startBtn) startBtn.disabled = !src;
 }
 
 function setSelectedFile(path) {
@@ -311,6 +355,23 @@ function populateRoots() {
   });
 }
 
+function formatFileBytes(bytes) {
+  const value = Number(bytes || 0);
+  if (!Number.isFinite(value) || value <= 0) return '';
+  const gb = value / (1024 ** 3);
+  if (gb >= 1) return `${gb.toFixed(gb >= 10 ? 1 : 2)} GB`;
+  const mb = value / (1024 ** 2);
+  if (mb >= 1) return `${mb.toFixed(mb >= 10 ? 1 : 2)} MB`;
+  return `${Math.max(1, Math.round(value / 1024))} KB`;
+}
+
+function formatFileDate(ts) {
+  const n = Number(ts || 0);
+  if (!Number.isFinite(n) || n <= 0) return '';
+  const d = new Date(n * 1000);
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString();
+}
+
 // --------------------------
 // Directory listing
 // --------------------------
@@ -349,9 +410,23 @@ function loadDir(path) {
 
       const filesUl = document.getElementById('files');
       filesUl.innerHTML = '';
+      const fileDetails = data.file_details || {};
       data.files.forEach(name => {
         const li = document.createElement('li');
-        li.textContent = name;
+        const detail = fileDetails[name] || {};
+        const title = document.createElement('div');
+        title.className = 'file-list-title';
+        title.textContent = name;
+        const metaParts = [
+          formatFileBytes(detail.size_bytes),
+          detail.codec_hint || '',
+          formatFileDate(detail.mtime)
+        ].filter(Boolean);
+        const meta = document.createElement('div');
+        meta.className = 'file-list-meta small';
+        meta.textContent = metaParts.join(' / ');
+        li.appendChild(title);
+        if (metaParts.length) li.appendChild(meta);
         li.onclick = () => {
           let base = data.path;
           if (!base.startsWith('/')) base = '/' + base;
@@ -495,6 +570,8 @@ function startEncode() {
       return;
     }
     currentJobId = data.job_id;
+    if (window.appToast) appToast('Encode queued.', 'success');
+    if (window.setAppStatus) setAppStatus('Encoding', 'encoding');
     document.getElementById('statusText').textContent = 'Job queued: ' + currentJobId;
     document.getElementById('statusBox').textContent = '';
     const pb = document.getElementById('progressBar');
@@ -524,6 +601,7 @@ function cancelEncode() {
         return;
       }
       document.getElementById('statusText').textContent = 'Status: canceled';
+      if (window.appToast) appToast('Encode canceled.', 'warning');
       document.getElementById('cancelBtn').disabled = true;
       const pb = document.getElementById('progressBar');
       pb.value = 0;
@@ -562,6 +640,11 @@ function checkStatus() {
 
       if (data.status === 'done' || data.status === 'error' || data.status === 'canceled') {
         document.getElementById('cancelBtn').disabled = true;
+        if (window.setAppStatus) setAppStatus(data.status === 'error' ? 'Error' : 'Idle', data.status === 'error' ? 'error' : 'idle');
+        if (window.appToast) {
+          if (data.status === 'done') appToast('Encode completed.', 'success');
+          if (data.status === 'error') appToast('Encode failed.', 'error');
+        }
         clearInterval(statusTimer);
       }
 
@@ -761,6 +844,11 @@ function refreshJobsSummary() {
       document.getElementById('summaryError').textContent = counts.error ?? 0;
       document.getElementById('summarySaved').textContent = `${Number(s.saved_gb || 0).toFixed(2)} GB`;
       document.getElementById('summaryRuntime').textContent = formatDuration(s.total_runtime_seconds || 0);
+      if (window.setAppStatus) {
+        if ((counts.error || 0) > 0) setAppStatus('Error', 'error');
+        else if ((counts.running || 0) > 0) setAppStatus('Encoding', 'encoding');
+        else setAppStatus('Idle', 'idle');
+      }
     })
     .catch(err => console.error(err));
 }
@@ -963,6 +1051,7 @@ function batchRename() {
       }
       const text = 'Renamed ' + data.renamed_count + ' file(s). Skipped ' + data.skipped_count + '.';
       document.getElementById('batchRenameResult').textContent = text;
+      if (window.appToast) appToast(text, 'success');
       loadDir(currentPath);
     })
     .catch(err => {
@@ -1004,7 +1093,7 @@ function batchEncode(folderOnly) {
         alert(data.error);
         return;
       }
-      alert('Queued ' + data.count + ' file(s) for encode.');
+      if (window.appToast) appToast('Queued ' + data.count + ' file(s) for encode.', 'success');
       refreshJobs();
     })
     .catch(err => {
@@ -1026,6 +1115,7 @@ function clearFinishedJobs() {
         return;
       }
       refreshJobs();
+      if (window.appToast) appToast('Finished jobs cleared.', 'success');
     })
     .catch(err => {
       console.error(err);
@@ -1046,6 +1136,7 @@ function clearQueuedJobs() {
         return;
       }
       refreshJobs();
+      if (window.appToast) appToast('Queued jobs cleared.', 'success');
     })
     .catch(err => {
       console.error(err);

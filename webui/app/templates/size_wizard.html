@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <title>HandBrake TSD Helper - Size Wizard</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
 
   <style>
     .wizard-page {
@@ -330,11 +331,21 @@
 </head>
 
 <body class="size-wizard-page">
-  <nav class="top-nav">
-    <a href="/" class="nav-link">Jobs</a>
-    <a href="/size_wizard" class="nav-link nav-link-active">Size Wizard</a>
-    <a href="/beta" class="nav-link">Beta</a>
-    <a href="/settings" class="nav-link">Settings</a>
+  <nav class="top-nav app-nav">
+    <a href="/" class="app-brand">
+      <span class="brand-mark">TSD</span>
+      <span class="brand-copy">
+        <strong>HandBrake TSD</strong>
+        <span>Media encode dashboard</span>
+      </span>
+    </a>
+    <div class="nav-links">
+      <a href="/" class="nav-link nav-jobs">Jobs</a>
+      <a href="/size_wizard" class="nav-link nav-wizard nav-link-active">Size Wizard</a>
+      <a href="/beta" class="nav-link nav-library">Library</a>
+      <a href="/settings" class="nav-link nav-settings">Settings</a>
+    </div>
+    <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>
   </nav>
 
   <main class="wizard-page">
@@ -1604,6 +1615,7 @@
       }
 
       setStatus("queueStatus", "Queuing...");
+      if (window.setAppStatus) setAppStatus("Encoding", "encoding");
 
       try {
         const res = await fetchWithTimeout("/encode_wizard", {
@@ -1614,10 +1626,13 @@
         const data = await readJson(res);
         if (!res.ok) throw new Error(data.error || "Queue failed");
         setStatus("queueStatus", `Queued ${data.job_id || ""}`, "ok");
+        if (window.appToast) appToast("Wizard encode queued.", "success");
+        if (window.setAppStatus) setAppStatus("Idle", "idle");
         setTimeout(() => setStatus("queueStatus", ""), 3500);
       } catch (e) {
         setStatus("queueStatus", "Error", "error");
-        window.alert(e.message || "Queue failed.");
+        if (window.setAppStatus) setAppStatus("Error", "error");
+        if (window.appToast) appToast(e.message || "Queue failed.", "error");
       }
     }
 

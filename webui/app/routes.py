@@ -2880,8 +2880,25 @@ def register_routes(app):
                 and e.lower().endswith(VIDEO_EXTS)
             ]
         )
+        file_details = {}
+        for name in files:
+            full = os.path.join(path, name)
+            try:
+                stat = os.stat(full)
+                file_details[name] = {
+                    "size_bytes": int(stat.st_size),
+                    "mtime": float(stat.st_mtime),
+                    "codec_hint": (
+                        "AV1" if re.search(r"\bav1\b", name, re.IGNORECASE)
+                        else "HEVC" if re.search(r"\b(?:hevc|h[ ._-]*265|x265)\b", name, re.IGNORECASE)
+                        else "H.264" if re.search(r"\b(?:h[ ._-]*264|x264)\b", name, re.IGNORECASE)
+                        else ""
+                    ),
+                }
+            except Exception:
+                file_details[name] = {"size_bytes": 0, "mtime": 0, "codec_hint": ""}
 
-        return jsonify(path=path, dirs=dirs, files=files)
+        return jsonify(path=path, dirs=dirs, files=files, file_details=file_details)
 
     # ------------- Single encode -------------
 
