@@ -37,7 +37,7 @@ from .config import (
 from .presets import resolve_preset_file_and_name
 from .settings import load_settings  # pull in global settings (hb_threads, etc.)
 from .events import log_event
-from .storage_stats import record_encode
+from .storage_stats import get_summary as get_storage_summary, record_encode
 
 # -------------------------------------------------------------------
 # Global in-memory job state
@@ -64,10 +64,44 @@ jobs: dict[str, dict] = {}
 job_queue: list[str] = []
 queue_paused: bool = False
 dispatcher_started: bool = False
+dashboard_totals: dict[str, float | int] = {}
 
 
 def _now_ts() -> float:
     return float(time.time())
+
+
+def _empty_dashboard_totals() -> dict[str, float | int]:
+    return {
+        "done": 0,
+        "error": 0,
+        "canceled": 0,
+        "saved_bytes": 0,
+        "runtime_seconds": 0.0,
+        "done_runtime_seconds": 0.0,
+        "error_runtime_seconds": 0.0,
+        "canceled_runtime_seconds": 0.0,
+    }
+
+
+def _normalize_dashboard_totals(value) -> dict[str, float | int]:
+    raw = value if isinstance(value, dict) else {}
+    totals = _empty_dashboard_totals()
+    for key in ("done", "error", "canceled", "saved_bytes"):
+        try:
+            totals[key] = max(0, int(raw.get(key) or 0))
+        except Exception:
+            totals[key] = 0
+    try:
+        totals["runtime_seconds"] = max(0.0, float(raw.get("runtime_seconds") or 0.0))
+    except Exception:
+        totals["runtime_seconds"] = 0.0
+    for key in ("done_runtime_seconds", "error_runtime_seconds", "canceled_runtime_seconds"):
+        try:
+            totals[key] = max(0.0, float(raw.get(key) or 0.0))
+        except Exception:
+            totals[key] = 0.0
+    return totals
 
 # Regex to parse HandBrakeCLI progress lines:
 # e.g. "Encoding: task 1 of 1, 42.34 % (118.19 fps, avg 118.40 fps, ETA 00h02m34s)"
@@ -79,6 +113,28 @@ PROGRESS_RE = re.compile(
 # It is intentionally loose: it just grabs the token after "ETA",
 # e.g. "00h02m34s", "03m21s", "00:03:21"
 ETA_RE = re.compile(r"ETA\s+([0-9hms:]+)")
+HDR_PATH_RE = re.compile(
+    r"(?:^|[ ._\-\[\(])(?:"
+    r"hdr(?:10(?:[ ._\-]*(?:plus|\+))?)?|hdr10plus|hdr10\+|hlg|"
+    r"dolby[ ._\-]*vision|dovi|dvhe|dvh1|dv|"
+    r"bt[ ._\-]?2020|rec[ ._\-]?2020"
+    r")(?=$|[ ._\-\]\)\+])",
+    re.IGNORECASE,
+)
+HDR_SIZE_HINT_RE = re.compile(r"(?:^|[ ._\-\[\(])(?:2160p|4320p|4k|8k|uhd)(?=$|[ ._\-\]\)])", re.IGNORECASE)
+HDR_REMUX_HINT_RE = re.compile(r"(?:^|[ ._\-\[\(])(?:remux|uhd[ ._\-]*blu[ ._\-]*ray|uhd[ ._\-]*bd)(?=$|[ ._\-\]\)])", re.IGNORECASE)
+HDR_VIDEO_HINT_RE = re.compile(
+    r"(?:^|[ ._\-\[\(])(?:hevc|x265|h[ ._\-]*265|main[ ._\-]*10|10[ ._\-]*bit)(?=$|[ ._\-\]\)])",
+    re.IGNORECASE,
+)
+HDR_TENBIT_HINT_RE = re.compile(
+    r"(?:^|[ ._\-\[\(])(?:main[ ._\-]*10|10[ ._\-]*bit)(?=$|[ ._\-\]\)])",
+    re.IGNORECASE,
+)
+HDR_AUDIO_HINT_RE = re.compile(
+    r"(?:^|[ ._\-\[\(])(?:ddp(?:[ ._\-]*[257]\.?1)?|dd\+|e[ ._\-]*ac3|eac3|atmos|truehd)(?=$|[ ._\-\]\)])",
+    re.IGNORECASE,
+)
 
 
 # -------------------------------------------------------------------
@@ -164,6 +220,69 @@ def _parse_eta_to_seconds(eta_str: str) -> float | None:
     return float(total) if total > 0 else None
 
 
+def _looks_like_hdr_path(path: str) -> bool:
+    """Fast metadata hint used for job history and predictions."""
+    text = f"{os.path.basename(path or '')} {path or ''}"
+    if HDR_PATH_RE.search(text):
+        return True
+
+    has_size = bool(HDR_SIZE_HINT_RE.search(text))
+    has_remux = bool(HDR_REMUX_HINT_RE.search(text))
+    has_video = bool(HDR_VIDEO_HINT_RE.search(text))
+    has_tenbit = bool(HDR_TENBIT_HINT_RE.search(text))
+    has_audio = bool(HDR_AUDIO_HINT_RE.search(text))
+
+    if has_size and (has_remux or has_video or has_audio):
+        return True
+    return bool(has_remux and has_tenbit)
+
+
+def _encoded_output_is_valid(path: str) -> tuple[bool, str]:
+    """Return True only when the output exists, has bytes, and ffprobe can read it."""
+    if not path or not os.path.isfile(path):
+        return False, "output file missing"
+
+    try:
+        if int(os.path.getsize(path)) <= 0:
+            return False, "output file is empty"
+    except Exception as e:
+        return False, f"could not read output size: {e}"
+
+    try:
+        probe = subprocess.run(
+            [
+                "ffprobe",
+                "-v", "error",
+                "-show_entries", "format=duration",
+                "-of", "default=noprint_wrappers=1:nokey=1",
+                path,
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            timeout=20,
+            check=False,
+        )
+    except FileNotFoundError:
+        return True, "ffprobe unavailable; size check passed"
+    except subprocess.TimeoutExpired:
+        return False, "ffprobe timed out"
+    except Exception as e:
+        return False, f"ffprobe failed: {e}"
+
+    if probe.returncode != 0:
+        detail = (probe.stderr or probe.stdout or "").strip()
+        return False, detail[:240] or "ffprobe could not read output"
+
+    try:
+        duration = float((probe.stdout or "").strip() or 0.0)
+    except Exception:
+        duration = 0.0
+    if duration <= 0:
+        return False, "output duration is missing"
+    return True, "ok"
+
+
 # -------------------------------------------------------------------
 # Persistence: saving / loading jobs.json
 # -------------------------------------------------------------------
@@ -175,7 +294,7 @@ def save_jobs():
     Writes a JSON file to JOBS_FILE. We intentionally do NOT persist pids,
     because the OS process won't survive container restarts anyway.
     """
-    global queue_paused
+    global queue_paused, dashboard_totals
 
     try:
         serializable = {}
@@ -196,6 +315,7 @@ def save_jobs():
                 "out_bytes": j.get("out_bytes"),
                 "saved_bytes": j.get("saved_bytes"),
                 "out_path": j.get("out_path"),
+                "is_hdr": bool(j.get("is_hdr", False) or _looks_like_hdr_path(j.get("src", ""))),
                 "created_at": j.get("created_at"),
                 "started_at": j.get("started_at"),
                 "finished_at": j.get("finished_at"),
@@ -206,6 +326,7 @@ def save_jobs():
             "jobs": serializable,
             "queue": list(job_queue),
             "queue_paused": queue_paused,
+            "dashboard_totals": _normalize_dashboard_totals(dashboard_totals),
         }
 
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -223,12 +344,13 @@ def load_jobs():
       again (since the process is gone after restart).
     - We also restore the queue order and queue_paused flag.
     """
-    global jobs, job_queue, queue_paused
+    global jobs, job_queue, queue_paused, dashboard_totals
 
     if not os.path.isfile(JOBS_FILE):
         jobs = {}
         job_queue = []
         queue_paused = False
+        dashboard_totals = _empty_dashboard_totals()
         return
 
     try:
@@ -238,6 +360,7 @@ def load_jobs():
         data = state.get("jobs") or {}
         q = state.get("queue") or []
         queue_paused = bool(state.get("queue_paused", False))
+        dashboard_totals = _normalize_dashboard_totals(state.get("dashboard_totals"))
 
         jobs = {}
         for jid, j in data.items():
@@ -265,6 +388,7 @@ def load_jobs():
                 "out_bytes": j.get("out_bytes"),
                 "saved_bytes": j.get("saved_bytes"),
                 "out_path": j.get("out_path"),
+                "is_hdr": bool(j.get("is_hdr", False) or _looks_like_hdr_path(j.get("src", ""))),
                 "created_at": j.get("created_at"),
                 "started_at": j.get("started_at"),
                 "finished_at": j.get("finished_at"),
@@ -283,6 +407,7 @@ def load_jobs():
         jobs = {}
         job_queue = []
         queue_paused = False
+        dashboard_totals = _empty_dashboard_totals()
 
 
 def initialize_jobs_system():
@@ -357,6 +482,7 @@ def create_job(src: str, preset: str, extra_args: str = "") -> str:
         "out_bytes": None,
         "saved_bytes": None,
         "out_path": None,
+        "is_hdr": _looks_like_hdr_path(src),
         "created_at": _now_ts(),
         "started_at": None,
         "finished_at": None,
@@ -420,6 +546,7 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
             "out_bytes": None,
             "saved_bytes": None,
             "out_path": None,
+            "is_hdr": _looks_like_hdr_path(src),
             "created_at": _now_ts(),
             "started_at": None,
             "finished_at": None,
@@ -496,6 +623,7 @@ def list_jobs_for_api() -> list[dict]:
                 "saved_gb": round((int(j.get("saved_bytes") or 0) / (1024**3)), 3)
                 if j.get("saved_bytes") is not None
                 else None,
+                "is_hdr": bool(j.get("is_hdr", False) or _looks_like_hdr_path(j.get("src", ""))),
                 "created_at": j.get("created_at"),
                 "started_at": j.get("started_at"),
                 "finished_at": j.get("finished_at"),
@@ -547,8 +675,9 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job["out_bytes"] = None
     job["saved_bytes"] = None
     job["out_path"] = None
+    job["is_hdr"] = bool(job.get("is_hdr", False) or _looks_like_hdr_path(src_path))
 
-    # Capture source size BEFORE the worker deletes the original
+    # Capture source size before the success path deletes the original.
     try:
         job["src_bytes"] = int(os.path.getsize(src_path))
     except Exception:
@@ -674,10 +803,13 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
         if ret == 0:
             job["progress"] = 100.0
 
+    output_validation_error = ""
+
     # Storage tracking + history (only when we have a real output file)
     if job.get("status") == "done" and ret == 0:
         try:
-            if out_path and os.path.isfile(out_path):
+            output_ok, output_reason = _encoded_output_is_valid(out_path)
+            if output_ok and out_path and os.path.isfile(out_path):
                 out_bytes = int(os.path.getsize(out_path))
                 job["out_bytes"] = out_bytes
 
@@ -689,6 +821,12 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
 
                 saved_bytes = max(0, src_bytes_i - out_bytes)
                 job["saved_bytes"] = saved_bytes
+                duration_seconds_for_stats = None
+                if job.get("started_at") is not None:
+                    try:
+                        duration_seconds_for_stats = max(0.0, _now_ts() - float(job["started_at"]))
+                    except Exception:
+                        duration_seconds_for_stats = None
 
                 # Persist to long-term history
                 record_encode(
@@ -698,28 +836,54 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                     preset=preset_key,
                     src_bytes=src_bytes_i,
                     out_bytes=out_bytes,
+                    duration_seconds=duration_seconds_for_stats,
+                    is_hdr=bool(job.get("is_hdr", False)),
                 )
+
+                source_deleted = False
+                try:
+                    if os.path.isfile(src_path):
+                        os.remove(src_path)
+                        source_deleted = True
+                except Exception as e:
+                    log_event(
+                        "job_cleanup_error",
+                        f"Finished but failed to delete original: {os.path.basename(src_path)} ({e})",
+                        level="warn",
+                        job_id=job_id,
+                        src=src_path,
+                        extra={
+                            "out_path": out_path,
+                        },
+                    )
 
                 log_event(
                     "job_finished",
-                    f"Finished: {os.path.basename(src_path)} – saved {round(saved_bytes/(1024**3), 3)} GB",
+                    f"Finished: {os.path.basename(src_path)} - saved {round(saved_bytes/(1024**3), 3)} GB",
                     job_id=job_id,
                     src=src_path,
                     extra={
                         "saved_bytes": saved_bytes,
                         "out_path": out_path,
+                        "source_deleted": source_deleted,
                     },
                 )
             else:
-                # Edge case: worker returned 0 but no output file exists.
+                output_validation_error = output_reason or "output validation failed"
+                job["status"] = "error"
                 log_event(
-                    "job_finished",
-                    f"Finished: {os.path.basename(src_path)} (no output file found)",
-                    level="warn",
+                    "job_error",
+                    f"Output validation failed for {os.path.basename(src_path)}: {output_validation_error}",
+                    level="error",
                     job_id=job_id,
                     src=src_path,
+                    extra={
+                        "out_path": out_path,
+                    },
                 )
         except Exception as e:
+            job["status"] = "error"
+            output_validation_error = str(e)
             log_event(
                 "stats_error",
                 f"Failed to record storage savings: {e}",
@@ -728,7 +892,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                 src=src_path,
             )
 
-    if job.get("status") == "error":
+    if job.get("status") in ("error", "canceled"):
         deleted_failed_output = False
 
         if out_path and not out_path_existed_before:
@@ -748,20 +912,35 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                     },
                 )
 
-        msg = f"Error: {os.path.basename(src_path)} (exit {ret})"
-        if deleted_failed_output:
-            msg += " - deleted failed output"
-        log_event(
-            "job_error",
-            msg,
-            level="error",
-            job_id=job_id,
-            src=src_path,
-            extra={
-                "out_path": out_path,
-                "deleted_failed_output": deleted_failed_output,
-            },
-        )
+        if job.get("status") == "error":
+            msg = f"Error: {os.path.basename(src_path)} (exit {ret})"
+            if output_validation_error:
+                msg += f" - {output_validation_error}"
+            if deleted_failed_output:
+                msg += " - deleted failed output"
+            log_event(
+                "job_error",
+                msg,
+                level="error",
+                job_id=job_id,
+                src=src_path,
+                extra={
+                    "out_path": out_path,
+                    "deleted_failed_output": deleted_failed_output,
+                },
+            )
+        elif deleted_failed_output:
+            log_event(
+                "job_cleanup",
+                f"Canceled: deleted partial output {os.path.basename(out_path)}",
+                level="warn",
+                job_id=job_id,
+                src=src_path,
+                extra={
+                    "out_path": out_path,
+                    "deleted_failed_output": True,
+                },
+            )
 
     if job.get("status") == "canceled":
         log_event(
@@ -1058,15 +1237,18 @@ def move_queued_job_to_position(job_id: str, position: int) -> tuple[bool, str |
 
 def get_job_summary() -> dict:
     """Return lightweight dashboard metrics for the jobs page."""
+    archived = _normalize_dashboard_totals(dashboard_totals)
     status_counts = {
         "queued": 0,
         "running": 0,
-        "done": 0,
-        "error": 0,
-        "canceled": 0,
+        "done": int(archived.get("done") or 0),
+        "error": int(archived.get("error") or 0),
+        "canceled": int(archived.get("canceled") or 0),
     }
-    total_saved_bytes = 0
-    total_runtime_seconds = 0.0
+    total_saved_bytes = int(archived.get("saved_bytes") or 0)
+    live_done_runtime_seconds = 0.0
+    live_error_runtime_seconds = 0.0
+    live_canceled_runtime_seconds = 0.0
 
     for job in jobs.values():
         status = str(job.get("status") or "").lower()
@@ -1079,9 +1261,48 @@ def get_job_summary() -> dict:
             pass
 
         try:
-            total_runtime_seconds += float(job.get("duration_seconds") or 0.0)
+            duration_seconds = float(job.get("duration_seconds") or 0.0)
         except Exception:
-            pass
+            duration_seconds = 0.0
+        if status == "done":
+            live_done_runtime_seconds += duration_seconds
+        elif status == "error":
+            live_error_runtime_seconds += duration_seconds
+        elif status == "canceled":
+            live_canceled_runtime_seconds += duration_seconds
+
+    try:
+        storage_summary = get_storage_summary()
+    except Exception:
+        storage_summary = {}
+
+    try:
+        storage_saved_bytes = int(storage_summary.get("saved_bytes") or 0)
+        total_saved_bytes = max(total_saved_bytes, storage_saved_bytes)
+    except Exception:
+        pass
+
+    try:
+        storage_runtime_seconds = float(storage_summary.get("total_runtime_seconds") or 0.0)
+    except Exception:
+        storage_runtime_seconds = 0.0
+
+    done_runtime_seconds = max(
+        storage_runtime_seconds,
+        float(archived.get("done_runtime_seconds") or 0.0) + live_done_runtime_seconds,
+    )
+    total_runtime_seconds = (
+        done_runtime_seconds
+        + float(archived.get("error_runtime_seconds") or 0.0)
+        + float(archived.get("canceled_runtime_seconds") or 0.0)
+        + live_error_runtime_seconds
+        + live_canceled_runtime_seconds
+    )
+
+    try:
+        status_counts["done"] = max(status_counts["done"], int(storage_summary.get("count") or 0))
+    except Exception:
+        pass
 
     queued_items = [jid for jid in job_queue if jid in jobs and jobs[jid].get("status") == "queued"]
     running_job_id = next((jid for jid, j in jobs.items() if j.get("status") == "running"), None)
@@ -1147,15 +1368,37 @@ def clear_finished_jobs() -> int:
     Returns:
         int: number of jobs removed
     """
-    global jobs, job_queue
+    global jobs, job_queue, dashboard_totals
 
     to_remove = []
     for jid, j in list(jobs.items()):
         if j.get("status") in ("done", "error"):
             to_remove.append(jid)
 
+    archived = _normalize_dashboard_totals(dashboard_totals)
     removed = 0
     for jid in to_remove:
+        job = jobs.get(jid) or {}
+        status = str(job.get("status") or "").lower()
+        if status in ("done", "error"):
+            archived[status] = int(archived.get(status) or 0) + 1
+        try:
+            duration_seconds = float(job.get("duration_seconds") or 0.0)
+        except Exception:
+            duration_seconds = 0.0
+        try:
+            archived["saved_bytes"] = int(archived.get("saved_bytes") or 0) + int(job.get("saved_bytes") or 0)
+        except Exception:
+            pass
+        try:
+            archived["runtime_seconds"] = float(archived.get("runtime_seconds") or 0.0) + duration_seconds
+        except Exception:
+            pass
+        if status == "done":
+            archived["done_runtime_seconds"] = float(archived.get("done_runtime_seconds") or 0.0) + duration_seconds
+        elif status == "error":
+            archived["error_runtime_seconds"] = float(archived.get("error_runtime_seconds") or 0.0) + duration_seconds
+
         # Remove from jobs dict
         jobs.pop(jid, None)
         removed += 1
@@ -1176,6 +1419,7 @@ def clear_finished_jobs() -> int:
         except Exception as e:
             print(f"[WARN] Failed to remove log for {jid}: {e}", flush=True)
 
+    dashboard_totals = archived
     save_jobs()
     return removed
 
@@ -1222,4 +1466,3 @@ def clear_queued_jobs() -> int:
 
     save_jobs()
     return removed
-

@@ -138,10 +138,17 @@ def get_summary() -> dict:
     totals = _ensure_dict(data.get("totals"))
     saved_bytes = int(totals.get("saved_bytes") or 0)
     count = int(totals.get("count") or 0)
+    total_runtime_seconds = 0.0
+    for row in _ensure_list(data.get("encodes")):
+        try:
+            total_runtime_seconds += float(row.get("duration_seconds") or 0.0)
+        except Exception:
+            pass
     return {
         "count": count,
         "saved_bytes": saved_bytes,
         "saved_gb": round(saved_bytes / (1024**3), 3) if saved_bytes else 0.0,
+        "total_runtime_seconds": round(total_runtime_seconds, 1),
     }
 
 

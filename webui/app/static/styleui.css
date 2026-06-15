@@ -450,7 +450,7 @@ td button {
 
 .jobs-table-wrap {
   margin-top: 12px;
-  overflow-x: auto;
+  overflow: auto;
   border-radius: 12px;
   border: 1px solid rgba(255,255,255,0.08);
   background: rgba(0,0,0,0.18);

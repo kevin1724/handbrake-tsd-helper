@@ -153,9 +153,19 @@
 
       <label for="jobSearchInput">Search:</label>
       <input id="jobSearchInput" type="text" placeholder="filename or job id" style="width:240px;">
+
+      <label class="history-limit-control" for="jobsVisibleRowsSelect">
+        Rows
+        <select id="jobsVisibleRowsSelect">
+          <option value="10" selected>10</option>
+          <option value="25">25</option>
+          <option value="50">50</option>
+          <option value="100">100</option>
+        </select>
+      </label>
     </div>
 
-    <div class="jobs-table-wrap">
+    <div id="jobsTablePane" class="jobs-table-wrap">
       <table class="jobs-table">
         <thead>
           <tr>
@@ -603,6 +613,21 @@ function formatDuration(seconds) {
 function formatSavedGb(savedGb) {
   if (savedGb == null || !Number.isFinite(Number(savedGb))) return '';
   return `${Number(savedGb).toFixed(2)} GB`;
+}
+
+const JOBS_VISIBLE_ROW_OPTIONS = [10, 25, 50, 100];
+const JOBS_HEADER_PX = 45;
+const JOBS_ROW_PX = 78;
+
+function getJobsVisibleRows() {
+  const value = parseInt(document.getElementById('jobsVisibleRowsSelect')?.value || '10', 10);
+  return JOBS_VISIBLE_ROW_OPTIONS.includes(value) ? value : 10;
+}
+
+function resizeJobsHistoryPane() {
+  const pane = document.getElementById('jobsTablePane');
+  if (!pane) return;
+  pane.style.maxHeight = `${JOBS_HEADER_PX + (getJobsVisibleRows() * JOBS_ROW_PX)}px`;
 }
 
 function getQueueUiMode() {
@@ -1105,6 +1130,8 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('jobStatusFilter').addEventListener('change', refreshJobs);
   document.getElementById('jobSearchInput').addEventListener('input', refreshJobs);
+  document.getElementById('jobsVisibleRowsSelect').addEventListener('change', resizeJobsHistoryPane);
+  resizeJobsHistoryPane();
 
   applyJobsViewMode(getJobsViewMode());
 

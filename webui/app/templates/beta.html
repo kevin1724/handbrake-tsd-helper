@@ -12,7 +12,7 @@
 
     .beta-toolbar {
       display: grid;
-      grid-template-columns: minmax(260px, 1fr) repeat(3, minmax(120px, auto));
+      grid-template-columns: minmax(260px, 1fr) repeat(2, minmax(120px, auto));
       gap: 10px;
       align-items: end;
     }
@@ -48,7 +48,7 @@
 
     .beta-stats {
       display: grid;
-      grid-template-columns: repeat(4, minmax(120px, 1fr));
+      grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
       gap: 10px;
       margin-top: 12px;
     }
@@ -126,6 +126,10 @@
       min-height: 320px;
       overflow: auto;
       padding-right: 4px;
+    }
+
+    #showsGrid.beta-grid {
+      grid-template-columns: minmax(0, 1fr);
     }
 
     .beta-card {
@@ -224,6 +228,151 @@
       min-width: 0;
     }
 
+    .beta-show-card {
+      display: grid;
+      grid-template-columns: 92px minmax(0, 1fr);
+      min-height: 138px;
+      align-items: start;
+    }
+
+    .beta-show-card .beta-poster {
+      height: 138px;
+      min-height: 138px;
+      aspect-ratio: auto;
+    }
+
+    .beta-show-card .beta-card-body {
+      min-width: 0;
+    }
+
+    .beta-show-top {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: start;
+    }
+
+    .beta-show-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+
+    .beta-track-button {
+      border-color: rgba(0,188,212,0.45);
+    }
+
+    .beta-track-button.is-tracked {
+      background: rgba(0,188,212,0.22);
+      border-color: rgba(0,188,212,0.72);
+      color: #fff;
+    }
+
+    .beta-show-note {
+      margin-top: 6px;
+      color: rgba(229,229,229,0.64);
+      font-size: 12px;
+    }
+
+    .show-detail-panel {
+      grid-column: 1 / -1;
+      margin-top: 10px;
+      padding-top: 10px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      display: grid;
+      gap: 8px;
+    }
+
+    .season-row {
+      display: grid;
+      grid-template-columns: 54px minmax(0, 1fr) auto;
+      gap: 10px;
+      align-items: center;
+      padding: 8px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      background: rgba(0,0,0,0.16);
+    }
+
+    .season-poster {
+      position: relative;
+      width: 54px;
+      aspect-ratio: 2 / 3;
+      border-radius: 6px;
+      overflow: hidden;
+      background: #27303a;
+    }
+
+    .season-poster img {
+      width: 100%;
+      height: 100%;
+      object-fit: cover;
+      display: block;
+    }
+
+    .season-poster .beta-placeholder {
+      font-size: 14px;
+      padding: 8px;
+    }
+
+    .season-title {
+      color: #fff;
+      font-weight: 700;
+      font-size: 14px;
+    }
+
+    .season-meta,
+    .episode-meta {
+      color: rgba(229,229,229,0.66);
+      font-size: 12px;
+      margin-top: 3px;
+    }
+
+    .season-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+      align-items: center;
+    }
+
+    .season-select,
+    .episode-select {
+      margin: 0;
+      white-space: nowrap;
+    }
+
+    .episode-list {
+      grid-column: 1 / -1;
+      display: grid;
+      gap: 6px;
+      margin-left: 64px;
+    }
+
+    .episode-row {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: center;
+      padding: 7px 8px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.045);
+    }
+
+    .episode-title {
+      color: #fff;
+      font-size: 13px;
+      overflow-wrap: anywhere;
+    }
+
+    .episode-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      justify-content: flex-end;
+    }
+
     .beta-empty {
       color: rgba(229,229,229,0.66);
       border: 1px dashed rgba(255,255,255,0.16);
@@ -253,6 +402,37 @@
         align-items: stretch;
         flex-direction: column;
       }
+
+      .beta-show-card {
+        grid-template-columns: 76px minmax(0, 1fr);
+      }
+
+      .beta-show-card .beta-poster {
+        height: 114px;
+        min-height: 114px;
+      }
+
+      .season-row {
+        grid-template-columns: 46px minmax(0, 1fr);
+      }
+
+      .season-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+      }
+
+      .episode-list {
+        margin-left: 0;
+      }
+
+      .episode-row {
+        grid-template-columns: auto minmax(0, 1fr);
+      }
+
+      .episode-actions {
+        grid-column: 1 / -1;
+        justify-content: flex-start;
+      }
     }
   </style>
 </head>
@@ -274,11 +454,6 @@
           <select id="rootSelect"></select>
         </div>
 
-        <div class="beta-field">
-          <label for="limitInput">Scan limit</label>
-          <input id="limitInput" type="number" min="1" max="2000" step="50" value="800">
-        </div>
-
         <label class="beta-toggle">
           <input id="posterToggle" type="checkbox" checked>
           Posters
@@ -291,6 +466,16 @@
         <div class="beta-field">
           <label for="searchInput">Filter</label>
           <input id="searchInput" type="search" placeholder="Title, year, filename">
+        </div>
+
+        <div class="beta-field">
+          <label for="sortSelect">Sort</label>
+          <select id="sortSelect">
+            <option value="recommended" selected>Recommended savings</option>
+            <option value="saved">Predicted saved</option>
+            <option value="size">Largest source</option>
+            <option value="title">Title A-Z</option>
+          </select>
         </div>
 
         <label class="beta-toggle">
@@ -320,6 +505,7 @@
         <div class="beta-stat"><span>Shows</span><strong id="statShows">0</strong></div>
         <div class="beta-stat"><span>Episodes</span><strong id="statEpisodes">0</strong></div>
         <div class="beta-stat"><span>Scanned</span><strong id="statScanned">0</strong></div>
+        <div class="beta-stat"><span>Tracked</span><strong id="statTracked">0</strong></div>
       </div>
 
       <div id="tmdbNotice" class="beta-attribution"></div>
@@ -349,6 +535,9 @@
     const tmdbConfigured = {{ tmdb_configured|tojson }};
     let libraryData = { movies: [], shows: [], stats: {} };
     const selectedPaths = new Set();
+    const expandedShows = new Set();
+    const expandedSeasons = new Set();
+    const trackingBusy = new Set();
 
     function el(id) {
       return document.getElementById(id);
@@ -394,12 +583,21 @@
 
     function includesFilter(item, needle) {
       if (!needle) return true;
+      const files = Array.isArray(item.files) ? item.files : [];
+      const fileText = files.map((file) => [
+        file.title,
+        file.filename,
+        file.path,
+        file.season,
+        file.episode
+      ].join(" ")).join(" ");
       const blob = [
         item.title,
         item.year,
         item.filename,
         item.path,
-        item.tmdb_title
+        item.tmdb_title,
+        fileText
       ].join(" ").toLowerCase();
       return blob.includes(needle);
     }
@@ -410,6 +608,46 @@
       meta.appendChild(span);
     }
 
+    function sourceBytes(item) {
+      return Number(item?.total_size_bytes || item?.size_bytes || 0) || 0;
+    }
+
+    function predictedSavedBytes(item) {
+      const prediction = item?.prediction || {};
+      if (prediction.available) {
+        return Number(prediction.estimated_saved_bytes || 0) || 0;
+      }
+      return 0;
+    }
+
+    function recommendationScore(item) {
+      const predicted = predictedSavedBytes(item);
+      if (predicted > 0) return predicted;
+      return sourceBytes(item) * 0.35;
+    }
+
+    function itemTitle(item) {
+      return String(item?.title || item?.filename || item?.path || "").toLowerCase();
+    }
+
+    function sortItems(items, mode) {
+      const rows = [...items];
+      if (mode === "title") {
+        rows.sort((a, b) => itemTitle(a).localeCompare(itemTitle(b)));
+        return rows;
+      }
+      if (mode === "size") {
+        rows.sort((a, b) => sourceBytes(b) - sourceBytes(a) || itemTitle(a).localeCompare(itemTitle(b)));
+        return rows;
+      }
+      if (mode === "saved") {
+        rows.sort((a, b) => predictedSavedBytes(b) - predictedSavedBytes(a) || sourceBytes(b) - sourceBytes(a) || itemTitle(a).localeCompare(itemTitle(b)));
+        return rows;
+      }
+      rows.sort((a, b) => recommendationScore(b) - recommendationScore(a) || sourceBytes(b) - sourceBytes(a) || itemTitle(a).localeCompare(itemTitle(b)));
+      return rows;
+    }
+
     function itemPaths(item) {
       if (!item) return [];
       if (Array.isArray(item.files)) {
@@ -418,22 +656,89 @@
       return item.path ? [item.path] : [];
     }
 
-    function selectionCount() {
-      return selectedPaths.size;
+    function pathsAreSelected(paths) {
+      const clean = (paths || []).filter(Boolean);
+      return clean.length > 0 && clean.every((path) => selectedPaths.has(path));
     }
 
-    function itemIsSelected(item) {
-      const paths = itemPaths(item);
-      return paths.length > 0 && paths.every((path) => selectedPaths.has(path));
-    }
-
-    function setItemSelected(item, checked) {
-      itemPaths(item).forEach((path) => {
+    function setPathsSelected(paths, checked) {
+      (paths || []).filter(Boolean).forEach((path) => {
         if (checked) selectedPaths.add(path);
         else selectedPaths.delete(path);
       });
       updateSelectionUi();
       renderLibrary();
+    }
+
+    function showKey(item) {
+      if (item?.id) return String(item.id);
+      return `${String(item?.title || "show").toLowerCase()}::${item?.year || ""}`;
+    }
+
+    function seasonKey(item, seasonNumber) {
+      return `${showKey(item)}::${seasonNumber ?? "unknown"}`;
+    }
+
+    function seasonLabel(seasonNumber) {
+      const n = Number(seasonNumber);
+      if (!Number.isFinite(n) || n <= 0) return "Season unknown";
+      return `Season ${n}`;
+    }
+
+    function episodeLabel(ep) {
+      const season = Number(ep?.season || 0);
+      const episode = Number(ep?.episode || 0);
+      if (season > 0 && episode > 0) return `S${String(season).padStart(2, "0")}E${String(episode).padStart(2, "0")}`;
+      if (episode > 0) return `Episode ${episode}`;
+      return "Episode";
+    }
+
+    function seasonGroups(item) {
+      const groups = new Map();
+      (item.files || []).forEach((ep) => {
+        const number = ep.season ?? "unknown";
+        if (!groups.has(number)) {
+          groups.set(number, {
+            season: number,
+            episodes: [],
+            totalBytes: 0,
+            paths: []
+          });
+        }
+        const group = groups.get(number);
+        group.episodes.push(ep);
+        group.totalBytes += Number(ep.size_bytes || 0) || 0;
+        if (ep.path) group.paths.push(ep.path);
+      });
+      return Array.from(groups.values())
+        .map((group) => {
+          group.episodes.sort((a, b) => (Number(a.episode || 0) - Number(b.episode || 0)) || String(a.filename || "").localeCompare(String(b.filename || "")));
+          group.paths = Array.from(new Set(group.paths));
+          return group;
+        })
+        .sort((a, b) => {
+          const av = Number(a.season);
+          const bv = Number(b.season);
+          if (Number.isFinite(av) && Number.isFinite(bv)) return av - bv;
+          return String(a.season).localeCompare(String(b.season));
+        });
+    }
+
+    function seasonPoster(item, seasonNumber) {
+      const art = item?.season_art && typeof item.season_art === "object" ? item.season_art : {};
+      return art[String(seasonNumber)] || item?.poster_url || "";
+    }
+
+    function selectionCount() {
+      return selectedPaths.size;
+    }
+
+    function itemIsSelected(item) {
+      return pathsAreSelected(itemPaths(item));
+    }
+
+    function setItemSelected(item, checked) {
+      setPathsSelected(itemPaths(item), checked);
     }
 
     function clearSelection() {
@@ -471,6 +776,71 @@
       wrap.appendChild(checkbox);
       wrap.appendChild(document.createTextNode(label));
       body.appendChild(wrap);
+    }
+
+    function makeSeasonPoster(url, label, title) {
+      const poster = document.createElement("div");
+      poster.className = "season-poster";
+      if (url) {
+        const img = document.createElement("img");
+        img.src = url;
+        img.alt = `${title} ${label} poster`;
+        img.loading = "lazy";
+        poster.appendChild(img);
+      } else {
+        const ph = document.createElement("div");
+        ph.className = "beta-placeholder";
+        ph.textContent = label.replace("Season ", "S");
+        poster.appendChild(ph);
+      }
+      return poster;
+    }
+
+    async function setShowTracking(item, tracked, button) {
+      const key = showKey(item);
+      if (trackingBusy.has(key)) return;
+      trackingBusy.add(key);
+      if (button) button.disabled = true;
+      el("betaStatus").textContent = tracked ? `Tracking ${item.title}...` : `Stopping tracking for ${item.title}...`;
+      try {
+        const res = await fetch("/api/beta/tracked_show", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            show_id: key,
+            title: item.title,
+            year: item.year,
+            tmdb_id: item.tmdb_id,
+            poster_url: item.poster_url,
+            paths: itemPaths(item),
+            tracked
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Tracking update failed");
+        item.tracked = tracked;
+        item.tracking = {
+          ...(item.tracking || {}),
+          tracked,
+          known_episode_count: tracked ? itemPaths(item).length : 0,
+          new_episode_count: 0,
+          new_paths: []
+        };
+        libraryData.tracking = {
+          ...(libraryData.tracking || {}),
+          tracked_count: data.tracked_count || 0
+        };
+        renderStats(libraryData.stats || {}, libraryData.tracking || {});
+        renderLibrary();
+        el("betaStatus").textContent = tracked
+          ? `${item.title} will auto-queue new episodes on future scans.`
+          : `${item.title} tracking is off.`;
+      } catch (e) {
+        el("betaStatus").textContent = e.message || "Tracking update failed";
+        if (button) button.disabled = false;
+      } finally {
+        trackingBusy.delete(key);
+      }
     }
 
     async function queuePaths(paths, label = "selection") {
@@ -581,20 +951,150 @@
       return card;
     }
 
+    function makeEpisodeRow(ep, show) {
+      const row = document.createElement("div");
+      row.className = "episode-row";
+
+      const select = document.createElement("label");
+      select.className = "beta-select-line episode-select";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = pathsAreSelected([ep.path]);
+      checkbox.addEventListener("change", () => setPathsSelected([ep.path], checkbox.checked));
+      select.appendChild(checkbox);
+      select.appendChild(document.createTextNode(episodeLabel(ep)));
+      row.appendChild(select);
+
+      const main = document.createElement("div");
+      const title = document.createElement("div");
+      title.className = "episode-title";
+      title.textContent = ep.filename || `${show.title} ${episodeLabel(ep)}`;
+      main.appendChild(title);
+      const meta = document.createElement("div");
+      meta.className = "episode-meta";
+      meta.textContent = `${fmtBytes(ep.size_bytes)} source / ${ep.is_hdr ? "HDR" : "SDR"} / ${predictionText(ep.prediction)}`;
+      main.appendChild(meta);
+      row.appendChild(main);
+
+      const actions = document.createElement("div");
+      actions.className = "episode-actions";
+      const wizard = document.createElement("button");
+      wizard.type = "button";
+      wizard.textContent = "Wizard";
+      wizard.onclick = () => openInWizard(ep.path);
+      actions.appendChild(wizard);
+      const queue = document.createElement("button");
+      queue.type = "button";
+      queue.textContent = "Queue";
+      queue.onclick = () => queuePaths([ep.path], ep.filename || "episode");
+      actions.appendChild(queue);
+      row.appendChild(actions);
+
+      return row;
+    }
+
+    function makeSeasonRow(item, group) {
+      const label = seasonLabel(group.season);
+      const key = seasonKey(item, group.season);
+      const expanded = expandedSeasons.has(key);
+      const row = document.createElement("div");
+      row.className = "season-row";
+
+      row.appendChild(makeSeasonPoster(seasonPoster(item, group.season), label, item.title));
+
+      const summary = document.createElement("div");
+      const title = document.createElement("div");
+      title.className = "season-title";
+      title.textContent = label;
+      summary.appendChild(title);
+      const meta = document.createElement("div");
+      meta.className = "season-meta";
+      const hdrCount = group.episodes.filter((ep) => ep.is_hdr).length;
+      meta.textContent = `${group.episodes.length} episode${group.episodes.length === 1 ? "" : "s"} / ${fmtBytes(group.totalBytes)} / ${hdrCount ? `${hdrCount} HDR` : "SDR"}`;
+      summary.appendChild(meta);
+      row.appendChild(summary);
+
+      const actions = document.createElement("div");
+      actions.className = "season-actions";
+      const select = document.createElement("label");
+      select.className = "beta-select-line season-select";
+      const checkbox = document.createElement("input");
+      checkbox.type = "checkbox";
+      checkbox.checked = pathsAreSelected(group.paths);
+      checkbox.addEventListener("change", () => setPathsSelected(group.paths, checkbox.checked));
+      select.appendChild(checkbox);
+      select.appendChild(document.createTextNode("Select"));
+      actions.appendChild(select);
+
+      const open = document.createElement("button");
+      open.type = "button";
+      open.textContent = expanded ? "Hide" : "Episodes";
+      open.onclick = () => {
+        if (expanded) expandedSeasons.delete(key);
+        else expandedSeasons.add(key);
+        renderLibrary();
+      };
+      actions.appendChild(open);
+
+      const queue = document.createElement("button");
+      queue.type = "button";
+      queue.textContent = "Queue Season";
+      queue.onclick = () => queuePaths(group.paths, `${item.title} ${label}`);
+      actions.appendChild(queue);
+      row.appendChild(actions);
+
+      if (expanded) {
+        const list = document.createElement("div");
+        list.className = "episode-list";
+        group.episodes.forEach((ep) => list.appendChild(makeEpisodeRow(ep, item)));
+        row.appendChild(list);
+      }
+
+      return row;
+    }
+
     function makeShowCard(item) {
+      const key = showKey(item);
+      const expanded = expandedShows.has(key);
       const card = document.createElement("article");
-      card.className = "beta-card";
+      card.className = "beta-card beta-show-card";
+      if (expanded) card.classList.add("beta-show-expanded");
       if (itemIsSelected(item)) card.classList.add("beta-card-selected");
       card.appendChild(cardPoster(item, "Show"));
 
       const body = document.createElement("div");
       body.className = "beta-card-body";
-      addSelectLine(body, item, "Select episodes");
 
+      const top = document.createElement("div");
+      top.className = "beta-show-top";
+      const titleWrap = document.createElement("div");
+      addSelectLine(titleWrap, item, "Select show");
       const title = document.createElement("div");
       title.className = "beta-card-title";
       title.textContent = `${item.title}${item.year ? ` (${item.year})` : ""}`;
-      body.appendChild(title);
+      titleWrap.appendChild(title);
+      top.appendChild(titleWrap);
+
+      const controls = document.createElement("div");
+      controls.className = "beta-show-controls";
+      const track = document.createElement("button");
+      track.type = "button";
+      track.className = `beta-track-button${item.tracked ? " is-tracked" : ""}`;
+      track.textContent = item.tracked ? "Tracking" : "Track";
+      track.onclick = () => setShowTracking(item, !item.tracked, track);
+      controls.appendChild(track);
+
+      const details = document.createElement("button");
+      details.type = "button";
+      details.textContent = expanded ? "Hide" : "Details";
+      details.onclick = () => {
+        if (expanded) expandedShows.delete(key);
+        else expandedShows.add(key);
+        renderLibrary();
+      };
+      controls.appendChild(details);
+      top.appendChild(controls);
+      body.appendChild(top);
 
       const seasonText = item.season_count === 1 ? "1 season" : `${item.season_count || 0} seasons`;
       const meta = document.createElement("div");
@@ -605,6 +1105,16 @@
       appendMetaLine(meta, predictionText(item.prediction));
       appendMetaLine(meta, `Episode target: ${item.target?.target_size_value || 800}${item.target?.target_size_unit || "MB"}`);
       body.appendChild(meta);
+
+      if (item.tracked) {
+        const note = document.createElement("div");
+        note.className = "beta-show-note";
+        const newCount = Number(item.tracking?.new_episode_count || 0);
+        note.textContent = newCount > 0
+          ? `${newCount} new episode${newCount === 1 ? "" : "s"} detected for queueing.`
+          : "Tracking new episodes.";
+        body.appendChild(note);
+      }
 
       const first = Array.isArray(item.files) ? item.files[0] : null;
       const actions = document.createElement("div");
@@ -623,6 +1133,21 @@
       actions.appendChild(queue);
       body.appendChild(actions);
 
+      if (expanded) {
+        const panel = document.createElement("div");
+        panel.className = "show-detail-panel";
+        const groups = seasonGroups(item);
+        if (groups.length) {
+          groups.forEach((group) => panel.appendChild(makeSeasonRow(item, group)));
+        } else {
+          const empty = document.createElement("div");
+          empty.className = "beta-empty";
+          empty.textContent = "No episode files found for this show.";
+          panel.appendChild(empty);
+        }
+        body.appendChild(panel);
+      }
+
       card.appendChild(body);
       return card;
     }
@@ -636,8 +1161,9 @@
 
     function renderLibrary() {
       const needle = el("searchInput").value.trim().toLowerCase();
-      const movies = (libraryData.movies || []).filter((item) => includesFilter(item, needle));
-      const shows = (libraryData.shows || []).filter((item) => includesFilter(item, needle));
+      const sortMode = el("sortSelect").value || "recommended";
+      const movies = sortItems((libraryData.movies || []).filter((item) => includesFilter(item, needle)), sortMode);
+      const shows = sortItems((libraryData.shows || []).filter((item) => includesFilter(item, needle)), sortMode);
 
       el("moviesGrid").innerHTML = "";
       el("showsGrid").innerHTML = "";
@@ -651,11 +1177,12 @@
       el("showCount").textContent = `${shows.length} shown`;
     }
 
-    function renderStats(stats = {}) {
+    function renderStats(stats = {}, tracking = {}) {
       el("statMovies").textContent = stats.movies || 0;
       el("statShows").textContent = stats.shows || 0;
       el("statEpisodes").textContent = stats.episodes || 0;
       el("statScanned").textContent = stats.scanned || 0;
+      el("statTracked").textContent = tracking.tracked_count || 0;
     }
 
     function posterProblemText(data = {}) {
@@ -698,24 +1225,22 @@
         libraryData = data;
         selectedPaths.clear();
         applyCachedScope(data);
-        renderStats(data.stats || {});
+        renderStats(data.stats || {}, data.tracking || {});
         renderTmdbNotice(data);
         renderLibrary();
         el("betaStatus").textContent = data.generated_at ? "Loaded saved scan." : "No saved scan yet.";
       } catch (e) {
         el("betaStatus").textContent = e.message || "Failed to load saved scan";
         libraryData = { movies: [], shows: [], stats: {} };
-        renderStats({});
+        renderStats({}, {});
         renderLibrary();
       }
     }
 
     async function scanLibrary() {
       const root = el("rootSelect").value;
-      const limit = Math.max(1, Math.min(2000, Number(el("limitInput").value || 800)));
       const params = new URLSearchParams({
         root,
-        limit: String(limit),
         recursive: el("recursiveToggle").checked ? "1" : "0",
         posters: el("posterToggle").checked ? "1" : "0"
       });
@@ -729,14 +1254,17 @@
         if (!res.ok) throw new Error(data.error || "Scan failed");
         libraryData = data;
         selectedPaths.clear();
-        renderStats(data.stats || {});
+        renderStats(data.stats || {}, data.tracking || {});
         renderTmdbNotice(data);
         renderLibrary();
-        el("betaStatus").textContent = data.stats?.limited ? "Saved limited scan." : "Saved scan.";
+        const autoQueue = data.tracking?.auto_queue || {};
+        el("betaStatus").textContent = autoQueue.queued_count
+          ? `Saved scan. Queued ${autoQueue.queued_count} new tracked episode${autoQueue.queued_count === 1 ? "" : "s"}.`
+          : "Saved scan.";
       } catch (e) {
         el("betaStatus").textContent = e.message || "Scan failed";
         libraryData = { movies: [], shows: [], stats: {} };
-        renderStats({});
+        renderStats({}, {});
         renderLibrary();
       } finally {
         el("scanBtn").disabled = false;
@@ -760,11 +1288,12 @@
 
     function start() {
       initRoots();
-      renderStats({});
+      renderStats({}, {});
       renderTmdbNotice({ tmdb_configured: tmdbConfigured });
       renderLibrary();
       el("scanBtn").addEventListener("click", scanLibrary);
       el("searchInput").addEventListener("input", renderLibrary);
+      el("sortSelect").addEventListener("change", renderLibrary);
       el("queueSelectedBtn").addEventListener("click", queueSelected);
       el("clearSelectedBtn").addEventListener("click", clearSelection);
       el("posterToggle").checked = true;

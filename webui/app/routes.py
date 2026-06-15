@@ -642,14 +642,15 @@ def _probe_media(src_path):
         # JSON exists but doesn't expose these fields in our parseable shape
         return _probe_media_text_fallback(src_path)
 
+    hdr_reason = _hdr_filename_reason(src_path)
     return {
         "duration_sec": float(dur),
         "width": int(w),
         "height": int(h),
         "fps": float(fps),
         "video_codec": codec,
-        "is_hdr": _path_looks_hdr(src_path),
-        "hdr_reason": "filename" if _path_looks_hdr(src_path) else "",
+        "is_hdr": bool(hdr_reason),
+        "hdr_reason": hdr_reason,
     }
 
 
@@ -1249,9 +1250,10 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
     source_size_bytes = int(os.path.getsize(src))
     info["source_size_bytes"] = source_size_bytes
     info["source_size_mb"] = round(source_size_bytes / (1024.0 * 1024.0), 2)
-    info["is_hdr"] = bool(info.get("is_hdr") or _path_looks_hdr(src))
+    filename_hdr_reason = _hdr_filename_reason(src)
+    info["is_hdr"] = bool(info.get("is_hdr") or filename_hdr_reason)
     if info["is_hdr"] and not info.get("hdr_reason"):
-        info["hdr_reason"] = "filename"
+        info["hdr_reason"] = filename_hdr_reason or "filename"
     duration_sec = float(info.get("duration_sec") or 0.0)
     src_w = int(info.get("width") or 0)
     src_h = int(info.get("height") or 0)
@@ -1390,26 +1392,52 @@ def _clean_wizard_preset_name(name: str) -> str:
     return value[:80]
 
 
-BETA_SCAN_LIMIT = 800
 BETA_LIBRARY_CACHE_FILE = os.path.join(DATA_DIR, "beta_library_cache.json")
+BETA_TRACKED_SHOWS_FILE = os.path.join(DATA_DIR, "beta_tracked_shows.json")
 BETA_POSTER_CACHE: dict[tuple, dict] = {}
 BETA_MEDIA_TAG_RE = re.compile(
-    r"\b(480p|576p|720p|1080p|2160p|4320p|4k|8k|uhd|hdr|hdr10|dv|"
+    r"(?<!\w)(480p|576p|720p|1080p|2160p|4320p|4k|8k|uhd|hdr10\+|hdr10plus|hdr10|hdr|hlg|dv|dovi|dolby ?vision|"
     r"bluray|blu-ray|brrip|webrip|web-dl|webdl|hdtv|remux|proper|repack|"
-    r"x264|x265|h264|h265|hevc|av1|aac|ac3|eac3|dts|truehd|atmos|"
-    r"extended|unrated|directors?\.?cut|theatrical)\b",
+    r"x264|x265|h264|h265|hevc|av1|aac|ac3|eac3|e-ac3|ddp|ddplus|dd\+|dts|truehd|atmos|"
+    r"extended|unrated|directors? ?cut|theatrical)(?!\w)",
     re.IGNORECASE,
 )
 HDR_PATH_RE = re.compile(
-    r"(?:^|[ ._\-\[\(])(?:hdr|hdr10|hdr10\+|hlg|dolby[ ._\-]*vision|dovi|bt2020)(?:\D|$)"
-    r"|(?:^|[ ._\-\[\(])dv(?:[ ._\-\]\)]|$)",
+    r"(?:^|[ ._\-\[\(])(?:"
+    r"hdr(?:10(?:[ ._\-]*(?:plus|\+))?)?|hdr10plus|hdr10\+|hlg|"
+    r"dolby[ ._\-]*vision|dovi|dvhe|dvh1|dv|"
+    r"bt[ ._\-]?2020|rec[ ._\-]?2020"
+    r")(?=$|[ ._\-\]\)\+])",
     re.IGNORECASE,
 )
+HDR_SIZE_HINT_RE = re.compile(r"(?:^|[ ._\-\[\(])(?:2160p|4320p|4k|8k|uhd)(?=$|[ ._\-\]\)])", re.IGNORECASE)
+HDR_REMUX_HINT_RE = re.compile(r"(?:^|[ ._\-\[\(])(?:remux|uhd[ ._\-]*blu[ ._\-]*ray|uhd[ ._\-]*bd)(?=$|[ ._\-\]\)])", re.IGNORECASE)
+HDR_VIDEO_HINT_RE = re.compile(r"(?:^|[ ._\-\[\(])(?:hevc|x265|h[ ._\-]*265|main[ ._\-]*10|10[ ._\-]*bit)(?=$|[ ._\-\]\)])", re.IGNORECASE)
+HDR_TENBIT_HINT_RE = re.compile(r"(?:^|[ ._\-\[\(])(?:main[ ._\-]*10|10[ ._\-]*bit)(?=$|[ ._\-\]\)])", re.IGNORECASE)
+HDR_AUDIO_HINT_RE = re.compile(r"(?:^|[ ._\-\[\(])(?:ddp(?:[ ._\-]*[257]\.?1)?|dd\+|e[ ._\-]*ac3|eac3|atmos|truehd)(?=$|[ ._\-\]\)])", re.IGNORECASE)
+
+
+def _hdr_filename_reason(path: str) -> str:
+    text = f"{os.path.basename(path or '')} {path or ''}"
+    direct = HDR_PATH_RE.search(text)
+    if direct:
+        return f"filename: {direct.group(0).strip(' ._-[]()').lower()}"
+
+    has_size = bool(HDR_SIZE_HINT_RE.search(text))
+    has_remux = bool(HDR_REMUX_HINT_RE.search(text))
+    has_video = bool(HDR_VIDEO_HINT_RE.search(text))
+    has_tenbit = bool(HDR_TENBIT_HINT_RE.search(text))
+    has_audio = bool(HDR_AUDIO_HINT_RE.search(text))
+
+    if has_size and (has_remux or has_video or has_audio):
+        return "filename: 4k release tags"
+    if has_remux and has_tenbit:
+        return "filename: remux 10-bit tags"
+    return ""
 
 
 def _path_looks_hdr(path: str) -> bool:
-    text = f"{os.path.basename(path or '')} {path or ''}"
-    return bool(HDR_PATH_RE.search(text))
+    return bool(_hdr_filename_reason(path))
 
 
 def _detect_hdr_from_video_info(stream: dict, path: str = "") -> tuple[bool, str]:
@@ -1427,10 +1455,11 @@ def _detect_hdr_from_video_info(stream: dict, path: str = "") -> tuple[bool, str
         return True, "hdr metadata"
     if "bt2020" in primaries or "bt2020" in color_space:
         return True, "bt2020"
-    if "p010" in pix_fmt and _path_looks_hdr(path):
+    filename_reason = _hdr_filename_reason(path)
+    if "p010" in pix_fmt and filename_reason:
         return True, "10-bit hdr filename"
-    if _path_looks_hdr(path):
-        return True, "filename"
+    if filename_reason:
+        return True, filename_reason
     return False, ""
 
 
@@ -1475,9 +1504,8 @@ def _history_prediction_model() -> dict:
         is_hdr = row.get("is_hdr")
         if is_hdr is None:
             is_hdr = job.get("is_hdr")
-        if is_hdr is None:
-            is_hdr = _path_looks_hdr(str(row.get("src") or row.get("out") or ""))
-        is_hdr = bool(is_hdr)
+        filename_hdr = _path_looks_hdr(str(row.get("src") or row.get("out") or ""))
+        is_hdr = bool(is_hdr) or filename_hdr
 
         out_ratio = out_bytes / float(src_bytes)
         if out_ratio <= 0 or out_ratio > 2.0:
@@ -1641,7 +1669,6 @@ def _beta_empty_library(settings=None) -> dict:
         "root": "",
         "roots": [],
         "recursive": True,
-        "limit": BETA_SCAN_LIMIT,
         "generated_at": 0,
         "stats": {
             "movies": 0,
@@ -1655,6 +1682,190 @@ def _beta_empty_library(settings=None) -> dict:
         "movies": [],
         "shows": [],
     }
+
+
+def _beta_empty_tracking() -> dict:
+    return {"shows": {}, "updated_at": 0}
+
+
+def _beta_show_tracking_key(show: dict) -> str:
+    show = show if isinstance(show, dict) else {}
+    existing = str(show.get("id") or show.get("show_id") or "").strip()
+    if existing:
+        return existing
+    key = f"{str(show.get('title') or 'Unknown Title').strip().lower()}::{show.get('year') or ''}"
+    return uuid.uuid5(uuid.NAMESPACE_DNS, key).hex
+
+
+def _beta_show_paths(show: dict) -> list[str]:
+    show = show if isinstance(show, dict) else {}
+    paths = []
+    for ep in show.get("files") or []:
+        if isinstance(ep, dict) and ep.get("path"):
+            paths.append(str(ep.get("path")))
+    if not paths and show.get("path"):
+        paths.append(str(show.get("path")))
+    return sorted(set(paths))
+
+
+def _beta_clean_path_list(paths) -> list[str]:
+    if isinstance(paths, str):
+        paths = [paths]
+    if not isinstance(paths, list):
+        return []
+    cleaned = []
+    seen = set()
+    for raw in paths:
+        path = str(raw or "").strip()
+        if not path or path in seen:
+            continue
+        seen.add(path)
+        cleaned.append(path)
+    return cleaned
+
+
+def _beta_load_tracking() -> dict:
+    try:
+        with open(BETA_TRACKED_SHOWS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return _beta_empty_tracking()
+    except Exception as e:
+        print(f"[WARN] Failed to load beta tracked shows: {e}", flush=True)
+        return _beta_empty_tracking()
+
+    if not isinstance(data, dict):
+        return _beta_empty_tracking()
+
+    rows = data.get("shows") if isinstance(data.get("shows"), dict) else {}
+    cleaned = {}
+    for key, row in rows.items():
+        if not isinstance(row, dict):
+            continue
+        row_id = str(row.get("id") or key or "").strip()
+        if not row_id:
+            continue
+        known_paths = _beta_clean_path_list(row.get("known_paths"))
+        cleaned[row_id] = {
+            "id": row_id,
+            "title": str(row.get("title") or "Unknown Title"),
+            "year": row.get("year"),
+            "tmdb_id": row.get("tmdb_id"),
+            "poster_url": str(row.get("poster_url") or ""),
+            "tracked": bool(row.get("tracked", True)),
+            "known_paths": known_paths,
+            "created_at": float(row.get("created_at") or 0),
+            "updated_at": float(row.get("updated_at") or 0),
+        }
+
+    return {
+        "shows": cleaned,
+        "updated_at": float(data.get("updated_at") or 0),
+    }
+
+
+def _beta_save_tracking(data: dict) -> None:
+    data = data if isinstance(data, dict) else _beta_empty_tracking()
+    data["updated_at"] = time.time()
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(BETA_TRACKED_SHOWS_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+
+def _beta_apply_tracking(data: dict, tracking: dict | None = None) -> dict:
+    data = data if isinstance(data, dict) else {}
+    tracking = tracking if isinstance(tracking, dict) else _beta_load_tracking()
+    tracked_rows = tracking.get("shows") if isinstance(tracking.get("shows"), dict) else {}
+    tracked_count = 0
+    pending_count = 0
+
+    for show in data.get("shows") or []:
+        if not isinstance(show, dict):
+            continue
+        show_id = _beta_show_tracking_key(show)
+        row = tracked_rows.get(show_id) or {}
+        paths = set(_beta_show_paths(show))
+        known = set(_beta_clean_path_list(row.get("known_paths")))
+        is_tracked = bool(row.get("tracked")) if row else False
+        new_paths = sorted(path for path in paths if path not in known)
+
+        show["tracked"] = is_tracked
+        show["tracking"] = {
+            "tracked": is_tracked,
+            "known_episode_count": len(paths & known),
+            "new_episode_count": len(new_paths) if is_tracked else 0,
+            "new_paths": new_paths if is_tracked else [],
+            "updated_at": row.get("updated_at") if row else 0,
+        }
+        if is_tracked:
+            tracked_count += 1
+            pending_count += len(new_paths)
+
+    data["tracking"] = {
+        "tracked_count": tracked_count,
+        "new_episode_count": pending_count,
+        "updated_at": float(tracking.get("updated_at") or 0),
+    }
+    return data
+
+
+def _beta_auto_queue_tracked_episodes(data: dict, tracking: dict) -> dict:
+    result = {
+        "detected_count": 0,
+        "queued_count": 0,
+        "skipped": [],
+    }
+    tracking = tracking if isinstance(tracking, dict) else _beta_empty_tracking()
+    tracked_rows = tracking.get("shows") if isinstance(tracking.get("shows"), dict) else {}
+    changed = False
+
+    for show in data.get("shows") or []:
+        if not isinstance(show, dict):
+            continue
+        show_id = _beta_show_tracking_key(show)
+        row = tracked_rows.get(show_id)
+        if not isinstance(row, dict) or not row.get("tracked"):
+            continue
+
+        current_paths = _beta_show_paths(show)
+        known = set(_beta_clean_path_list(row.get("known_paths")))
+        new_paths = [path for path in current_paths if path not in known]
+        if not new_paths:
+            row["known_paths"] = sorted(set(current_paths) | known)
+            continue
+
+        result["detected_count"] += len(new_paths)
+        to_create = []
+        for path in new_paths:
+            reason = ""
+            if not os.path.isfile(path):
+                reason = "not a file"
+            elif not is_allowed_path(path):
+                reason = "path not allowed"
+            elif not path.lower().endswith(VIDEO_EXTS):
+                reason = "not a video"
+            elif os.path.splitext(os.path.basename(path))[0].lower().endswith("-tsd"):
+                reason = "already tagged -TSD"
+
+            if reason:
+                result["skipped"].append({"path": path, "reason": reason})
+                continue
+            to_create.append((path, guess_preset_from_filename(os.path.basename(path))))
+
+        if to_create:
+            result["queued_count"] += int(create_jobs_batch(to_create) or 0)
+
+        row["known_paths"] = sorted(set(current_paths) | known)
+        row["title"] = show.get("title") or row.get("title") or "Unknown Title"
+        row["year"] = show.get("year")
+        row["tmdb_id"] = show.get("tmdb_id") or row.get("tmdb_id")
+        row["poster_url"] = show.get("poster_url") or row.get("poster_url") or ""
+        row["updated_at"] = time.time()
+        changed = True
+
+    if changed:
+        tracking["shows"] = tracked_rows
+    return result
 
 
 def _beta_load_library_cache(settings=None) -> dict:
@@ -1675,7 +1886,7 @@ def _beta_load_library_cache(settings=None) -> dict:
     data.setdefault("shows", [])
     data.setdefault("stats", {})
     data["tmdb_configured"] = bool(_beta_tmdb_config(settings))
-    return _beta_refresh_predictions(data)
+    return _beta_apply_tracking(_beta_refresh_predictions(data), _beta_load_tracking())
 
 
 def _beta_save_library_cache(data: dict) -> None:
@@ -1750,6 +1961,7 @@ def _beta_parse_media(src_path: str) -> dict:
     except Exception:
         size_bytes = 0
 
+    hdr_reason = _hdr_filename_reason(src_path)
     return {
         "id": uuid.uuid5(uuid.NAMESPACE_URL, src_path).hex,
         "type": media_type,
@@ -1761,8 +1973,8 @@ def _beta_parse_media(src_path: str) -> dict:
         "path": src_path,
         "folder": os.path.dirname(src_path),
         "size_bytes": size_bytes,
-        "is_hdr": _path_looks_hdr(src_path),
-        "hdr_reason": "filename" if _path_looks_hdr(src_path) else "",
+        "is_hdr": bool(hdr_reason),
+        "hdr_reason": hdr_reason,
         "detected_reason": source_type.get("reason") or "filename",
         "target": _wizard_source_target("show" if media_type == "show" else "movie"),
     }
@@ -1859,7 +2071,47 @@ def _beta_tmdb_search(media_type: str, title: str, year=None, settings=None) -> 
     return result.copy()
 
 
-def _beta_scan_library(root_path: str, *, recursive: bool, limit: int, posters: bool, settings: dict, root_kind: str = "") -> dict:
+def _beta_tmdb_season_art(tmdb_id, seasons: list[int], settings=None) -> dict:
+    settings = settings or {}
+    auth = _beta_tmdb_config(settings)
+    if not auth or not tmdb_id:
+        return {}
+
+    headers, extra_params = auth
+    auth_tag = _beta_tmdb_auth_cache_tag(settings)
+    art = {}
+    for raw_season in seasons or []:
+        try:
+            season = int(raw_season)
+        except (TypeError, ValueError):
+            continue
+        if season < 0:
+            continue
+
+        cache_key = ("season", str(tmdb_id), str(season), auth_tag)
+        cached = BETA_POSTER_CACHE.get(cache_key)
+        if cached:
+            result = cached.copy()
+        else:
+            params = {"language": "en-US", **extra_params}
+            url = f"https://api.themoviedb.org/3/tv/{tmdb_id}/season/{season}?{urlencode(params)}"
+            req = Request(url, headers={"accept": "application/json", **headers})
+            try:
+                with urlopen(req, timeout=8) as res:
+                    payload = json.loads(res.read().decode("utf-8", errors="replace"))
+                poster_path = payload.get("poster_path") if isinstance(payload, dict) else ""
+                poster_url = f"https://image.tmdb.org/t/p/w342{poster_path}" if poster_path else ""
+                result = {"poster_url": poster_url, "source": "tmdb_season" if poster_url else "tmdb_season_no_poster"}
+            except (HTTPError, URLError, TimeoutError, json.JSONDecodeError, OSError) as e:
+                result = {"poster_url": "", "source": "tmdb_error", "error": str(e)[:180]}
+            BETA_POSTER_CACHE[cache_key] = result
+
+        if result.get("poster_url"):
+            art[str(season)] = result["poster_url"]
+    return art
+
+
+def _beta_scan_library(root_path: str, *, recursive: bool, posters: bool, settings: dict, root_kind: str = "") -> dict:
     movies = []
     shows = {}
     scanned = 0
@@ -1908,11 +2160,6 @@ def _beta_scan_library(root_path: str, *, recursive: bool, limit: int, posters: 
             else:
                 movies.append(item)
 
-            if scanned >= limit:
-                break
-        if scanned >= limit:
-            break
-
     for group in shows.values():
         seasons = sorted({ep["season"] for ep in group["files"] if ep.get("season") is not None})
         group["season_count"] = len(seasons)
@@ -1920,6 +2167,7 @@ def _beta_scan_library(root_path: str, *, recursive: bool, limit: int, posters: 
         group["files"].sort(key=lambda ep: (ep.get("season") or 0, ep.get("episode") or 0, ep["filename"].lower()))
         if posters:
             group.update(_beta_tmdb_search("show", group["title"], group.get("year"), settings))
+            group["season_art"] = _beta_tmdb_season_art(group.get("tmdb_id"), seasons, settings)
 
     if posters:
         for item in movies:
@@ -1933,14 +2181,13 @@ def _beta_scan_library(root_path: str, *, recursive: bool, limit: int, posters: 
         "root": root_path,
         "roots": [next((row for row in _beta_mapped_roots(settings) if row["path"] == root_path), {"path": root_path, "label": root_path})],
         "recursive": recursive,
-        "limit": limit,
         "stats": {
             "movies": len(movies),
             "shows": len(show_rows),
             "episodes": sum(row["episode_count"] for row in show_rows),
             "scanned": scanned,
             "skipped_tsd": skipped_tsd,
-            "limited": scanned >= limit,
+            "limited": False,
         },
         "tmdb_configured": bool(_beta_tmdb_config(settings)),
         "movies": movies,
@@ -1974,19 +2221,26 @@ def _beta_merge_show_group(groups: dict, incoming: dict) -> None:
         if not group.get(key_name) and incoming.get(key_name):
             group[key_name] = incoming.get(key_name)
 
+    incoming_art = incoming.get("season_art") if isinstance(incoming.get("season_art"), dict) else {}
+    if incoming_art:
+        group_art = group.setdefault("season_art", {})
+        if isinstance(group_art, dict):
+            for season, poster_url in incoming_art.items():
+                if poster_url and not group_art.get(str(season)):
+                    group_art[str(season)] = poster_url
+
     seasons = sorted({ep["season"] for ep in group["files"] if ep.get("season") is not None})
     group["season_count"] = len(seasons)
     group["seasons"] = seasons
     group["files"].sort(key=lambda ep: (ep.get("season") or 0, ep.get("episode") or 0, ep.get("filename", "").lower()))
 
 
-def _beta_combine_library_scans(scans: list[dict], *, recursive: bool, limit: int, settings: dict) -> dict:
+def _beta_combine_library_scans(scans: list[dict], *, recursive: bool, settings: dict) -> dict:
     movies = []
     show_groups = {}
     roots = []
     skipped_tsd = 0
     scanned = 0
-    limited = False
 
     for scan in scans:
         if not isinstance(scan, dict):
@@ -1998,7 +2252,6 @@ def _beta_combine_library_scans(scans: list[dict], *, recursive: bool, limit: in
         stats = scan.get("stats") or {}
         skipped_tsd += int(stats.get("skipped_tsd") or 0)
         scanned += int(stats.get("scanned") or 0)
-        limited = limited or bool(stats.get("limited"))
 
     movies.sort(key=lambda item: ((item.get("title") or "").lower(), item.get("year") or 0))
     show_rows = sorted(show_groups.values(), key=lambda item: ((item.get("title") or "").lower(), item.get("year") or 0))
@@ -2008,14 +2261,13 @@ def _beta_combine_library_scans(scans: list[dict], *, recursive: bool, limit: in
         "root": "__all__",
         "roots": roots,
         "recursive": recursive,
-        "limit": limit,
         "stats": {
             "movies": len(movies),
             "shows": len(show_rows),
             "episodes": sum(int(row.get("episode_count") or 0) for row in show_rows),
             "scanned": scanned,
             "skipped_tsd": skipped_tsd,
-            "limited": limited or scanned >= limit,
+            "limited": False,
         },
         "tmdb_configured": bool(_beta_tmdb_config(settings)),
         "movies": movies,
@@ -2032,10 +2284,11 @@ def _beta_refresh_predictions(data: dict) -> dict:
             continue
         path = str(item.get("path") or "")
         preset = guess_preset_from_filename(os.path.basename(path))
-        is_hdr = bool(item.get("is_hdr") or _path_looks_hdr(path))
+        filename_hdr_reason = _hdr_filename_reason(path)
+        is_hdr = bool(item.get("is_hdr") or filename_hdr_reason)
         item["is_hdr"] = is_hdr
-        if is_hdr and not item.get("hdr_reason"):
-            item["hdr_reason"] = "filename"
+        if is_hdr and (not item.get("hdr_reason") or item.get("hdr_reason") == "filename"):
+            item["hdr_reason"] = filename_hdr_reason or item.get("hdr_reason") or "filename"
         item["prediction"] = _history_prediction_for(int(item.get("size_bytes") or 0), preset, is_hdr, model)
 
     for show in data.get("shows") or []:
@@ -2048,10 +2301,11 @@ def _beta_refresh_predictions(data: dict) -> dict:
                 continue
             path = str(ep.get("path") or "")
             preset = guess_preset_from_filename(os.path.basename(path))
-            is_hdr = bool(ep.get("is_hdr") or _path_looks_hdr(path))
+            filename_hdr_reason = _hdr_filename_reason(path)
+            is_hdr = bool(ep.get("is_hdr") or filename_hdr_reason)
             ep["is_hdr"] = is_hdr
-            if is_hdr and not ep.get("hdr_reason"):
-                ep["hdr_reason"] = "filename"
+            if is_hdr and (not ep.get("hdr_reason") or ep.get("hdr_reason") == "filename"):
+                ep["hdr_reason"] = filename_hdr_reason or ep.get("hdr_reason") or "filename"
             show_is_hdr = show_is_hdr or is_hdr
             ep["prediction"] = _history_prediction_for(int(ep.get("size_bytes") or 0), preset, is_hdr, model)
             file_predictions.append(ep["prediction"])
@@ -2063,30 +2317,22 @@ def _beta_refresh_predictions(data: dict) -> dict:
     return data
 
 
-def _beta_scan_all_libraries(*, recursive: bool, limit: int, posters: bool, settings: dict) -> dict:
+def _beta_scan_all_libraries(*, recursive: bool, posters: bool, settings: dict) -> dict:
     scans = []
-    scanned = 0
     for row in _beta_mapped_roots(settings):
         root_path = row["path"]
         if not root_path or not is_allowed_path(root_path) or not os.path.isdir(root_path):
             continue
-        remaining = max(0, limit - scanned)
-        if remaining <= 0:
-            break
         scan = _beta_scan_library(
             root_path,
             recursive=recursive,
-            limit=remaining,
             posters=posters,
             settings=settings,
             root_kind=row.get("kind") or "",
         )
         scans.append(scan)
-        scanned += int((scan.get("stats") or {}).get("scanned") or 0)
-        if scanned >= limit:
-            break
 
-    return _beta_combine_library_scans(scans, recursive=recursive, limit=limit, settings=settings)
+    return _beta_combine_library_scans(scans, recursive=recursive, settings=settings)
 
 
 def _beta_stamp_library_scan(data: dict) -> dict:
@@ -2339,17 +2585,11 @@ def register_routes(app):
 
         recursive = str(request.args.get("recursive", "1")).lower() not in {"0", "false", "no"}
         posters = str(request.args.get("posters", "1")).lower() not in {"0", "false", "no"}
-        try:
-            limit = int(request.args.get("limit") or BETA_SCAN_LIMIT)
-        except ValueError:
-            limit = BETA_SCAN_LIMIT
-        limit = max(1, min(2000, limit))
 
         try:
             if root == "__all__":
                 data = _beta_scan_all_libraries(
                     recursive=recursive,
-                    limit=limit,
                     posters=posters,
                     settings=settings,
                 )
@@ -2358,12 +2598,17 @@ def register_routes(app):
                 data = _beta_scan_library(
                     root,
                     recursive=recursive,
-                    limit=limit,
                     posters=posters,
                     settings=settings,
                     root_kind=mapped_root.get("kind") or "",
                 )
             data = _beta_refresh_predictions(data)
+            tracking = _beta_load_tracking()
+            data = _beta_apply_tracking(data, tracking)
+            auto_queue = _beta_auto_queue_tracked_episodes(data, tracking)
+            _beta_save_tracking(tracking)
+            data = _beta_apply_tracking(data, tracking)
+            data.setdefault("tracking", {})["auto_queue"] = auto_queue
             data = _beta_stamp_library_scan(data)
             _beta_save_library_cache(data)
         except Exception as e:
@@ -2375,6 +2620,44 @@ def register_routes(app):
     def beta_library_cache_api():
         """Return the last saved Beta library scan without touching the filesystem tree."""
         return jsonify(_beta_load_library_cache(load_settings()))
+
+    @app.route("/api/beta/tracked_show", methods=["POST"])
+    def beta_tracked_show_api():
+        """Enable or disable auto-queue tracking for a Beta show group."""
+        data = request.get_json(force=True) or {}
+        tracked = bool(data.get("tracked"))
+        show_id = str(data.get("show_id") or data.get("id") or "").strip()
+        if not show_id:
+            show_id = _beta_show_tracking_key(data)
+        title = str(data.get("title") or "Unknown Title").strip() or "Unknown Title"
+        paths = _beta_clean_path_list(data.get("paths"))
+
+        tracking = _beta_load_tracking()
+        shows = tracking.setdefault("shows", {})
+        now = time.time()
+        if tracked:
+            existing = shows.get(show_id) if isinstance(shows.get(show_id), dict) else {}
+            shows[show_id] = {
+                "id": show_id,
+                "title": title,
+                "year": data.get("year"),
+                "tmdb_id": data.get("tmdb_id"),
+                "poster_url": str(data.get("poster_url") or ""),
+                "tracked": True,
+                "known_paths": paths,
+                "created_at": float(existing.get("created_at") or now),
+                "updated_at": now,
+            }
+        else:
+            shows.pop(show_id, None)
+
+        _beta_save_tracking(tracking)
+        return jsonify(
+            ok=True,
+            show_id=show_id,
+            tracked=tracked,
+            tracked_count=sum(1 for row in shows.values() if isinstance(row, dict) and row.get("tracked")),
+        )
 
     @app.route("/api/beta/queue", methods=["POST"])
     def beta_queue_api():
@@ -2393,7 +2676,7 @@ def register_routes(app):
         seen = set()
         to_create = []
         skipped = []
-        for raw in raw_paths[:500]:
+        for raw in raw_paths:
             src = str(raw or "").strip()
             if not src or src in seen:
                 continue
