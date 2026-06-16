@@ -127,6 +127,7 @@ def accept_pairing(code: str, controller: dict) -> dict:
 
     controller_id = str(controller.get("controller_id") or controller.get("id") or "").strip() or uuid.uuid4().hex
     controller_name = str(controller.get("controller_name") or controller.get("name") or "Controller").strip()[:80]
+    controller_url = str(controller.get("controller_url") or controller.get("url") or "").strip().rstrip("/")[:300]
     allowed_ips = controller.get("allowed_ips")
     if not isinstance(allowed_ips, list):
         allowed_ips = []
@@ -137,6 +138,7 @@ def accept_pairing(code: str, controller: dict) -> dict:
         "id": controller_id,
         "name": controller_name,
         "token": token,
+        "url": controller_url,
         "paired_at": now,
         "last_seen": 0,
         "allowed_ips": [str(ip).strip() for ip in allowed_ips if str(ip).strip()][:20],
@@ -157,13 +159,18 @@ def public_node(row: dict) -> dict:
     row = row if isinstance(row, dict) else {}
     last_heartbeat = float(row.get("last_heartbeat") or 0)
     online = bool(row.get("online")) and (_now() - last_heartbeat <= HEARTBEAT_STALE_SECONDS)
+    status = str(row.get("status") or ("online" if online else "offline")).strip().lower()
+    if online and status == "error" and not row.get("last_error"):
+        status = "idle"
+    if not online:
+        status = "offline"
     return {
         "id": row.get("id"),
         "name": row.get("name") or "Worker",
         "url": row.get("url") or "",
         "role": row.get("role") or "worker",
         "online": online,
-        "status": row.get("status") or ("online" if online else "offline"),
+        "status": status,
         "summary": row.get("summary") if isinstance(row.get("summary"), dict) else {},
         "last_heartbeat": last_heartbeat,
         "last_error": row.get("last_error") or "",
@@ -171,6 +178,60 @@ def public_node(row: dict) -> dict:
         "transfer_mode": normalize_transfer_mode(row.get("transfer_mode")),
         "controller_url": row.get("controller_url") or "",
         "paired_at": row.get("paired_at") or 0,
+        "paired_controllers": row.get("paired_controllers") if isinstance(row.get("paired_controllers"), list) else [],
+    }
+
+
+def public_trusted_controller(row: dict) -> dict:
+    row = row if isinstance(row, dict) else {}
+    last_seen = float(row.get("last_seen") or 0)
+    online = bool(last_seen and (_now() - last_seen <= HEARTBEAT_STALE_SECONDS))
+    return {
+        "id": row.get("id") or "",
+        "name": row.get("name") or "Controller",
+        "url": row.get("url") or "",
+        "role": "controller",
+        "online": online,
+        "status": "online" if online else "paired",
+        "paired_at": row.get("paired_at") or 0,
+        "last_seen": last_seen,
+        "allowed_ips": row.get("allowed_ips") if isinstance(row.get("allowed_ips"), list) else [],
+    }
+
+
+def list_trusted_controllers_public() -> list[dict]:
+    data = _load_state()
+    controllers = data.get("trusted_controllers") if isinstance(data.get("trusted_controllers"), dict) else {}
+    return [public_trusted_controller(row) for row in controllers.values() if isinstance(row, dict)]
+
+
+def local_node_overview() -> dict:
+    data = _load_state()
+    workers = [public_node(row) for row in (data.get("nodes") or {}).values() if isinstance(row, dict)]
+    controllers = list_trusted_controllers_public()
+    is_controller = bool(workers)
+    is_worker = bool(controllers)
+    if is_controller and is_worker:
+        role = "controller_worker"
+        role_label = "Master / Controller + Worker"
+    elif is_controller:
+        role = "controller"
+        role_label = "Master / Controller"
+    elif is_worker:
+        role = "worker"
+        role_label = "Worker"
+    else:
+        role = "standalone"
+        role_label = "Standalone"
+    return {
+        "id": data.get("local_node_id"),
+        "name": data.get("local_node_name") or "HandBrake TSD Node",
+        "role": role,
+        "role_label": role_label,
+        "paired_worker_count": len(workers),
+        "paired_controller_count": len(controllers),
+        "paired_workers": workers,
+        "paired_controllers": controllers,
     }
 
 
@@ -279,6 +340,7 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
         "code": str(code or "").strip(),
         "controller_id": local["id"],
         "controller_name": local["name"],
+        "controller_url": str(controller_url or "").strip().rstrip("/"),
     }
     data = _request_json(f"{url}/api/node/pair/accept", method="POST", body=payload, timeout=10)
     token = str(data.get("token") or "")

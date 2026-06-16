@@ -451,6 +451,52 @@
       Pair worker nodes, map controller paths to worker paths, and dispatch jobs to local or remote queues.
     </p>
 
+    <details class="node-tutorial" open>
+      <summary>Node linking tutorial</summary>
+      <div class="node-tutorial-grid">
+        <div class="node-tutorial-card">
+          <h3>1. Create a worker code</h3>
+          <ol>
+            <li>Open Settings on the worker node.</li>
+            <li>Click <strong>Generate pairing code</strong>.</li>
+            <li>Leave the worker running while you pair it from the controller.</li>
+          </ol>
+        </div>
+
+        <div class="node-tutorial-card">
+          <h3>2. Pair from the controller</h3>
+          <ol>
+            <li>Enter the worker URL, such as <code>http://192.168.1.50:8081</code>.</li>
+            <li>Paste the pairing code and add a friendly name.</li>
+            <li>Click <strong>Pair worker</strong>, then <strong>Refresh linked nodes</strong>.</li>
+          </ol>
+        </div>
+
+        <div class="node-tutorial-card">
+          <h3>3. Choose the media mode</h3>
+          <p><strong>Local mounted media mode</strong> is best when the worker can see the media folders directly. Add mappings from controller paths to worker paths.</p>
+          <div class="node-tutorial-code">
+            <code>/media/Movies =&gt; /mnt/media/Movies</code>
+            <code>/media/Shows =&gt; /storage/Shows</code>
+          </div>
+          <p><strong>Remote transfer mode</strong> is for workers without the media drives mounted. Set a controller URL the worker can reach; the worker downloads a temporary copy, encodes it, uploads the finished <code>-TSD</code> file, and the controller verifies it before replacing anything.</p>
+        </div>
+
+        <div class="node-tutorial-card">
+          <h3>4. Send jobs</h3>
+          <ol>
+            <li>Use Beta to select Local queue, Best worker, or a specific worker.</li>
+            <li>If a path mapping is missing, the job will be blocked with a clear error instead of guessing.</li>
+            <li>Pairing codes are one-use and expire quickly; node secrets and transfer links are not shown in logs.</li>
+          </ol>
+        </div>
+      </div>
+    </details>
+
+    <div id="nodeRoleStatus" class="node-role-status">
+      <div class="node-empty">Loading node pairing status...</div>
+    </div>
+
     <div class="row inline-input-group">
       <label for="localNodeNameInput"><strong>Local node name</strong></label>
       <input id="localNodeNameInput" type="text" placeholder="Media Server">
@@ -1815,10 +1861,138 @@
       status.style.color = isError ? "#ffb4b4" : "";
     }
 
+    function nodeStatusClass(value) {
+      return String(value || "idle").toLowerCase().replace(/[^a-z0-9_-]+/g, "-");
+    }
+
+    function shortNodeId(value) {
+      const id = String(value || "").trim();
+      return id ? id.slice(0, 10) : "unknown";
+    }
+
+    function appendNodePill(parent, label, kind) {
+      const pill = document.createElement("span");
+      pill.className = `node-pill node-pill-${nodeStatusClass(kind || label)}`;
+      pill.textContent = label;
+      parent.appendChild(pill);
+      return pill;
+    }
+
+    function appendPairItem(parent, item) {
+      const row = document.createElement("div");
+      row.className = "node-pair-item";
+      const main = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = item.title || "Node";
+      const detail = document.createElement("span");
+      detail.textContent = item.detail || "";
+      main.appendChild(title);
+      main.appendChild(detail);
+      row.appendChild(main);
+      appendNodePill(row, item.pill || "paired", item.pillKind || item.pill || "paired");
+      parent.appendChild(row);
+    }
+
+    function renderNodeRoleStatus(data) {
+      const box = document.getElementById("nodeRoleStatus");
+      if (!box) return;
+      const local = data?.local || {};
+      const workers = Array.isArray(data?.nodes) ? data.nodes : (Array.isArray(local.paired_workers) ? local.paired_workers : []);
+      const controllers = Array.isArray(local.paired_controllers) ? local.paired_controllers : [];
+      const role = String(local.role || "standalone");
+      box.innerHTML = "";
+
+      const localCard = document.createElement("section");
+      localCard.className = "node-role-card node-role-card-primary";
+      const localHead = document.createElement("div");
+      localHead.className = "node-role-head";
+      const localTitle = document.createElement("div");
+      const title = document.createElement("strong");
+      title.textContent = local.name || "HandBrake TSD Node";
+      const sub = document.createElement("span");
+      sub.textContent = `This node / id ${shortNodeId(local.id)}`;
+      localTitle.appendChild(title);
+      localTitle.appendChild(sub);
+      const rolePills = document.createElement("div");
+      rolePills.className = "node-role-pills";
+      if (role === "controller_worker") {
+        appendNodePill(rolePills, "Master / Controller", "controller");
+        appendNodePill(rolePills, "Worker", "worker");
+      } else if (role === "controller") {
+        appendNodePill(rolePills, "Master / Controller", "controller");
+      } else if (role === "worker") {
+        appendNodePill(rolePills, "Worker", "worker");
+      } else {
+        appendNodePill(rolePills, "Standalone", "standalone");
+      }
+      localHead.appendChild(localTitle);
+      localHead.appendChild(rolePills);
+      localCard.appendChild(localHead);
+
+      const localSummary = document.createElement("div");
+      localSummary.className = "node-message";
+      localSummary.textContent = `${workers.length} paired worker${workers.length === 1 ? "" : "s"} / ${controllers.length} paired controller${controllers.length === 1 ? "" : "s"}`;
+      localCard.appendChild(localSummary);
+      box.appendChild(localCard);
+
+      const controllerCard = document.createElement("section");
+      controllerCard.className = "node-role-card";
+      const controllerTitle = document.createElement("h3");
+      controllerTitle.textContent = "When this node is master";
+      controllerCard.appendChild(controllerTitle);
+      const workerList = document.createElement("div");
+      workerList.className = "node-pair-list";
+      if (workers.length) {
+        workers.forEach(worker => {
+          const state = worker.online ? (worker.status || "online") : "offline";
+          appendPairItem(workerList, {
+            title: worker.name || "Worker",
+            detail: `${local.name || "This controller"} -> ${worker.name || "Worker"}${worker.url ? ` / ${worker.url}` : ""} / heartbeat ${fmtNodeTime(worker.last_heartbeat)}`,
+            pill: state,
+            pillKind: state
+          });
+        });
+      } else {
+        const empty = document.createElement("div");
+        empty.className = "node-message";
+        empty.textContent = "No workers are paired to this master yet.";
+        workerList.appendChild(empty);
+      }
+      controllerCard.appendChild(workerList);
+      box.appendChild(controllerCard);
+
+      const workerCard = document.createElement("section");
+      workerCard.className = "node-role-card";
+      const workerTitle = document.createElement("h3");
+      workerTitle.textContent = "When this node is worker";
+      workerCard.appendChild(workerTitle);
+      const controllerList = document.createElement("div");
+      controllerList.className = "node-pair-list";
+      if (controllers.length) {
+        controllers.forEach(controller => {
+          const state = controller.online ? "online" : (controller.status || "paired");
+          appendPairItem(controllerList, {
+            title: controller.name || "Controller",
+            detail: `${controller.name || "Controller"} -> ${local.name || "This worker"}${controller.url ? ` / ${controller.url}` : ""} / last seen ${fmtNodeTime(controller.last_seen)}`,
+            pill: state,
+            pillKind: state
+          });
+        });
+      } else {
+        const empty = document.createElement("div");
+        empty.className = "node-message";
+        empty.textContent = "This node has not been paired as a worker by another master.";
+        controllerList.appendChild(empty);
+      }
+      workerCard.appendChild(controllerList);
+      box.appendChild(workerCard);
+    }
+
     function renderLinkedNodes(data) {
       const local = data?.local || {};
       const nameInput = document.getElementById("localNodeNameInput");
       if (nameInput && local.name) nameInput.value = local.name;
+      renderNodeRoleStatus(data);
 
       const list = document.getElementById("linkedNodesList");
       if (!list) return;
@@ -1844,16 +2018,29 @@
         const title = document.createElement("strong");
         title.textContent = node.name || "Worker";
         const pill = document.createElement("span");
-        pill.className = `node-pill node-pill-${node.online ? (node.status || "online") : "offline"}`;
-        pill.textContent = node.online ? (node.status || "online") : "offline";
+        const nodeState = node.online ? (node.status || "online") : "offline";
+        pill.className = `node-pill node-pill-${nodeStatusClass(nodeState)}`;
+        pill.textContent = nodeState;
         header.appendChild(title);
         header.appendChild(pill);
         main.appendChild(header);
+
+        const pairing = document.createElement("div");
+        pairing.className = "node-pair-line";
+        pairing.textContent = `Master/controller: ${local.name || "This node"} -> Worker: ${node.name || "Worker"}`;
+        main.appendChild(pairing);
 
         const meta = document.createElement("div");
         meta.className = "node-message";
         meta.textContent = `${node.url || ""} / ${jobSummaryText(node.summary)} / last heartbeat ${fmtNodeTime(node.last_heartbeat)}`;
         main.appendChild(meta);
+
+        if (Array.isArray(node.paired_controllers) && node.paired_controllers.length) {
+          const reported = document.createElement("div");
+          reported.className = "node-message";
+          reported.textContent = `Worker reports paired to: ${node.paired_controllers.map(item => item.name || "Controller").join(", ")}`;
+          main.appendChild(reported);
+        }
 
         if (node.last_error) {
           const error = document.createElement("div");

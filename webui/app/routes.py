@@ -111,7 +111,7 @@ from .node_linking import (
     hmac_headers,
     list_nodes_private,
     list_nodes_public,
-    local_node_info,
+    local_node_overview,
     normalize_path_mappings,
     normalize_transfer_mode,
     pair_worker,
@@ -2893,8 +2893,8 @@ def _node_summary_status(summary: dict) -> str:
     counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
     if int(counts.get("running") or 0) > 0:
         return "running"
-    if int(counts.get("error") or 0) > 0:
-        return "error"
+    if int(counts.get("queued") or 0) > 0:
+        return "queued"
     return "idle"
 
 
@@ -2910,6 +2910,7 @@ def _refresh_linked_node(row: dict) -> dict:
             "status": _node_summary_status(summary),
             "summary": summary,
             "last_error": "",
+            "paired_controllers": data.get("paired_controllers") if isinstance(data.get("paired_controllers"), list) else [],
         })
     except Exception as e:
         row.update({
@@ -3651,8 +3652,9 @@ def register_routes(app):
     def node_local_api():
         if request.method == "POST":
             data = request.get_json(silent=True) or {}
-            return jsonify(local=set_local_node_name(data.get("name") or ""))
-        return jsonify(local=local_node_info())
+            set_local_node_name(data.get("name") or "")
+            return jsonify(local=local_node_overview())
+        return jsonify(local=local_node_overview())
 
     @app.route("/api/node/pairing_code", methods=["POST"])
     def node_pairing_code_api():
@@ -3675,10 +3677,14 @@ def register_routes(app):
         controller = _authenticated_controller()
         if not controller:
             return jsonify(error="unauthorized"), 401
+        local = local_node_overview()
         return jsonify(
             ok=True,
-            id=local_node_info()["id"],
-            name=local_node_info()["name"],
+            id=local["id"],
+            name=local["name"],
+            role=local["role"],
+            role_label=local["role_label"],
+            paired_controllers=local["paired_controllers"],
             summary=get_job_summary(),
         )
 
@@ -3839,7 +3845,7 @@ def register_routes(app):
 
     @app.route("/api/nodes")
     def nodes_api():
-        return jsonify(local=local_node_info(), nodes=list_nodes_public())
+        return jsonify(local=local_node_overview(), nodes=list_nodes_public())
 
     @app.route("/api/nodes/pair", methods=["POST"])
     def nodes_pair_api():
@@ -3855,6 +3861,9 @@ def register_routes(app):
             )
         except Exception as e:
             return jsonify(error=str(e)), 400
+        private = get_node_private(node.get("id") or "")
+        if private:
+            node = public_node(_refresh_linked_node(private))
         log_event("node_paired", f"Paired worker node: {node.get('name') or node.get('url')}", level="info")
         return jsonify(ok=True, node=node)
 
