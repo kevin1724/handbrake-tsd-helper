@@ -26,6 +26,11 @@ import signal
 import time
 import threading
 import subprocess
+import http.client
+import shutil
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
 
 from .config import (
     DATA_DIR,
@@ -65,6 +70,7 @@ job_queue: list[str] = []
 queue_paused: bool = False
 dispatcher_started: bool = False
 dashboard_totals: dict[str, float | int] = {}
+TRANSFER_WORK_DIR = os.path.join(DATA_DIR, "node_transfer_work")
 
 
 def _now_ts() -> float:
@@ -283,6 +289,119 @@ def _encoded_output_is_valid(path: str) -> tuple[bool, str]:
     return True, "ok"
 
 
+def _safe_transfer_filename(name: str, fallback: str = "source.mkv") -> str:
+    value = os.path.basename(str(name or "").replace("\\", "/")).strip()
+    value = re.sub(r"[^A-Za-z0-9._ -]+", "_", value)
+    value = value.strip(" .")
+    return value or fallback
+
+
+def _download_transfer_source(url: str, token: str, worker_node_id: str, destination: str, expected_size: int = 0) -> int:
+    if not url or not token:
+        raise RuntimeError("transfer download is missing URL or token")
+    os.makedirs(os.path.dirname(destination), exist_ok=True)
+    part_path = destination + ".part"
+    req = Request(
+        url,
+        method="GET",
+        headers={
+            "X-Transfer-Token": token,
+            "X-Worker-Node-Id": str(worker_node_id or ""),
+        },
+    )
+    try:
+        with urlopen(req, timeout=60) as res, open(part_path, "wb") as f:
+            while True:
+                chunk = res.read(1024 * 1024)
+                if not chunk:
+                    break
+                f.write(chunk)
+    except HTTPError as e:
+        try:
+            detail = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = str(e)
+        raise RuntimeError(detail[:240] or str(e))
+    except (URLError, TimeoutError, OSError) as e:
+        raise RuntimeError(str(e))
+
+    size = int(os.path.getsize(part_path))
+    if expected_size and size != int(expected_size):
+        try:
+            os.remove(part_path)
+        except FileNotFoundError:
+            pass
+        raise RuntimeError(f"downloaded source size mismatch ({size} != {expected_size})")
+    os.replace(part_path, destination)
+    return size
+
+
+def _upload_transfer_output(url: str, token: str, worker_node_id: str, out_path: str, *, job_id: str, duration_seconds: float | None) -> dict:
+    if not url or not token:
+        raise RuntimeError("transfer upload is missing URL or token")
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise RuntimeError("invalid transfer upload URL")
+    size = int(os.path.getsize(out_path))
+    conn_cls = http.client.HTTPSConnection if parsed.scheme == "https" else http.client.HTTPConnection
+    target = parsed.path or "/"
+    if parsed.query:
+        target += "?" + parsed.query
+    conn = conn_cls(parsed.netloc, timeout=60)
+    try:
+        conn.putrequest("POST", target)
+        conn.putheader("Content-Type", "application/octet-stream")
+        conn.putheader("Content-Length", str(size))
+        conn.putheader("X-Transfer-Token", token)
+        conn.putheader("X-Worker-Node-Id", str(worker_node_id or ""))
+        conn.putheader("X-Worker-Job-Id", str(job_id or ""))
+        conn.putheader("X-Output-Filename", os.path.basename(out_path))
+        if duration_seconds is not None:
+            conn.putheader("X-Encode-Duration-Seconds", str(round(float(duration_seconds), 3)))
+        conn.endheaders()
+        with open(out_path, "rb") as f:
+            while True:
+                chunk = f.read(1024 * 1024)
+                if not chunk:
+                    break
+                conn.send(chunk)
+        res = conn.getresponse()
+        body = res.read().decode("utf-8", errors="replace")
+        try:
+            payload = json.loads(body or "{}")
+        except Exception:
+            payload = {"error": body[:240]}
+        if res.status >= 400 or not payload.get("ok"):
+            raise RuntimeError(payload.get("error") or f"transfer upload failed ({res.status})")
+        return payload if isinstance(payload, dict) else {}
+    finally:
+        conn.close()
+
+
+def _cleanup_transfer_work_dir(path: str) -> None:
+    if not path:
+        return
+    try:
+        real = os.path.realpath(path)
+        root = os.path.realpath(TRANSFER_WORK_DIR)
+        if os.path.commonpath([real, root]) == root and os.path.isdir(real):
+            shutil.rmtree(real, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _remote_transfer_public(transfer: dict | None) -> dict:
+    transfer = transfer if isinstance(transfer, dict) else {}
+    return {
+        "id": transfer.get("id") or transfer.get("transfer_id") or "",
+        "controller_url": transfer.get("controller_url") or "",
+        "original_path": transfer.get("original_path") or "",
+        "source_basename": transfer.get("source_basename") or "",
+        "source_size": transfer.get("source_size") or 0,
+        "status": transfer.get("status") or "",
+    }
+
+
 # -------------------------------------------------------------------
 # Persistence: saving / loading jobs.json
 # -------------------------------------------------------------------
@@ -304,6 +423,8 @@ def save_jobs():
                 "src": j.get("src"),
                 "preset": j.get("preset"),
                 "extra_args": j.get("extra_args", ""),
+                "mode": j.get("mode", "local"),
+                "transfer": j.get("transfer") if isinstance(j.get("transfer"), dict) else None,
                 "log": j.get("log", ""),
                 "returncode": j.get("returncode"),
                 "pid": None,  # never persist the actual pid
@@ -377,6 +498,8 @@ def load_jobs():
                 "src": j.get("src"),
                 "preset": j.get("preset"),
                 "extra_args": j.get("extra_args", ""),
+                "mode": j.get("mode", "local"),
+                "transfer": j.get("transfer") if isinstance(j.get("transfer"), dict) else None,
                 "log": j.get("log", ""),
                 "returncode": j.get("returncode"),
                 "pid": None,
@@ -472,6 +595,8 @@ def create_job(src: str, preset: str, extra_args: str = "") -> str:
         "src": src,
         "preset": preset,
         "extra_args": extra_args or "",
+        "mode": "local",
+        "transfer": None,
         "log": "",
         "returncode": None,
         "pid": None,
@@ -537,6 +662,8 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
             "status": "queued",
             "src": src,
             "preset": preset,
+            "mode": "local",
+            "transfer": None,
             "log": "",
             "returncode": None,
             "pid": None,
@@ -567,6 +694,66 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
         ensure_dispatcher()
 
     return count
+
+
+def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args: str = "") -> tuple[str, bool]:
+    """
+    Queue a job whose source is downloaded from a paired controller/storage node.
+
+    The visible src remains the original controller path, but HandBrake runs
+    against a temporary local copy created when the job starts.
+    """
+    display_src = str(src or transfer.get("original_path") or transfer.get("source_basename") or "").strip()
+    existing_id = _find_existing_active_job_for_src(display_src)
+    if existing_id is not None:
+        return existing_id, False
+
+    job_id = str(uuid.uuid4())
+    clean_transfer = {
+        "id": str(transfer.get("id") or transfer.get("transfer_id") or "").strip(),
+        "controller_url": str(transfer.get("controller_url") or "").strip().rstrip("/"),
+        "source_url": str(transfer.get("source_url") or "").strip(),
+        "upload_url": str(transfer.get("upload_url") or "").strip(),
+        "download_token": str(transfer.get("download_token") or "").strip(),
+        "upload_token": str(transfer.get("upload_token") or "").strip(),
+        "worker_node_id": str(transfer.get("worker_node_id") or "").strip(),
+        "original_path": display_src,
+        "source_basename": _safe_transfer_filename(transfer.get("source_basename") or os.path.basename(display_src)),
+        "source_size": int(transfer.get("source_size") or 0),
+        "status": "queued",
+    }
+    jobs[job_id] = {
+        "status": "queued",
+        "src": display_src,
+        "preset": preset,
+        "extra_args": extra_args or "",
+        "mode": "remote_transfer",
+        "transfer": clean_transfer,
+        "log": "",
+        "returncode": None,
+        "pid": None,
+        "progress": 0.0,
+        "eta_seconds": None,
+        "src_bytes": clean_transfer["source_size"] or None,
+        "out_bytes": None,
+        "saved_bytes": None,
+        "out_path": None,
+        "is_hdr": _looks_like_hdr_path(display_src),
+        "created_at": _now_ts(),
+        "started_at": None,
+        "finished_at": None,
+        "duration_seconds": None,
+    }
+    job_queue.append(job_id)
+    save_jobs()
+    log_event(
+        "node_transfer_job_queued",
+        f"Queued remote-transfer job: {os.path.basename(display_src)} ({preset})",
+        job_id=job_id,
+        src=display_src,
+    )
+    ensure_dispatcher()
+    return job_id, True
 
 
 
@@ -611,6 +798,8 @@ def list_jobs_for_api() -> list[dict]:
                 "id": jid,
                 "src": j.get("src"),
                 "preset": j.get("preset"),
+                "mode": j.get("mode", "local"),
+                "transfer": _remote_transfer_public(j.get("transfer")) if j.get("mode") == "remote_transfer" else None,
                 "status": j.get("status"),
                 "returncode": j.get("returncode"),
                 "progress": float(j.get("progress") or 0.0),
@@ -664,6 +853,12 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     - Updates final status to "done" or "error"
     """
     job = jobs[job_id]
+    display_src_path = src_path
+    encode_src_path = src_path
+    transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else {}
+    remote_transfer = job.get("mode") == "remote_transfer" and bool(transfer)
+    transfer_work_dir = ""
+
     job["status"] = "running"
     job["progress"] = 0.0
     job["started_at"] = _now_ts()
@@ -675,11 +870,60 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job["out_bytes"] = None
     job["saved_bytes"] = None
     job["out_path"] = None
-    job["is_hdr"] = bool(job.get("is_hdr", False) or _looks_like_hdr_path(src_path))
+    job["is_hdr"] = bool(job.get("is_hdr", False) or _looks_like_hdr_path(display_src_path))
+
+    if remote_transfer:
+        try:
+            transfer_work_dir = os.path.join(TRANSFER_WORK_DIR, job_id)
+            basename = _safe_transfer_filename(transfer.get("source_basename") or os.path.basename(display_src_path))
+            encode_src_path = os.path.join(transfer_work_dir, basename)
+            job["log"] = "Downloading source from controller...\n"
+            transfer["status"] = "downloading"
+            transfer["work_dir"] = transfer_work_dir
+            transfer["local_src"] = encode_src_path
+            job["transfer"] = transfer
+            save_jobs()
+            downloaded_size = _download_transfer_source(
+                transfer.get("source_url") or "",
+                transfer.get("download_token") or "",
+                transfer.get("worker_node_id") or "",
+                encode_src_path,
+                int(transfer.get("source_size") or 0),
+            )
+            job["src_bytes"] = downloaded_size
+            transfer["status"] = "downloaded"
+            job["transfer"] = transfer
+            save_jobs()
+        except Exception as e:
+            job["status"] = "error"
+            job["returncode"] = None
+            job["log"] = (job.get("log") or "") + f"Remote source download failed: {e}\n"
+            transfer["status"] = "error"
+            transfer["error"] = str(e)[:240]
+            job["transfer"] = transfer
+            log_event(
+                "node_transfer_error",
+                f"Remote source download failed: {os.path.basename(display_src_path)} ({e})",
+                level="error",
+                job_id=job_id,
+                src=display_src_path,
+            )
+            job["eta_seconds"] = None
+            job["finished_at"] = _now_ts()
+            job["pid"] = None
+            transfer.pop("download_token", None)
+            transfer.pop("upload_token", None)
+            transfer.pop("local_src", None)
+            transfer.pop("work_dir", None)
+            job["transfer"] = transfer
+            _cleanup_transfer_work_dir(transfer_work_dir)
+            save_jobs()
+            return
 
     # Capture source size before the success path deletes the original.
     try:
-        job["src_bytes"] = int(os.path.getsize(src_path))
+        if job.get("src_bytes") is None:
+            job["src_bytes"] = int(os.path.getsize(encode_src_path))
     except Exception:
         job["src_bytes"] = None
 
@@ -688,8 +932,8 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
         suffix = (os.environ.get("SUFFIX") or "TSD").strip() or "TSD"
     except Exception:
         suffix = "TSD"
-    d = os.path.dirname(src_path)
-    base = os.path.basename(src_path)
+    d = os.path.dirname(encode_src_path)
+    base = os.path.basename(encode_src_path)
     name, ext = os.path.splitext(base)
     out_path = os.path.join(d, f"{name}-{suffix}{ext}")
     out_path_existed_before = os.path.exists(out_path)
@@ -697,9 +941,9 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
 
     log_event(
         "job_started",
-        f"Started: {os.path.basename(src_path)} ({preset_key})",
+        f"Started: {os.path.basename(display_src_path)} ({preset_key})",
         job_id=job_id,
-        src=src_path,
+        src=display_src_path,
     )
     save_jobs()
 
@@ -710,7 +954,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     # - HB_THREADS: optional override from settings.py (Settings page)
     # ------------------------------------------------------------
     env = os.environ.copy()
-    env["SRC"] = src_path  # encode-one.sh uses this
+    env["SRC"] = encode_src_path  # encode-one.sh uses this
     # keep SUFFIX consistent across the stack
     env["SUFFIX"] = suffix
 
@@ -828,55 +1072,89 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                     except Exception:
                         duration_seconds_for_stats = None
 
-                # Persist to long-term history
-                record_encode(
-                    job_id=job_id,
-                    src=src_path,
-                    out=out_path,
-                    preset=preset_key,
-                    src_bytes=src_bytes_i,
-                    out_bytes=out_bytes,
-                    duration_seconds=duration_seconds_for_stats,
-                    is_hdr=bool(job.get("is_hdr", False)),
-                )
-
-                source_deleted = False
-                try:
-                    if os.path.isfile(src_path):
-                        os.remove(src_path)
-                        source_deleted = True
-                except Exception as e:
-                    log_event(
-                        "job_cleanup_error",
-                        f"Finished but failed to delete original: {os.path.basename(src_path)} ({e})",
-                        level="warn",
+                if remote_transfer:
+                    transfer["status"] = "uploading"
+                    job["transfer"] = transfer
+                    save_jobs()
+                    upload_result = _upload_transfer_output(
+                        transfer.get("upload_url") or "",
+                        transfer.get("upload_token") or "",
+                        transfer.get("worker_node_id") or "",
+                        out_path,
                         job_id=job_id,
-                        src=src_path,
+                        duration_seconds=duration_seconds_for_stats,
+                    )
+                    controller_out = upload_result.get("out_path") or out_path
+                    controller_out_bytes = int(upload_result.get("out_bytes") or out_bytes)
+                    controller_saved = int(upload_result.get("saved_bytes") or saved_bytes)
+                    job["out_path"] = controller_out
+                    job["out_bytes"] = controller_out_bytes
+                    job["saved_bytes"] = controller_saved
+                    transfer["status"] = "complete"
+                    transfer["controller_out_path"] = controller_out
+                    transfer["source_deleted"] = bool(upload_result.get("source_deleted"))
+                    job["transfer"] = transfer
+                    log_event(
+                        "node_transfer_finished",
+                        f"Remote transfer finished: {os.path.basename(display_src_path)} - saved {round(controller_saved/(1024**3), 3)} GB",
+                        job_id=job_id,
+                        src=display_src_path,
                         extra={
-                            "out_path": out_path,
+                            "saved_bytes": controller_saved,
+                            "out_path": controller_out,
+                            "source_deleted": bool(upload_result.get("source_deleted")),
                         },
                     )
+                else:
+                    # Persist to long-term history
+                    record_encode(
+                        job_id=job_id,
+                        src=display_src_path,
+                        out=out_path,
+                        preset=preset_key,
+                        src_bytes=src_bytes_i,
+                        out_bytes=out_bytes,
+                        duration_seconds=duration_seconds_for_stats,
+                        is_hdr=bool(job.get("is_hdr", False)),
+                    )
 
-                log_event(
-                    "job_finished",
-                    f"Finished: {os.path.basename(src_path)} - saved {round(saved_bytes/(1024**3), 3)} GB",
-                    job_id=job_id,
-                    src=src_path,
-                    extra={
-                        "saved_bytes": saved_bytes,
-                        "out_path": out_path,
-                        "source_deleted": source_deleted,
-                    },
-                )
+                    source_deleted = False
+                    try:
+                        if os.path.isfile(encode_src_path):
+                            os.remove(encode_src_path)
+                            source_deleted = True
+                    except Exception as e:
+                        log_event(
+                            "job_cleanup_error",
+                            f"Finished but failed to delete original: {os.path.basename(display_src_path)} ({e})",
+                            level="warn",
+                            job_id=job_id,
+                            src=display_src_path,
+                            extra={
+                                "out_path": out_path,
+                            },
+                        )
+
+                    log_event(
+                        "job_finished",
+                        f"Finished: {os.path.basename(display_src_path)} - saved {round(saved_bytes/(1024**3), 3)} GB",
+                        job_id=job_id,
+                        src=display_src_path,
+                        extra={
+                            "saved_bytes": saved_bytes,
+                            "out_path": out_path,
+                            "source_deleted": source_deleted,
+                        },
+                    )
             else:
                 output_validation_error = output_reason or "output validation failed"
                 job["status"] = "error"
                 log_event(
                     "job_error",
-                    f"Output validation failed for {os.path.basename(src_path)}: {output_validation_error}",
+                    f"Output validation failed for {os.path.basename(display_src_path)}: {output_validation_error}",
                     level="error",
                     job_id=job_id,
-                    src=src_path,
+                    src=display_src_path,
                     extra={
                         "out_path": out_path,
                     },
@@ -889,7 +1167,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                 f"Failed to record storage savings: {e}",
                 level="warn",
                 job_id=job_id,
-                src=src_path,
+                src=display_src_path,
             )
 
     if job.get("status") in ("error", "canceled"):
@@ -906,14 +1184,14 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                     f"Failed to delete failed output: {os.path.basename(out_path)} ({e})",
                     level="warn",
                     job_id=job_id,
-                    src=src_path,
+                    src=display_src_path,
                     extra={
                         "out_path": out_path,
                     },
                 )
 
         if job.get("status") == "error":
-            msg = f"Error: {os.path.basename(src_path)} (exit {ret})"
+            msg = f"Error: {os.path.basename(display_src_path)} (exit {ret})"
             if output_validation_error:
                 msg += f" - {output_validation_error}"
             if deleted_failed_output:
@@ -923,7 +1201,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                 msg,
                 level="error",
                 job_id=job_id,
-                src=src_path,
+                src=display_src_path,
                 extra={
                     "out_path": out_path,
                     "deleted_failed_output": deleted_failed_output,
@@ -935,7 +1213,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                 f"Canceled: deleted partial output {os.path.basename(out_path)}",
                 level="warn",
                 job_id=job_id,
-                src=src_path,
+                src=display_src_path,
                 extra={
                     "out_path": out_path,
                     "deleted_failed_output": True,
@@ -945,10 +1223,10 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     if job.get("status") == "canceled":
         log_event(
             "job_canceled",
-            f"Canceled: {os.path.basename(src_path)}",
+            f"Canceled: {os.path.basename(display_src_path)}",
             level="warn",
             job_id=job_id,
-            src=src_path,
+            src=display_src_path,
         )
 
     # Once finished (or canceled), ETA no longer makes sense
@@ -961,6 +1239,14 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             job["duration_seconds"] = None
 
     job["pid"] = None
+    if remote_transfer:
+        transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else transfer
+        transfer.pop("download_token", None)
+        transfer.pop("upload_token", None)
+        transfer.pop("local_src", None)
+        transfer.pop("work_dir", None)
+        job["transfer"] = transfer
+        _cleanup_transfer_work_dir(transfer_work_dir)
     save_jobs()
 
 

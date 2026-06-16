@@ -40,6 +40,9 @@ import uuid
 import signal
 import time
 import hashlib
+import threading
+import secrets
+import shutil
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
@@ -65,6 +68,7 @@ from .jobs import (
     is_allowed_path,
     create_job,
     create_jobs_batch,
+    create_remote_transfer_job,
     get_job,
     list_jobs_for_api,
     cancel_job,
@@ -76,6 +80,7 @@ from .jobs import (
     move_queued_job_to_position,
     move_queued_job,
     get_job_summary,
+    _encoded_output_is_valid,
 )
 
 from .presets import (
@@ -94,8 +99,34 @@ from .cpu_profiles import (
     get_cpu_profile,
 )
 
-from .events import load_events, clear_events
-from .storage_stats import get_summary as get_storage_summary, list_encodes as list_storage_encodes, clear_stats as clear_storage_stats
+from .events import load_events, clear_events, log_event
+from .storage_stats import get_summary as get_storage_summary, list_encodes as list_storage_encodes, clear_stats as clear_storage_stats, record_encode
+from .node_linking import (
+    accept_pairing,
+    create_transfer_grant,
+    create_pairing_code,
+    delete_node,
+    delete_trusted_controller,
+    get_node_private,
+    hmac_headers,
+    list_nodes_private,
+    list_nodes_public,
+    local_node_info,
+    normalize_path_mappings,
+    normalize_transfer_mode,
+    pair_worker,
+    public_node,
+    save_node,
+    get_transfer,
+    save_transfer,
+    set_local_node_name,
+    signed_json_request,
+    translate_path,
+    trusted_controller,
+    transfer_token_matches,
+    update_trusted_controller,
+    verify_hmac,
+)
 
 # -------------------------------------------------------------------
 # Media probing + preview estimation helpers
@@ -1394,7 +1425,16 @@ def _clean_wizard_preset_name(name: str) -> str:
 
 BETA_LIBRARY_CACHE_FILE = os.path.join(DATA_DIR, "beta_library_cache.json")
 BETA_TRACKED_SHOWS_FILE = os.path.join(DATA_DIR, "beta_tracked_shows.json")
+BETA_SCAN_INDEX_FILE = os.path.join(DATA_DIR, "beta_scan_index.json")
+BETA_AUTOSCAN_STATUS_FILE = os.path.join(DATA_DIR, "beta_autoscan_status.json")
+NODE_TRANSFER_TMP_DIR = os.path.join(DATA_DIR, "node_transfer_uploads")
 BETA_POSTER_CACHE: dict[tuple, dict] = {}
+BETA_AUTOSCAN_THREAD = None
+BETA_AUTOSCAN_STOP = threading.Event()
+BETA_AUTOSCAN_RUN_NOW = threading.Event()
+BETA_AUTOSCAN_LOCK = threading.Lock()
+NODE_HEARTBEAT_THREAD = None
+NODE_HEARTBEAT_STOP = threading.Event()
 BETA_MEDIA_TAG_RE = re.compile(
     r"(?<!\w)(480p|576p|720p|1080p|2160p|4320p|4k|8k|uhd|hdr10\+|hdr10plus|hdr10|hdr|hlg|dv|dovi|dolby ?vision|"
     r"bluray|blu-ray|brrip|webrip|web-dl|webdl|hdtv|remux|proper|repack|"
@@ -2335,6 +2375,779 @@ def _beta_scan_all_libraries(*, recursive: bool, posters: bool, settings: dict) 
     return _beta_combine_library_scans(scans, recursive=recursive, settings=settings)
 
 
+def _beta_empty_scan_index() -> dict:
+    return {"version": 1, "generated_at": 0, "files": {}}
+
+
+def _beta_load_scan_index() -> dict:
+    try:
+        with open(BETA_SCAN_INDEX_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return _beta_empty_scan_index()
+    except Exception as e:
+        print(f"[WARN] Failed to load beta scan index: {e}", flush=True)
+        return _beta_empty_scan_index()
+    if not isinstance(data, dict):
+        return _beta_empty_scan_index()
+    data.setdefault("version", 1)
+    data.setdefault("generated_at", 0)
+    data.setdefault("files", {})
+    if not isinstance(data["files"], dict):
+        data["files"] = {}
+    return data
+
+
+def _beta_save_scan_index(index: dict) -> None:
+    index = index if isinstance(index, dict) else _beta_empty_scan_index()
+    index["generated_at"] = time.time()
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(BETA_SCAN_INDEX_FILE, "w", encoding="utf-8") as f:
+        json.dump(index, f, indent=2)
+
+
+def _beta_empty_autoscan_status(settings=None) -> dict:
+    settings = settings or {}
+    interval_seconds = max(300, int(settings.get("beta_auto_scan_interval_minutes") or 30) * 60)
+    return {
+        "running": False,
+        "last_started_at": 0,
+        "last_finished_at": 0,
+        "last_status": "idle",
+        "last_message": "No auto scan has run yet.",
+        "last_summary": {},
+        "next_scan_at": time.time() + interval_seconds,
+    }
+
+
+def _beta_load_autoscan_status(settings=None) -> dict:
+    try:
+        with open(BETA_AUTOSCAN_STATUS_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except FileNotFoundError:
+        return _beta_empty_autoscan_status(settings)
+    except Exception:
+        return _beta_empty_autoscan_status(settings)
+    if not isinstance(data, dict):
+        return _beta_empty_autoscan_status(settings)
+    empty = _beta_empty_autoscan_status(settings)
+    empty.update(data)
+    return empty
+
+
+def _beta_save_autoscan_status(status: dict) -> dict:
+    status = status if isinstance(status, dict) else {}
+    os.makedirs(DATA_DIR, exist_ok=True)
+    with open(BETA_AUTOSCAN_STATUS_FILE, "w", encoding="utf-8") as f:
+        json.dump(status, f, indent=2)
+    return status
+
+
+def _beta_file_is_stable(index_row: dict, settings: dict, now: float | None = None) -> bool:
+    if not settings.get("beta_auto_scan_file_stability_enabled", True):
+        return True
+    now = now or time.time()
+    try:
+        stable_passes = int(index_row.get("stable_passes") or 0)
+    except Exception:
+        stable_passes = 0
+    try:
+        changed_at = float(index_row.get("changed_at") or index_row.get("first_seen") or now)
+    except Exception:
+        changed_at = now
+    stability_seconds = max(60, int(settings.get("beta_auto_scan_file_stability_minutes") or 10) * 60)
+    return stable_passes >= 1 and (now - changed_at) >= stability_seconds
+
+
+def _beta_cached_art_maps() -> tuple[dict, dict]:
+    try:
+        with open(BETA_LIBRARY_CACHE_FILE, "r", encoding="utf-8") as f:
+            cache = json.load(f)
+    except Exception:
+        cache = {}
+    movies = {}
+    shows = {}
+    if not isinstance(cache, dict):
+        return movies, shows
+
+    for item in cache.get("movies") or []:
+        if not isinstance(item, dict):
+            continue
+        keys = {
+            str(item.get("id") or ""),
+            str(item.get("path") or ""),
+            f"{str(item.get('title') or '').lower()}::{item.get('year') or ''}",
+        }
+        art = {k: item.get(k) for k in ("poster_url", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error") if item.get(k)}
+        for key in keys:
+            if key and art:
+                movies[key] = art
+
+    for item in cache.get("shows") or []:
+        if not isinstance(item, dict):
+            continue
+        keys = {
+            str(item.get("id") or ""),
+            f"{str(item.get('title') or '').lower()}::{item.get('year') or ''}",
+        }
+        art = {k: item.get(k) for k in ("poster_url", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error", "season_art") if item.get(k)}
+        for key in keys:
+            if key and art:
+                shows[key] = art
+    return movies, shows
+
+
+def _beta_apply_cached_art(data: dict) -> dict:
+    movie_art, show_art = _beta_cached_art_maps()
+    for item in data.get("movies") or []:
+        if not isinstance(item, dict):
+            continue
+        art = (
+            movie_art.get(str(item.get("id") or ""))
+            or movie_art.get(str(item.get("path") or ""))
+            or movie_art.get(f"{str(item.get('title') or '').lower()}::{item.get('year') or ''}")
+            or {}
+        )
+        for key, value in art.items():
+            if value and not item.get(key):
+                item[key] = value
+    for show in data.get("shows") or []:
+        if not isinstance(show, dict):
+            continue
+        art = (
+            show_art.get(str(show.get("id") or ""))
+            or show_art.get(f"{str(show.get('title') or '').lower()}::{show.get('year') or ''}")
+            or {}
+        )
+        for key, value in art.items():
+            if value and not show.get(key):
+                show[key] = value
+    return data
+
+
+def _beta_library_from_scan_index(index: dict, *, settings: dict, recursive: bool = True) -> dict:
+    movies = []
+    shows = {}
+    scanned = 0
+    skipped_tsd = 0
+    files = index.get("files") if isinstance(index.get("files"), dict) else {}
+
+    for row in files.values():
+        if not isinstance(row, dict) or row.get("removed"):
+            continue
+        item = row.get("item") if isinstance(row.get("item"), dict) else None
+        if not item:
+            continue
+        scanned += 1
+        if os.path.splitext(os.path.basename(item.get("path") or ""))[0].lower().endswith("-tsd"):
+            skipped_tsd += 1
+            continue
+        if item.get("type") == "show":
+            key = f"{item.get('title', '').lower()}::{item.get('year') or ''}"
+            group = shows.setdefault(
+                key,
+                {
+                    "id": uuid.uuid5(uuid.NAMESPACE_DNS, key).hex,
+                    "type": "show",
+                    "title": item.get("title") or "Unknown Title",
+                    "year": item.get("year"),
+                    "episode_count": 0,
+                    "season_count": 0,
+                    "seasons": [],
+                    "total_size_bytes": 0,
+                    "files": [],
+                    "target": _wizard_source_target("show"),
+                },
+            )
+            group["episode_count"] += 1
+            group["total_size_bytes"] += int(item.get("size_bytes") or 0)
+            group["files"].append(item.copy())
+        else:
+            movies.append(item.copy())
+
+    for group in shows.values():
+        seasons = sorted({ep["season"] for ep in group["files"] if ep.get("season") is not None})
+        group["season_count"] = len(seasons)
+        group["seasons"] = seasons
+        group["files"].sort(key=lambda ep: (ep.get("season") or 0, ep.get("episode") or 0, ep.get("filename", "").lower()))
+
+    movies.sort(key=lambda item: ((item.get("title") or "").lower(), item.get("year") or 0))
+    show_rows = sorted(shows.values(), key=lambda item: ((item.get("title") or "").lower(), item.get("year") or 0))
+    roots = [row for row in _beta_mapped_roots(settings) if row.get("path")]
+
+    data = {
+        "scope": "all",
+        "root": "__all__",
+        "roots": roots,
+        "recursive": recursive,
+        "stats": {
+            "movies": len(movies),
+            "shows": len(show_rows),
+            "episodes": sum(int(row.get("episode_count") or 0) for row in show_rows),
+            "scanned": scanned,
+            "skipped_tsd": skipped_tsd,
+            "limited": False,
+        },
+        "tmdb_configured": bool(_beta_tmdb_config(settings)),
+        "movies": movies,
+        "shows": show_rows,
+    }
+    return _beta_apply_cached_art(data)
+
+
+def _beta_active_job_paths() -> set[str]:
+    active = set()
+    for job in list_jobs_for_api():
+        if str(job.get("status") or "").lower() in {"queued", "running"} and job.get("src"):
+            active.add(str(job.get("src")))
+    return active
+
+
+def _beta_update_scan_index(settings: dict) -> tuple[dict, dict]:
+    now = time.time()
+    index = _beta_load_scan_index()
+    files = index.setdefault("files", {})
+    seen_paths = set()
+    summary = {
+        "scanned": 0,
+        "new": 0,
+        "changed": 0,
+        "removed": 0,
+        "unchanged": 0,
+        "skipped_tsd": 0,
+        "errors": 0,
+    }
+
+    for root in _beta_mapped_roots(settings):
+        root_path = root.get("path") or ""
+        root_kind = root.get("kind") or ""
+        if not root_path or not is_allowed_path(root_path) or not os.path.isdir(root_path):
+            continue
+        for root_dir, _dirs, names in os.walk(root_path):
+            for name in sorted(names):
+                if not name.lower().endswith(VIDEO_EXTS):
+                    continue
+                full = os.path.join(root_dir, name)
+                if not os.path.isfile(full):
+                    continue
+                if os.path.splitext(name)[0].lower().endswith("-tsd"):
+                    summary["skipped_tsd"] += 1
+                    continue
+
+                summary["scanned"] += 1
+                seen_paths.add(full)
+                try:
+                    stat = os.stat(full)
+                    size_bytes = int(stat.st_size)
+                    mtime = float(stat.st_mtime)
+                except Exception:
+                    summary["errors"] += 1
+                    continue
+
+                row = files.get(full) if isinstance(files.get(full), dict) else {}
+                same = (
+                    row
+                    and not row.get("removed")
+                    and int(row.get("size_bytes") or -1) == size_bytes
+                    and abs(float(row.get("mtime") or 0) - mtime) < 0.0001
+                    and isinstance(row.get("item"), dict)
+                )
+                if same:
+                    row["last_seen"] = now
+                    row["stable_passes"] = int(row.get("stable_passes") or 0) + 1
+                    files[full] = row
+                    summary["unchanged"] += 1
+                    continue
+
+                try:
+                    item = _beta_parse_media(full)
+                    if root_kind == "movies":
+                        item["type"] = "movie"
+                        item["target"] = _wizard_source_target("movie")
+                    elif root_kind == "shows":
+                        item["type"] = "show"
+                        item["target"] = _wizard_source_target("show")
+                except Exception:
+                    summary["errors"] += 1
+                    continue
+
+                is_new = not row or row.get("removed")
+                files[full] = {
+                    "path": full,
+                    "size_bytes": size_bytes,
+                    "mtime": mtime,
+                    "root_kind": root_kind,
+                    "item": item,
+                    "first_seen": float(row.get("first_seen") or now),
+                    "last_seen": now,
+                    "changed_at": now,
+                    "stable_passes": 0,
+                    "removed": False,
+                    "queued_at": row.get("queued_at") if isinstance(row, dict) else 0,
+                }
+                summary["new" if is_new else "changed"] += 1
+
+    for path, row in list(files.items()):
+        if path in seen_paths or not isinstance(row, dict) or row.get("removed"):
+            continue
+        row["removed"] = True
+        row["removed_at"] = now
+        files[path] = row
+        summary["removed"] += 1
+
+    _beta_save_scan_index(index)
+    return index, summary
+
+
+def _beta_queue_stable_tracked_episodes(data: dict, index: dict, settings: dict) -> dict:
+    result = {"queued": 0, "skipped_unstable": 0, "skipped_active": 0, "skipped_missing_mapping": 0}
+    if not settings.get("beta_auto_scan_auto_queue_tracked", True):
+        return result
+    now = time.time()
+    tracking = _beta_load_tracking()
+    tracked_rows = tracking.get("shows") if isinstance(tracking.get("shows"), dict) else {}
+    index_files = index.get("files") if isinstance(index.get("files"), dict) else {}
+    active_paths = _beta_active_job_paths()
+    changed_tracking = False
+
+    for show in data.get("shows") or []:
+        if not isinstance(show, dict):
+            continue
+        show_id = _beta_show_tracking_key(show)
+        row = tracked_rows.get(show_id)
+        if not isinstance(row, dict) or not row.get("tracked"):
+            continue
+
+        known = set(_beta_clean_path_list(row.get("known_paths")))
+        to_create = []
+        newly_known = set()
+        for ep in show.get("files") or []:
+            if not isinstance(ep, dict):
+                continue
+            path = str(ep.get("path") or "")
+            if not path or path in known:
+                continue
+            idx_row = index_files.get(path) if isinstance(index_files.get(path), dict) else {}
+            if path in active_paths:
+                newly_known.add(path)
+                result["skipped_active"] += 1
+                continue
+            if not _beta_file_is_stable(idx_row, settings, now):
+                result["skipped_unstable"] += 1
+                continue
+            to_create.append((path, guess_preset_from_filename(os.path.basename(path))))
+            newly_known.add(path)
+
+        if to_create:
+            result["queued"] += int(create_jobs_batch(to_create) or 0)
+            for path, _preset in to_create:
+                if isinstance(index_files.get(path), dict):
+                    index_files[path]["queued_at"] = now
+            changed_tracking = True
+
+        if newly_known:
+            row["known_paths"] = sorted(set(_beta_clean_path_list(row.get("known_paths"))) | newly_known)
+            row["updated_at"] = now
+            tracked_rows[show_id] = row
+            changed_tracking = True
+
+    if changed_tracking:
+        tracking["shows"] = tracked_rows
+        _beta_save_tracking(tracking)
+        _beta_save_scan_index(index)
+    return result
+
+
+def _beta_encoding_is_running() -> bool:
+    try:
+        summary = get_job_summary()
+        counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+        return int(counts.get("running") or 0) > 0
+    except Exception:
+        return False
+
+
+def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = False) -> dict:
+    if not BETA_AUTOSCAN_LOCK.acquire(blocking=False):
+        status = _beta_load_autoscan_status(load_settings())
+        status["running"] = True
+        status["last_status"] = "running"
+        return status
+    settings = load_settings()
+    started = time.time()
+    interval_seconds = max(300, int(settings.get("beta_auto_scan_interval_minutes") or 30) * 60)
+    status = _beta_load_autoscan_status(settings)
+    status.update({
+        "running": True,
+        "last_started_at": started,
+        "last_status": "running",
+        "last_message": "Auto scan running.",
+    })
+    _beta_save_autoscan_status(status)
+    try:
+        if not force and not settings.get("beta_auto_scan_enabled", False):
+            status.update({
+                "running": False,
+                "last_finished_at": time.time(),
+                "last_status": "disabled",
+                "last_message": "Auto scan disabled.",
+                "next_scan_at": time.time() + interval_seconds,
+            })
+            return _beta_save_autoscan_status(status)
+
+        if not force and settings.get("beta_auto_scan_skip_while_encoding", True) and _beta_encoding_is_running():
+            summary = {"skipped": "encoder busy"}
+            message = "Auto scan skipped, encoder busy."
+            log_event("beta_auto_scan_skipped", message, level="info", extra=summary)
+            status.update({
+                "running": False,
+                "last_finished_at": time.time(),
+                "last_status": "skipped",
+                "last_message": message,
+                "last_summary": summary,
+                "next_scan_at": time.time() + interval_seconds,
+            })
+            return _beta_save_autoscan_status(status)
+
+        index, scan_summary = _beta_update_scan_index(settings)
+        data = _beta_library_from_scan_index(index, settings=settings, recursive=True)
+        data = _beta_refresh_predictions(data)
+        tracking = _beta_load_tracking()
+        data = _beta_apply_tracking(data, tracking)
+        queue_summary = _beta_queue_stable_tracked_episodes(data, index, settings)
+        tracking = _beta_load_tracking()
+        data = _beta_apply_tracking(data, tracking)
+        data.setdefault("tracking", {})["auto_queue"] = {
+            "queued_count": queue_summary.get("queued", 0),
+            "skipped_unstable": queue_summary.get("skipped_unstable", 0),
+            "skipped_active": queue_summary.get("skipped_active", 0),
+        }
+        data = _beta_stamp_library_scan(data)
+        _beta_save_library_cache(data)
+
+        summary = {**scan_summary, **{f"queue_{k}": v for k, v in queue_summary.items()}}
+        message = (
+            f"Auto scan complete: {scan_summary['scanned']} scanned, "
+            f"{scan_summary['new'] + scan_summary['changed']} changed, "
+            f"{scan_summary['removed']} removed, {queue_summary.get('queued', 0)} queued."
+        )
+        log_event("beta_auto_scan", message, level="info", extra=summary)
+        status.update({
+            "running": False,
+            "last_finished_at": time.time(),
+            "last_status": "ok",
+            "last_message": message,
+            "last_summary": summary,
+            "next_scan_at": time.time() + interval_seconds,
+        })
+        return _beta_save_autoscan_status(status)
+    except Exception as e:
+        summary = {"error": str(e)[:240]}
+        message = f"Auto scan failed: {str(e)[:180]}"
+        log_event("beta_auto_scan_error", message, level="error", extra=summary)
+        status.update({
+            "running": False,
+            "last_finished_at": time.time(),
+            "last_status": "error",
+            "last_message": message,
+            "last_summary": summary,
+            "next_scan_at": time.time() + interval_seconds,
+        })
+        return _beta_save_autoscan_status(status)
+    finally:
+        BETA_AUTOSCAN_LOCK.release()
+
+
+def _beta_autoscan_loop() -> None:
+    while not BETA_AUTOSCAN_STOP.is_set():
+        settings = load_settings()
+        interval_seconds = max(300, int(settings.get("beta_auto_scan_interval_minutes") or 30) * 60)
+        status = _beta_load_autoscan_status(settings)
+        next_scan_at = float(status.get("next_scan_at") or 0)
+        now = time.time()
+
+        if settings.get("beta_auto_scan_enabled", False) and now >= next_scan_at:
+            _beta_run_incremental_auto_scan(reason="timer", force=False)
+            continue
+
+        wait_seconds = 30
+        if settings.get("beta_auto_scan_enabled", False) and next_scan_at > now:
+            wait_seconds = max(5, min(30, int(next_scan_at - now)))
+        if BETA_AUTOSCAN_RUN_NOW.wait(timeout=wait_seconds):
+            BETA_AUTOSCAN_RUN_NOW.clear()
+            _beta_run_incremental_auto_scan(reason="manual", force=True)
+
+
+def _start_beta_autoscan_thread() -> None:
+    global BETA_AUTOSCAN_THREAD
+    if os.environ.get("FLASK_DEBUG") == "1" and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return
+    if BETA_AUTOSCAN_THREAD and BETA_AUTOSCAN_THREAD.is_alive():
+        return
+    BETA_AUTOSCAN_THREAD = threading.Thread(target=_beta_autoscan_loop, name="beta-auto-scan", daemon=True)
+    BETA_AUTOSCAN_THREAD.start()
+
+
+def _node_summary_status(summary: dict) -> str:
+    summary = summary if isinstance(summary, dict) else {}
+    counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+    if int(counts.get("running") or 0) > 0:
+        return "running"
+    if int(counts.get("error") or 0) > 0:
+        return "error"
+    return "idle"
+
+
+def _refresh_linked_node(row: dict) -> dict:
+    row = row.copy()
+    try:
+        data = signed_json_request(row, "/api/node/status", method="GET", timeout=5)
+        summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+        row.update({
+            "name": data.get("name") or row.get("name") or "Worker",
+            "last_heartbeat": time.time(),
+            "online": True,
+            "status": _node_summary_status(summary),
+            "summary": summary,
+            "last_error": "",
+        })
+    except Exception as e:
+        row.update({
+            "online": False,
+            "status": "offline",
+            "last_error": str(e)[:180],
+        })
+    save_node(row)
+    return row
+
+
+def _node_heartbeat_loop() -> None:
+    while not NODE_HEARTBEAT_STOP.is_set():
+        for row in list_nodes_private():
+            _refresh_linked_node(row)
+        NODE_HEARTBEAT_STOP.wait(timeout=60)
+
+
+def _start_node_heartbeat_thread() -> None:
+    global NODE_HEARTBEAT_THREAD
+    if os.environ.get("FLASK_DEBUG") == "1" and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return
+    if NODE_HEARTBEAT_THREAD and NODE_HEARTBEAT_THREAD.is_alive():
+        return
+    NODE_HEARTBEAT_THREAD = threading.Thread(target=_node_heartbeat_loop, name="node-heartbeat", daemon=True)
+    NODE_HEARTBEAT_THREAD.start()
+
+
+def _authenticated_controller():
+    node_id = request.headers.get("X-Node-Id") or ""
+    timestamp = request.headers.get("X-Node-Timestamp") or ""
+    signature = request.headers.get("X-Node-Signature") or ""
+    controller = trusted_controller(node_id)
+    if not controller:
+        return None
+
+    allowed_ips = controller.get("allowed_ips") if isinstance(controller.get("allowed_ips"), list) else []
+    remote_addr = request.headers.get("X-Forwarded-For", request.remote_addr or "").split(",")[0].strip()
+    if allowed_ips and remote_addr not in allowed_ips:
+        return None
+
+    body_bytes = request.get_data(cache=True) or b""
+    if not verify_hmac(
+        request.method,
+        request.path,
+        body_bytes,
+        node_id=node_id,
+        token=str(controller.get("token") or ""),
+        timestamp=timestamp,
+        signature=signature,
+    ):
+        return None
+    update_trusted_controller(node_id, {"last_seen": time.time()})
+    return controller
+
+
+def _queue_local_paths(raw_paths, preset: str) -> tuple[int, list[dict]]:
+    if isinstance(raw_paths, str):
+        raw_paths = [raw_paths]
+    if not isinstance(raw_paths, list):
+        raw_paths = []
+    preset = str(preset or "auto").strip().lower()
+    if preset not in {"auto", "1080", "4k"}:
+        preset = "auto"
+
+    seen = set()
+    to_create = []
+    skipped = []
+    for raw in raw_paths:
+        src = str(raw or "").strip()
+        if not src or src in seen:
+            continue
+        seen.add(src)
+        reason = ""
+        if not os.path.isfile(src):
+            reason = "not a file"
+        elif not is_allowed_path(src):
+            reason = "path not allowed"
+        elif not src.lower().endswith(VIDEO_EXTS):
+            reason = "not a video"
+        elif os.path.splitext(os.path.basename(src))[0].lower().endswith("-tsd"):
+            reason = "already tagged -TSD"
+        if reason:
+            skipped.append({"path": src, "reason": reason})
+            continue
+        effective = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
+        to_create.append((src, effective))
+    return int(create_jobs_batch(to_create) or 0), skipped
+
+
+def _controller_base_url(default_url: str = "") -> str:
+    value = str(default_url or "").strip().rstrip("/")
+    if value:
+        return value
+    try:
+        return request.host_url.rstrip("/")
+    except Exception:
+        return ""
+
+
+def _transfer_output_path_for_src(src: str) -> str:
+    suffix = (os.environ.get("SUFFIX") or "TSD").strip() or "TSD"
+    folder = os.path.dirname(src)
+    name, ext = os.path.splitext(os.path.basename(src))
+    return os.path.join(folder, f"{name}-{suffix}{ext}")
+
+
+def _authorize_transfer_request(transfer_id: str, kind: str) -> tuple[dict | None, str | None]:
+    row = get_transfer(transfer_id)
+    if not row:
+        return None, "transfer not found"
+    worker_id = request.headers.get("X-Worker-Node-Id") or request.headers.get("X-Node-Id") or ""
+    if str(row.get("worker_node_id") or "") != str(worker_id or ""):
+        return None, "unauthorized worker"
+    token = request.headers.get("X-Transfer-Token") or ""
+    if not transfer_token_matches(row, kind, token, require_unused=True):
+        return None, "invalid or expired transfer token"
+    return row, None
+
+
+def _stream_upload_to_file(path: str) -> int:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    total = 0
+    with open(path, "wb") as f:
+        while True:
+            chunk = request.stream.read(1024 * 1024)
+            if not chunk:
+                break
+            total += len(chunk)
+            f.write(chunk)
+    return total
+
+
+def _finalize_transfer_output(row: dict, upload_tmp: str) -> dict:
+    transfer_id = str(row.get("id") or "")
+    src = str(row.get("src") or "")
+    if not src or not is_allowed_path(src) or not os.path.isfile(src):
+        raise RuntimeError("original source is missing or not allowed")
+    if os.path.splitext(os.path.basename(src))[0].lower().endswith("-tsd"):
+        raise RuntimeError("refusing to replace an already tagged -TSD source")
+
+    upload_ok, upload_reason = _encoded_output_is_valid(upload_tmp)
+    if not upload_ok:
+        raise RuntimeError(f"uploaded output failed validation: {upload_reason}")
+
+    out_path = _transfer_output_path_for_src(src)
+    if os.path.exists(out_path):
+        raise RuntimeError(f"output already exists: {out_path}")
+
+    final_part = f"{out_path}.transfer-{transfer_id}.part"
+    try:
+        if os.path.exists(final_part):
+            os.remove(final_part)
+        shutil.copy2(upload_tmp, final_part)
+        part_ok, part_reason = _encoded_output_is_valid(final_part)
+        if not part_ok:
+            raise RuntimeError(f"copied output failed validation: {part_reason}")
+        if os.path.exists(out_path):
+            raise RuntimeError(f"output already exists: {out_path}")
+        os.replace(final_part, out_path)
+        final_ok, final_reason = _encoded_output_is_valid(out_path)
+        if not final_ok:
+            raise RuntimeError(f"final output failed validation: {final_reason}")
+    except Exception:
+        try:
+            if os.path.isfile(final_part):
+                os.remove(final_part)
+        except Exception:
+            pass
+        raise
+
+    try:
+        src_bytes = int(row.get("source_size") or os.path.getsize(src))
+    except Exception:
+        src_bytes = 0
+    out_bytes = int(os.path.getsize(out_path))
+    saved_bytes = max(0, src_bytes - out_bytes)
+    worker_job_id = request.headers.get("X-Worker-Job-Id") or ""
+    try:
+        duration_seconds = float(request.headers.get("X-Encode-Duration-Seconds") or 0.0)
+    except Exception:
+        duration_seconds = 0.0
+    record_encode(
+        job_id=f"remote-{worker_job_id or transfer_id}",
+        src=src,
+        out=out_path,
+        preset=str(row.get("preset") or "auto"),
+        src_bytes=src_bytes,
+        out_bytes=out_bytes,
+        duration_seconds=duration_seconds if duration_seconds > 0 else None,
+        is_hdr=bool(_path_looks_hdr(src)),
+    )
+
+    source_deleted = False
+    warning = ""
+    try:
+        if os.path.isfile(src):
+            os.remove(src)
+            source_deleted = True
+    except Exception as e:
+        warning = f"output verified but failed to delete original: {e}"
+        log_event(
+            "node_transfer_cleanup_error",
+            f"Remote transfer output written but original delete failed: {os.path.basename(src)} ({e})",
+            level="warn",
+            src=src,
+            extra={"out_path": out_path, "transfer_id": transfer_id},
+        )
+
+    row.update({
+        "status": "complete",
+        "completed_at": time.time(),
+        "out_path": out_path,
+        "out_bytes": out_bytes,
+        "saved_bytes": saved_bytes,
+        "source_deleted": source_deleted,
+        "warning": warning,
+    })
+    save_transfer(row)
+    log_event(
+        "node_transfer_finished",
+        f"Remote worker output accepted: {os.path.basename(src)} - saved {round(saved_bytes/(1024**3), 3)} GB",
+        src=src,
+        extra={
+            "out_path": out_path,
+            "transfer_id": transfer_id,
+            "source_deleted": source_deleted,
+        },
+    )
+    return {
+        "out_path": out_path,
+        "out_bytes": out_bytes,
+        "saved_bytes": saved_bytes,
+        "source_deleted": source_deleted,
+        "warning": warning,
+    }
+
+
 def _beta_stamp_library_scan(data: dict) -> dict:
     data = data if isinstance(data, dict) else {}
     data["generated_at"] = time.time()
@@ -2621,6 +3434,29 @@ def register_routes(app):
         """Return the last saved Beta library scan without touching the filesystem tree."""
         return jsonify(_beta_load_library_cache(load_settings()))
 
+    @app.route("/api/beta/auto_scan/status")
+    def beta_auto_scan_status_api():
+        """Return Beta auto-scan settings and the last scan status."""
+        settings = load_settings()
+        status = _beta_load_autoscan_status(settings)
+        return jsonify(
+            settings={
+                "enabled": bool(settings.get("beta_auto_scan_enabled")),
+                "interval_minutes": int(settings.get("beta_auto_scan_interval_minutes") or 30),
+                "skip_while_encoding": bool(settings.get("beta_auto_scan_skip_while_encoding", True)),
+                "auto_queue_tracked": bool(settings.get("beta_auto_scan_auto_queue_tracked", True)),
+                "file_stability_enabled": bool(settings.get("beta_auto_scan_file_stability_enabled", True)),
+                "file_stability_minutes": int(settings.get("beta_auto_scan_file_stability_minutes") or 10),
+            },
+            status=status,
+        )
+
+    @app.route("/api/beta/auto_scan/run", methods=["POST"])
+    def beta_auto_scan_run_api():
+        """Trigger an immediate incremental Beta auto scan."""
+        status = _beta_run_incremental_auto_scan(reason="manual", force=True)
+        return jsonify(ok=True, status=status)
+
     @app.route("/api/beta/tracked_show", methods=["POST"])
     def beta_tracked_show_api():
         """Enable or disable auto-queue tracking for a Beta show group."""
@@ -2808,6 +3644,369 @@ def register_routes(app):
             BETA_POSTER_CACHE.clear()
             _beta_clear_library_cache()
         return jsonify(settings=new_settings, tmdb_changed=tmdb_changed)
+
+    # ------------- Multi-node linking -------------
+
+    @app.route("/api/node/local", methods=["GET", "POST"])
+    def node_local_api():
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            return jsonify(local=set_local_node_name(data.get("name") or ""))
+        return jsonify(local=local_node_info())
+
+    @app.route("/api/node/pairing_code", methods=["POST"])
+    def node_pairing_code_api():
+        pairing = create_pairing_code()
+        log_event("node_pairing_code", "Generated node pairing code.", level="info")
+        return jsonify(ok=True, pairing=pairing)
+
+    @app.route("/api/node/pair/accept", methods=["POST"])
+    def node_pair_accept_api():
+        data = request.get_json(force=True) or {}
+        try:
+            accepted = accept_pairing(data.get("code") or "", data)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        log_event("node_paired", "Controller paired with this worker.", level="info")
+        return jsonify(ok=True, **accepted)
+
+    @app.route("/api/node/status")
+    def node_status_api():
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        return jsonify(
+            ok=True,
+            id=local_node_info()["id"],
+            name=local_node_info()["name"],
+            summary=get_job_summary(),
+        )
+
+    @app.route("/api/node/transfers/<transfer_id>/source")
+    def node_transfer_source_api(transfer_id):
+        row, err = _authorize_transfer_request(transfer_id, "download")
+        if err or not row:
+            return jsonify(error=err or "unauthorized"), 401
+        src = str(row.get("src") or "")
+        if not src or not is_allowed_path(src) or not os.path.isfile(src):
+            return jsonify(error="source missing or not allowed"), 404
+        row["download_used_at"] = time.time()
+        row["status"] = "downloading"
+        save_transfer(row)
+        return send_file(
+            src,
+            as_attachment=True,
+            download_name=row.get("source_basename") or os.path.basename(src),
+        )
+
+    @app.route("/api/node/transfers/<transfer_id>/output", methods=["POST"])
+    def node_transfer_output_api(transfer_id):
+        row, err = _authorize_transfer_request(transfer_id, "upload")
+        if err or not row:
+            return jsonify(error=err or "unauthorized"), 401
+
+        transfer_dir = os.path.join(NODE_TRANSFER_TMP_DIR, transfer_id)
+        upload_tmp = os.path.join(transfer_dir, "output.upload")
+        upload_part = upload_tmp + ".part"
+        try:
+            row["upload_used_at"] = time.time()
+            row["status"] = "uploading"
+            save_transfer(row)
+            size = _stream_upload_to_file(upload_part)
+            if size <= 0:
+                raise RuntimeError("uploaded output is empty")
+            os.replace(upload_part, upload_tmp)
+            result = _finalize_transfer_output(row, upload_tmp)
+            return jsonify(ok=True, **result)
+        except Exception as e:
+            row["status"] = "error"
+            row["error"] = str(e)[:240]
+            save_transfer(row)
+            log_event(
+                "node_transfer_error",
+                f"Remote transfer output rejected: {str(e)[:160]}",
+                level="error",
+                src=row.get("src"),
+                extra={"transfer_id": transfer_id},
+            )
+            return jsonify(error=str(e)), 400
+        finally:
+            for path in (upload_part, upload_tmp):
+                try:
+                    if os.path.isfile(path):
+                        os.remove(path)
+                except Exception:
+                    pass
+            try:
+                if os.path.isdir(transfer_dir) and not os.listdir(transfer_dir):
+                    os.rmdir(transfer_dir)
+            except Exception:
+                pass
+
+    @app.route("/api/node/jobs", methods=["POST"])
+    def node_receive_jobs_api():
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        data = request.get_json(force=True) or {}
+        jobs_payload = data.get("jobs")
+        if not isinstance(jobs_payload, list):
+            return jsonify(error="missing jobs"), 400
+        paths = []
+        presets = {}
+        remote_jobs = []
+        for job in jobs_payload:
+            if not isinstance(job, dict):
+                continue
+            transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else None
+            if transfer:
+                remote_jobs.append(job)
+                continue
+            src = str(job.get("src") or "").strip()
+            if not src:
+                continue
+            paths.append(src)
+            presets[src] = str(job.get("preset") or "auto").strip().lower()
+
+        seen = []
+        skipped = []
+        to_create = []
+        count = 0
+        for job in remote_jobs:
+            transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else {}
+            src = str(job.get("src") or transfer.get("original_path") or transfer.get("source_basename") or "").strip()
+            preset = str(job.get("preset") or "auto").strip().lower()
+            if preset not in {"auto", "1080", "4k"}:
+                preset = "auto"
+            missing = [
+                key for key in ("source_url", "upload_url", "download_token", "upload_token", "worker_node_id")
+                if not str(transfer.get(key) or "").strip()
+            ]
+            if missing:
+                skipped.append({"path": src, "reason": "missing transfer data"})
+                continue
+            effective = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
+            _job_id, created = create_remote_transfer_job(src, effective, transfer)
+            count += 1 if created else 0
+
+        for src in paths:
+            if src in seen:
+                continue
+            seen.append(src)
+            reason = ""
+            if not os.path.isfile(src):
+                reason = "not a file"
+            elif not is_allowed_path(src):
+                reason = "path not allowed"
+            elif not src.lower().endswith(VIDEO_EXTS):
+                reason = "not a video"
+            elif os.path.splitext(os.path.basename(src))[0].lower().endswith("-tsd"):
+                reason = "already tagged -TSD"
+            if reason:
+                skipped.append({"path": src, "reason": reason})
+                continue
+            preset = presets.get(src) or "auto"
+            if preset not in {"auto", "1080", "4k"}:
+                preset = "auto"
+            effective = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
+            to_create.append((src, effective))
+
+        count += create_jobs_batch(to_create)
+        log_event("node_jobs_received", f"Received {count} node job(s).", level="info")
+        return jsonify(ok=True, count=count, skipped=skipped, summary=get_job_summary())
+
+    @app.route("/api/node/rotate_secret", methods=["POST"])
+    def node_rotate_secret_api():
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        data = request.get_json(force=True) or {}
+        new_token = str(data.get("token") or "").strip()
+        if len(new_token) < 24:
+            return jsonify(error="invalid token"), 400
+        update_trusted_controller(controller["id"], {"token": new_token})
+        log_event("node_secret_rotated", "Controller node secret rotated.", level="info")
+        return jsonify(ok=True)
+
+    @app.route("/api/node/unlink", methods=["POST"])
+    def node_unlink_controller_api():
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        delete_trusted_controller(controller["id"])
+        log_event("node_unlinked", "Controller unlinked from this worker.", level="warn")
+        return jsonify(ok=True)
+
+    @app.route("/api/nodes")
+    def nodes_api():
+        return jsonify(local=local_node_info(), nodes=list_nodes_public())
+
+    @app.route("/api/nodes/pair", methods=["POST"])
+    def nodes_pair_api():
+        data = request.get_json(force=True) or {}
+        try:
+            node = pair_worker(
+                data.get("url") or "",
+                data.get("code") or "",
+                name=data.get("name") or "",
+                path_mappings=data.get("path_mappings") or [],
+                transfer_mode=data.get("transfer_mode") or "local",
+                controller_url=data.get("controller_url") or "",
+            )
+        except Exception as e:
+            return jsonify(error=str(e)), 400
+        log_event("node_paired", f"Paired worker node: {node.get('name') or node.get('url')}", level="info")
+        return jsonify(ok=True, node=node)
+
+    @app.route("/api/nodes/<node_id>/refresh", methods=["POST"])
+    def nodes_refresh_api(node_id):
+        row = get_node_private(node_id)
+        if not row:
+            return jsonify(error="node not found"), 404
+        row = _refresh_linked_node(row)
+        return jsonify(ok=True, node=public_node(row))
+
+    @app.route("/api/nodes/refresh", methods=["POST"])
+    def nodes_refresh_all_api():
+        nodes = [public_node(_refresh_linked_node(row)) for row in list_nodes_private()]
+        return jsonify(ok=True, nodes=nodes)
+
+    @app.route("/api/nodes/<node_id>/path_mappings", methods=["POST"])
+    def nodes_path_mappings_api(node_id):
+        row = get_node_private(node_id)
+        if not row:
+            return jsonify(error="node not found"), 404
+        data = request.get_json(force=True) or {}
+        row["path_mappings"] = normalize_path_mappings(data.get("path_mappings") or [])
+        row["transfer_mode"] = normalize_transfer_mode(data.get("transfer_mode") or row.get("transfer_mode") or "local")
+        row["controller_url"] = str(data.get("controller_url") or row.get("controller_url") or "").strip().rstrip("/")
+        save_node(row)
+        return jsonify(ok=True, node=public_node(row))
+
+    @app.route("/api/nodes/<node_id>/rotate_secret", methods=["POST"])
+    def nodes_rotate_secret_api(node_id):
+        row = get_node_private(node_id)
+        if not row:
+            return jsonify(error="node not found"), 404
+        new_token = secrets.token_urlsafe(32)
+        try:
+            signed_json_request(row, "/api/node/rotate_secret", method="POST", body={"token": new_token}, timeout=8)
+        except Exception as e:
+            return jsonify(error=str(e)), 400
+        row["token"] = new_token
+        save_node(row)
+        log_event("node_secret_rotated", f"Rotated secret for worker node: {row.get('name') or node_id}", level="info")
+        return jsonify(ok=True, node=public_node(row))
+
+    @app.route("/api/nodes/<node_id>/unlink", methods=["POST"])
+    def nodes_unlink_api(node_id):
+        row = get_node_private(node_id)
+        if not row:
+            return jsonify(error="node not found"), 404
+        try:
+            signed_json_request(row, "/api/node/unlink", method="POST", body={}, timeout=5)
+        except Exception:
+            pass
+        delete_node(node_id)
+        log_event("node_unlinked", f"Unlinked worker node: {row.get('name') or node_id}", level="warn")
+        return jsonify(ok=True)
+
+    @app.route("/api/nodes/dispatch", methods=["POST"])
+    def nodes_dispatch_api():
+        data = request.get_json(force=True) or {}
+        mode = str(data.get("mode") or "local").strip().lower()
+        preset = str(data.get("preset") or "auto").strip().lower()
+        paths = data.get("paths")
+        if isinstance(paths, str):
+            paths = [paths]
+        if not isinstance(paths, list) or not paths:
+            return jsonify(error="missing paths"), 400
+
+        if mode == "local":
+            count, skipped = _queue_local_paths(paths, preset)
+            return jsonify(ok=True, target="local", count=count, skipped=skipped)
+
+        selected = None
+        if mode == "node":
+            selected = get_node_private(data.get("node_id") or "")
+        elif mode == "best":
+            candidates = [_refresh_linked_node(row) for row in list_nodes_private()]
+            online = [row for row in candidates if public_node(row).get("online")]
+            idle = [row for row in online if public_node(row).get("status") == "idle"]
+            selected = (idle or online or [None])[0]
+        else:
+            return jsonify(error="invalid dispatch mode"), 400
+
+        if not selected:
+            return jsonify(error="no worker node available"), 400
+
+        selected_mode = normalize_transfer_mode(selected.get("transfer_mode") or "local")
+        controller_url = _controller_base_url(selected.get("controller_url") or data.get("controller_url") or "")
+        jobs_payload = []
+        skipped = []
+        for raw in paths:
+            src = str(raw or "").strip()
+            if not src:
+                continue
+            if not is_allowed_path(src):
+                skipped.append({"path": src, "reason": "path not allowed"})
+                continue
+            if not os.path.isfile(src):
+                skipped.append({"path": src, "reason": "not a file"})
+                continue
+            if not src.lower().endswith(VIDEO_EXTS):
+                skipped.append({"path": src, "reason": "not a video"})
+                continue
+            if os.path.splitext(os.path.basename(src))[0].lower().endswith("-tsd"):
+                skipped.append({"path": src, "reason": "already tagged -TSD"})
+                continue
+
+            if selected_mode == "remote":
+                try:
+                    source_size = int(os.path.getsize(src))
+                    grant = create_transfer_grant(src, selected.get("id") or "", source_size=source_size)
+                    transfer_row = get_transfer(grant["id"]) or {}
+                    transfer_row["preset"] = preset
+                    transfer_row["controller_url"] = controller_url
+                    save_transfer(transfer_row)
+                    transfer_payload = {
+                        "id": grant["id"],
+                        "controller_url": controller_url,
+                        "source_url": f"{controller_url}/api/node/transfers/{grant['id']}/source",
+                        "upload_url": f"{controller_url}/api/node/transfers/{grant['id']}/output",
+                        "download_token": grant["download_token"],
+                        "upload_token": grant["upload_token"],
+                        "worker_node_id": selected.get("id") or "",
+                        "original_path": src,
+                        "source_basename": grant.get("source_basename") or os.path.basename(src),
+                        "source_size": source_size,
+                    }
+                    jobs_payload.append({"src": src, "preset": preset, "transfer": transfer_payload})
+                except Exception as e:
+                    skipped.append({"path": src, "reason": f"transfer setup failed: {str(e)[:120]}"})
+                continue
+
+            worker_path = translate_path(src, selected.get("path_mappings") or [])
+            if not worker_path:
+                skipped.append({"path": src, "reason": "no path mapping for worker"})
+                continue
+            jobs_payload.append({"src": worker_path, "preset": preset})
+
+        if not jobs_payload:
+            return jsonify(error="no worker-queueable files", skipped=skipped), 400
+
+        try:
+            result = signed_json_request(
+                selected,
+                "/api/node/jobs",
+                method="POST",
+                body={"jobs": jobs_payload},
+                timeout=15,
+            )
+        except Exception as e:
+            return jsonify(error=str(e), skipped=skipped), 400
+        _refresh_linked_node(selected)
+        return jsonify(ok=True, target=public_node(selected), count=result.get("count", 0), skipped=skipped + (result.get("skipped") or []), transfer_mode=selected_mode)
 
     # ------------- CPU profiles (JSON API) -------------
 
@@ -3724,3 +4923,6 @@ def register_routes(app):
                     break
 
         return jsonify(matches=matches, limit=SEARCH_LIMIT)
+
+    _start_beta_autoscan_thread()
+    _start_node_heartbeat_thread()

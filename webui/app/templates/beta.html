@@ -511,6 +511,17 @@
             <option value="4k">4K</option>
           </select>
         </label>
+        <label class="beta-toggle" for="dispatchModeSelect">
+          Target
+          <select id="dispatchModeSelect">
+            <option value="local" selected>Local queue</option>
+            <option value="best">Best worker</option>
+            <option value="node">Selected worker</option>
+          </select>
+        </label>
+        <select id="dispatchNodeSelect" disabled>
+          <option value="">No workers paired</option>
+        </select>
         <button id="queueSelectedBtn" type="button" disabled>Queue selected</button>
         <button id="clearSelectedBtn" type="button">Clear selection</button>
         <span id="selectedCount" class="small">0 selected</span>
@@ -554,6 +565,7 @@
     const expandedShows = new Set();
     const expandedSeasons = new Set();
     const trackingBusy = new Set();
+    let linkedNodes = [];
 
     function el(id) {
       return document.getElementById(id);
@@ -769,6 +781,42 @@
       el("queueSelectedBtn").disabled = count === 0;
     }
 
+    function updateDispatchControls() {
+      const modeSelect = el("dispatchModeSelect");
+      const nodeSelect = el("dispatchNodeSelect");
+      if (!modeSelect || !nodeSelect) return;
+      const mode = modeSelect.value || "local";
+      nodeSelect.innerHTML = "";
+      if (!linkedNodes.length) {
+        const opt = document.createElement("option");
+        opt.value = "";
+        opt.textContent = "No workers paired";
+        nodeSelect.appendChild(opt);
+      } else {
+        linkedNodes.forEach((node) => {
+          const opt = document.createElement("option");
+          opt.value = node.id || "";
+          const mode = node.transfer_mode === "remote" ? "remote transfer" : "local mount";
+          opt.textContent = `${node.name || "Worker"} (${node.online ? node.status || "online" : "offline"}, ${mode})`;
+          nodeSelect.appendChild(opt);
+        });
+      }
+      nodeSelect.disabled = mode !== "node" || linkedNodes.length === 0;
+    }
+
+    async function loadLinkedNodesForDispatch() {
+      try {
+        const res = await fetch("/api/nodes");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to load nodes");
+        linkedNodes = Array.isArray(data.nodes) ? data.nodes : [];
+        updateDispatchControls();
+      } catch (err) {
+        linkedNodes = [];
+        updateDispatchControls();
+      }
+    }
+
     function predictionText(prediction) {
       if (!prediction || !prediction.available) return "Prediction: learning from job history";
       const parts = [
@@ -941,19 +989,22 @@
         return;
       }
       const preset = el("queuePresetSelect").value || "auto";
+      const mode = el("dispatchModeSelect")?.value || "local";
+      const nodeId = el("dispatchNodeSelect")?.value || "";
       el("betaStatus").textContent = `Queuing ${label}...`;
       el("queueSelectedBtn").disabled = true;
       try {
-        const res = await fetch("/api/beta/queue", {
+        const res = await fetch("/api/nodes/dispatch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paths: cleanPaths, preset })
+          body: JSON.stringify({ paths: cleanPaths, preset, mode, node_id: nodeId })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Queue failed");
         const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
-        el("betaStatus").textContent = `Queued ${data.count || 0} file${data.count === 1 ? "" : "s"}${skipped ? `, skipped ${skipped}` : ""}.`;
-        if (window.appToast) appToast(`Queued ${data.count || 0} file${data.count === 1 ? "" : "s"}.`, "success");
+        const target = typeof data.target === "string" ? data.target : (data.target?.name || "worker");
+        el("betaStatus").textContent = `Queued ${data.count || 0} file${data.count === 1 ? "" : "s"} to ${target}${skipped ? `, skipped ${skipped}` : ""}.`;
+        if (window.appToast) appToast(`Queued ${data.count || 0} file${data.count === 1 ? "" : "s"} to ${target}.`, "success");
         cleanPaths.forEach((path) => selectedPaths.delete(path));
         updateSelectionUi();
         renderLibrary();
@@ -1421,7 +1472,9 @@
       el("sortSelect").addEventListener("change", renderLibrary);
       el("queueSelectedBtn").addEventListener("click", queueSelected);
       el("clearSelectedBtn").addEventListener("click", clearSelection);
+      el("dispatchModeSelect").addEventListener("change", updateDispatchControls);
       el("posterToggle").checked = true;
+      loadLinkedNodesForDispatch();
       updateSelectionUi();
       if (roots.length) {
         loadCachedLibrary();

@@ -337,6 +337,58 @@
     </div>
   </div>
 
+  <div class="section-card">
+    <h2>Beta Auto Scan</h2>
+    <p class="small">
+      Incremental scans only re-parse new or changed media and can auto-queue stable new tracked episodes.
+    </p>
+
+    <div class="row">
+      <label class="beta-toggle">
+        <input id="betaAutoScanEnabled" type="checkbox">
+        Enable auto scan
+      </label>
+    </div>
+
+    <div class="row inline-input-group">
+      <label for="betaAutoScanIntervalInput"><strong>Scan interval</strong></label>
+      <input id="betaAutoScanIntervalInput" type="number" min="5" max="1440" step="5" style="width:120px;">
+      <span class="small">minutes</span>
+    </div>
+
+    <div class="row">
+      <label class="beta-toggle">
+        <input id="betaAutoScanSkipWhileEncoding" type="checkbox">
+        Skip while encoding
+      </label>
+    </div>
+
+    <div class="row">
+      <label class="beta-toggle">
+        <input id="betaAutoQueueTracked" type="checkbox">
+        Auto-queue tracked show episodes
+      </label>
+    </div>
+
+    <div class="row inline-input-group">
+      <label class="beta-toggle">
+        <input id="betaFileStabilityEnabled" type="checkbox">
+        File stability check
+      </label>
+      <input id="betaFileStabilityMinutes" type="number" min="1" max="240" step="1" style="width:100px;">
+      <span class="small">minutes unchanged</span>
+    </div>
+
+    <div class="row button-row">
+      <button id="saveAutoScanSettingsBtn" type="button">Save auto-scan settings</button>
+      <button id="runAutoScanNowBtn" type="button">Run auto scan now</button>
+      <button id="refreshAutoScanStatusBtn" type="button" class="ghost-btn">Refresh status</button>
+      <span id="autoScanSaveStatus" class="small"></span>
+    </div>
+
+    <div id="autoScanStatusBox" class="node-status-box small">Loading auto-scan status...</div>
+  </div>
+
   <!-- ============================================================
        Poster metadata
        ------------------------------------------------------------ -->
@@ -391,6 +443,66 @@
       <button id="saveUiSettingsBtn">Save UI settings</button>
       <span id="uiSettingsSaveStatus" class="small"></span>
     </div>
+  </div>
+
+  <div class="section-card settings-wide">
+    <h2>Linked Nodes</h2>
+    <p class="small">
+      Pair worker nodes, map controller paths to worker paths, and dispatch jobs to local or remote queues.
+    </p>
+
+    <div class="row inline-input-group">
+      <label for="localNodeNameInput"><strong>Local node name</strong></label>
+      <input id="localNodeNameInput" type="text" placeholder="Media Server">
+      <button id="saveLocalNodeNameBtn" type="button">Save name</button>
+    </div>
+
+    <div class="node-link-grid">
+      <div class="node-link-panel">
+        <h3>Worker pairing code</h3>
+        <div class="row button-row">
+          <button id="generatePairingCodeBtn" type="button">Generate pairing code</button>
+          <span id="pairingCodeStatus" class="small"></span>
+        </div>
+        <div id="pairingCodeBox" class="pairing-code-box">No active code</div>
+      </div>
+
+      <div class="node-link-panel">
+        <h3>Pair a worker</h3>
+        <div class="row">
+          <input id="pairWorkerUrlInput" type="text" placeholder="http://worker-ip:8081" style="width:100%;">
+        </div>
+        <div class="row">
+          <input id="pairWorkerCodeInput" type="text" placeholder="Pairing code" style="width:100%;">
+        </div>
+        <div class="row">
+          <input id="pairWorkerNameInput" type="text" placeholder="Friendly name" style="width:100%;">
+        </div>
+        <div class="row">
+          <select id="pairWorkerTransferModeSelect" style="width:100%;">
+            <option value="local" selected>Local mounted media mode</option>
+            <option value="remote">Remote transfer mode</option>
+          </select>
+        </div>
+        <div class="row">
+          <input id="pairWorkerControllerUrlInput" type="text" placeholder="Controller URL for remote transfer, optional" style="width:100%;">
+        </div>
+        <div class="row">
+          <textarea id="pairWorkerMappingsInput" rows="3" placeholder="/media/Shows => /mnt/media/Shows&#10;/media/Movies => /storage/Movies" style="width:100%;"></textarea>
+        </div>
+        <div class="row button-row">
+          <button id="pairWorkerBtn" type="button">Pair worker</button>
+          <span id="pairWorkerStatus" class="small"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="row button-row" style="margin-top:14px;">
+      <button id="refreshNodesBtn" type="button">Refresh linked nodes</button>
+      <span id="nodesStatus" class="small"></span>
+    </div>
+
+    <div id="linkedNodesList" class="linked-nodes-list"></div>
   </div>
 
   </div>
@@ -1042,6 +1154,45 @@
       };
     }
 
+    function coerceSettingBool(name, fallback = false) {
+      const value = initialSettings?.[name];
+      if (value === undefined || value === null) return fallback;
+      return Boolean(value);
+    }
+
+    function safeNumber(value, fallback, min, max) {
+      const parsed = parseInt(value, 10);
+      const n = Number.isFinite(parsed) ? parsed : fallback;
+      return Math.max(min, Math.min(max, n));
+    }
+
+    function initAutoScanSettings() {
+      const enabled = document.getElementById("betaAutoScanEnabled");
+      const interval = document.getElementById("betaAutoScanIntervalInput");
+      const skip = document.getElementById("betaAutoScanSkipWhileEncoding");
+      const autoQueue = document.getElementById("betaAutoQueueTracked");
+      const stabilityEnabled = document.getElementById("betaFileStabilityEnabled");
+      const stabilityMinutes = document.getElementById("betaFileStabilityMinutes");
+
+      if (enabled) enabled.checked = coerceSettingBool("beta_auto_scan_enabled", false);
+      if (interval) interval.value = safeNumber(initialSettings?.beta_auto_scan_interval_minutes, 30, 5, 1440);
+      if (skip) skip.checked = coerceSettingBool("beta_auto_scan_skip_while_encoding", true);
+      if (autoQueue) autoQueue.checked = coerceSettingBool("beta_auto_scan_auto_queue_tracked", true);
+      if (stabilityEnabled) stabilityEnabled.checked = coerceSettingBool("beta_auto_scan_file_stability_enabled", true);
+      if (stabilityMinutes) stabilityMinutes.value = safeNumber(initialSettings?.beta_auto_scan_file_stability_minutes, 10, 1, 240);
+    }
+
+    function getAutoScanSettingsForSave() {
+      return {
+        beta_auto_scan_enabled: Boolean(document.getElementById("betaAutoScanEnabled")?.checked),
+        beta_auto_scan_interval_minutes: safeNumber(document.getElementById("betaAutoScanIntervalInput")?.value, 30, 5, 1440),
+        beta_auto_scan_skip_while_encoding: Boolean(document.getElementById("betaAutoScanSkipWhileEncoding")?.checked),
+        beta_auto_scan_auto_queue_tracked: Boolean(document.getElementById("betaAutoQueueTracked")?.checked),
+        beta_auto_scan_file_stability_enabled: Boolean(document.getElementById("betaFileStabilityEnabled")?.checked),
+        beta_auto_scan_file_stability_minutes: safeNumber(document.getElementById("betaFileStabilityMinutes")?.value, 10, 1, 240)
+      };
+    }
+
     // -------------------------------
     // Init encoding settings
     // -------------------------------
@@ -1122,7 +1273,8 @@
             queue_ui_mode: queueUiMode,
             tmdb_api_key: tmdbApiKey,
             tmdb_bearer_token: tmdbBearerToken,
-            beta_media_folders: getBetaMediaFoldersForSave()
+            beta_media_folders: getBetaMediaFoldersForSave(),
+            ...getAutoScanSettingsForSave()
           })
         });
 
@@ -1494,13 +1646,438 @@
     }
 
     // -------------------------------
+    // Beta auto scan status
+    // -------------------------------
+    function fmtNodeTime(ts) {
+      const n = Number(ts || 0);
+      if (!Number.isFinite(n) || n <= 0) return "Never";
+      const d = new Date(n * 1000);
+      return Number.isNaN(d.getTime()) ? "Never" : d.toLocaleString();
+    }
+
+    function summaryText(summary) {
+      const data = summary && typeof summary === "object" ? summary : {};
+      const entries = Object.entries(data);
+      if (!entries.length) return "No summary yet";
+      return entries
+        .map(([key, value]) => `${key.replace(/_/g, " ")}: ${value}`)
+        .join(" / ");
+    }
+
+    function setAutoScanControls(settings) {
+      if (!settings || typeof settings !== "object") return;
+      const enabled = document.getElementById("betaAutoScanEnabled");
+      const interval = document.getElementById("betaAutoScanIntervalInput");
+      const skip = document.getElementById("betaAutoScanSkipWhileEncoding");
+      const autoQueue = document.getElementById("betaAutoQueueTracked");
+      const stabilityEnabled = document.getElementById("betaFileStabilityEnabled");
+      const stabilityMinutes = document.getElementById("betaFileStabilityMinutes");
+      if (enabled) enabled.checked = Boolean(settings.enabled);
+      if (interval) interval.value = safeNumber(settings.interval_minutes, 30, 5, 1440);
+      if (skip) skip.checked = Boolean(settings.skip_while_encoding);
+      if (autoQueue) autoQueue.checked = Boolean(settings.auto_queue_tracked);
+      if (stabilityEnabled) stabilityEnabled.checked = Boolean(settings.file_stability_enabled);
+      if (stabilityMinutes) stabilityMinutes.value = safeNumber(settings.file_stability_minutes, 10, 1, 240);
+    }
+
+    function renderAutoScanStatus(data) {
+      const box = document.getElementById("autoScanStatusBox");
+      if (!box) return;
+      const settings = data?.settings || {};
+      const status = data?.status || {};
+      const state = status.running ? "running" : (status.last_status || "idle");
+      box.innerHTML = "";
+
+      const head = document.createElement("div");
+      head.className = "node-status-head";
+      const title = document.createElement("strong");
+      title.textContent = status.running ? "Auto scan running" : `Auto scan ${String(state).replace(/_/g, " ")}`;
+      const pill = document.createElement("span");
+      pill.className = `node-pill node-pill-${String(state).toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
+      pill.textContent = settings.enabled ? "Enabled" : "Disabled";
+      head.appendChild(title);
+      head.appendChild(pill);
+      box.appendChild(head);
+
+      const msg = document.createElement("div");
+      msg.className = "node-message";
+      msg.textContent = status.last_message || "No auto scan has run yet.";
+      box.appendChild(msg);
+
+      const grid = document.createElement("div");
+      grid.className = "node-summary-grid";
+      [
+        ["Last started", fmtNodeTime(status.last_started_at)],
+        ["Last finished", fmtNodeTime(status.last_finished_at)],
+        ["Next scan", settings.enabled ? fmtNodeTime(status.next_scan_at) : "Disabled"],
+        ["Interval", `${settings.interval_minutes || 30} min`],
+        ["Skip busy", settings.skip_while_encoding ? "Yes" : "No"],
+        ["Stable check", settings.file_stability_enabled ? `${settings.file_stability_minutes || 10} min` : "Off"]
+      ].forEach(([label, value]) => {
+        const item = document.createElement("div");
+        const small = document.createElement("span");
+        small.textContent = label;
+        const strong = document.createElement("strong");
+        strong.textContent = value;
+        item.appendChild(small);
+        item.appendChild(strong);
+        grid.appendChild(item);
+      });
+      box.appendChild(grid);
+
+      const summary = document.createElement("div");
+      summary.className = "node-message";
+      summary.textContent = summaryText(status.last_summary);
+      box.appendChild(summary);
+    }
+
+    async function loadAutoScanStatus(syncControls = true) {
+      const box = document.getElementById("autoScanStatusBox");
+      try {
+        if (box) box.textContent = "Loading auto-scan status...";
+        const res = await fetch("/api/beta/auto_scan/status");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to load auto-scan status");
+        if (syncControls) setAutoScanControls(data.settings);
+        renderAutoScanStatus(data);
+      } catch (err) {
+        console.error(err);
+        if (box) box.textContent = err.message || "Failed to load auto-scan status.";
+      }
+    }
+
+    async function runAutoScanNow() {
+      const button = document.getElementById("runAutoScanNowBtn");
+      const box = document.getElementById("autoScanStatusBox");
+      try {
+        if (button) button.disabled = true;
+        if (box) box.textContent = "Running incremental auto scan...";
+        const res = await fetch("/api/beta/auto_scan/run", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Auto scan failed");
+        await loadAutoScanStatus(true);
+        await loadEvents();
+        if (window.appToast) appToast("Auto scan completed.", "success");
+      } catch (err) {
+        console.error(err);
+        if (box) box.textContent = err.message || "Auto scan failed.";
+        if (window.appToast) appToast(err.message || "Auto scan failed.", "error");
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    async function saveAutoScanSettings() {
+      const ok = await saveSettings("autoScanSaveStatus");
+      if (ok) await loadAutoScanStatus(true);
+    }
+
+    // -------------------------------
+    // Multi-node linking
+    // -------------------------------
+    function parsePathMappingsText(text) {
+      return String(text || "")
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(Boolean)
+        .map(line => {
+          const parts = line.includes("=>") ? line.split("=>") : line.split("=");
+          return {
+            controller: String(parts[0] || "").trim(),
+            worker: String(parts.slice(1).join("=").trim() || "").trim()
+          };
+        })
+        .filter(row => row.controller && row.worker);
+    }
+
+    function pathMappingsToText(rows) {
+      if (!Array.isArray(rows)) return "";
+      return rows
+        .map(row => `${row.controller || ""} => ${row.worker || ""}`)
+        .filter(line => line.replace(/\s|=>/g, ""))
+        .join("\n");
+    }
+
+    function jobSummaryText(summary) {
+      const counts = summary?.counts || {};
+      return [
+        `queued ${counts.queued || 0}`,
+        `running ${counts.running || 0}`,
+        `done ${counts.done || 0}`,
+        `errors ${counts.error || 0}`
+      ].join(" / ");
+    }
+
+    function setNodeStatus(text, isError = false) {
+      const status = document.getElementById("nodesStatus");
+      if (!status) return;
+      status.textContent = text || "";
+      status.style.color = isError ? "#ffb4b4" : "";
+    }
+
+    function renderLinkedNodes(data) {
+      const local = data?.local || {};
+      const nameInput = document.getElementById("localNodeNameInput");
+      if (nameInput && local.name) nameInput.value = local.name;
+
+      const list = document.getElementById("linkedNodesList");
+      if (!list) return;
+      const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
+      list.innerHTML = "";
+      if (!nodes.length) {
+        const empty = document.createElement("div");
+        empty.className = "node-empty";
+        empty.textContent = "No worker nodes paired yet.";
+        list.appendChild(empty);
+        return;
+      }
+
+      nodes.forEach(node => {
+        const row = document.createElement("article");
+        row.className = `linked-node-row ${node.online ? "node-online" : "node-offline"}`;
+
+        const main = document.createElement("div");
+        main.className = "linked-node-main";
+
+        const header = document.createElement("div");
+        header.className = "node-status-head";
+        const title = document.createElement("strong");
+        title.textContent = node.name || "Worker";
+        const pill = document.createElement("span");
+        pill.className = `node-pill node-pill-${node.online ? (node.status || "online") : "offline"}`;
+        pill.textContent = node.online ? (node.status || "online") : "offline";
+        header.appendChild(title);
+        header.appendChild(pill);
+        main.appendChild(header);
+
+        const meta = document.createElement("div");
+        meta.className = "node-message";
+        meta.textContent = `${node.url || ""} / ${jobSummaryText(node.summary)} / last heartbeat ${fmtNodeTime(node.last_heartbeat)}`;
+        main.appendChild(meta);
+
+        if (node.last_error) {
+          const error = document.createElement("div");
+          error.className = "node-error";
+          error.textContent = node.last_error;
+          main.appendChild(error);
+        }
+
+        const modeRow = document.createElement("div");
+        modeRow.className = "node-mode-row";
+        const modeSelect = document.createElement("select");
+        modeSelect.className = "node-transfer-mode-select";
+        [
+          ["local", "Local mounted media mode"],
+          ["remote", "Remote transfer mode"]
+        ].forEach(([value, label]) => {
+          const opt = document.createElement("option");
+          opt.value = value;
+          opt.textContent = label;
+          if ((node.transfer_mode || "local") === value) opt.selected = true;
+          modeSelect.appendChild(opt);
+        });
+        const controllerInput = document.createElement("input");
+        controllerInput.type = "text";
+        controllerInput.className = "node-controller-url-input";
+        controllerInput.placeholder = "Controller URL for remote transfer";
+        controllerInput.value = node.controller_url || "";
+        modeRow.appendChild(modeSelect);
+        modeRow.appendChild(controllerInput);
+        main.appendChild(modeRow);
+
+        const textarea = document.createElement("textarea");
+        textarea.className = "path-map-textarea";
+        textarea.rows = 3;
+        textarea.value = pathMappingsToText(node.path_mappings);
+        textarea.placeholder = "Controller path => Worker path (local mounted media mode)";
+        textarea.dataset.nodeMappings = node.id || "";
+        main.appendChild(textarea);
+
+        const actions = document.createElement("div");
+        actions.className = "node-actions";
+        [
+          ["Refresh", () => refreshNode(node.id)],
+          ["Save settings", () => saveNodeSettings(node.id, textarea.value, modeSelect.value, controllerInput.value)],
+          ["Rotate secret", () => rotateNodeSecret(node.id)],
+          ["Unlink", () => unlinkNode(node.id)]
+        ].forEach(([label, handler]) => {
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.textContent = label;
+          if (label === "Unlink") btn.className = "danger-outline";
+          btn.onclick = handler;
+          actions.appendChild(btn);
+        });
+
+        row.appendChild(main);
+        row.appendChild(actions);
+        list.appendChild(row);
+      });
+    }
+
+    async function loadNodes() {
+      try {
+        setNodeStatus("Loading nodes...");
+        const res = await fetch("/api/nodes");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to load nodes");
+        renderLinkedNodes(data);
+        setNodeStatus("");
+      } catch (err) {
+        console.error(err);
+        setNodeStatus(err.message || "Failed to load nodes", true);
+      }
+    }
+
+    async function saveLocalNodeName() {
+      const input = document.getElementById("localNodeNameInput");
+      try {
+        const res = await fetch("/api/node/local", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: input?.value || "" })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to save node name");
+        if (input) input.value = data.local?.name || input.value;
+        if (window.appToast) appToast("Local node name saved.", "success");
+      } catch (err) {
+        if (window.appToast) appToast(err.message || "Failed to save node name.", "error");
+      }
+    }
+
+    async function generatePairingCode() {
+      const status = document.getElementById("pairingCodeStatus");
+      const box = document.getElementById("pairingCodeBox");
+      try {
+        if (status) status.textContent = "Generating...";
+        const res = await fetch("/api/node/pairing_code", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to generate code");
+        if (box) {
+          box.innerHTML = "";
+          const code = document.createElement("strong");
+          code.textContent = data.pairing?.code || "";
+          const exp = document.createElement("span");
+          exp.textContent = `Expires ${fmtNodeTime(data.pairing?.expires_at)}`;
+          box.appendChild(code);
+          box.appendChild(exp);
+        }
+        if (status) status.textContent = "";
+        if (window.appToast) appToast("Pairing code generated.", "success");
+      } catch (err) {
+        if (status) status.textContent = err.message || "Failed";
+        if (window.appToast) appToast(err.message || "Failed to generate pairing code.", "error");
+      }
+    }
+
+    async function pairWorker() {
+      const status = document.getElementById("pairWorkerStatus");
+      const url = document.getElementById("pairWorkerUrlInput")?.value || "";
+      const code = document.getElementById("pairWorkerCodeInput")?.value || "";
+      const name = document.getElementById("pairWorkerNameInput")?.value || "";
+      const transferMode = document.getElementById("pairWorkerTransferModeSelect")?.value || "local";
+      const controllerUrl = document.getElementById("pairWorkerControllerUrlInput")?.value || "";
+      const mappings = parsePathMappingsText(document.getElementById("pairWorkerMappingsInput")?.value || "");
+      try {
+        if (status) status.textContent = "Pairing...";
+        const res = await fetch("/api/nodes/pair", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url, code, name, transfer_mode: transferMode, controller_url: controllerUrl, path_mappings: mappings })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Pairing failed");
+        if (status) status.textContent = "Paired.";
+        if (window.appToast) appToast("Worker paired.", "success");
+        await loadNodes();
+      } catch (err) {
+        if (status) status.textContent = err.message || "Pairing failed";
+        if (window.appToast) appToast(err.message || "Pairing failed.", "error");
+      }
+    }
+
+    async function refreshNode(nodeId) {
+      try {
+        setNodeStatus("Refreshing node...");
+        const res = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/refresh`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Refresh failed");
+        await loadNodes();
+      } catch (err) {
+        setNodeStatus(err.message || "Refresh failed", true);
+      }
+    }
+
+    async function refreshAllNodes() {
+      try {
+        setNodeStatus("Refreshing linked nodes...");
+        const res = await fetch("/api/nodes/refresh", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Refresh failed");
+        await loadNodes();
+      } catch (err) {
+        setNodeStatus(err.message || "Refresh failed", true);
+      }
+    }
+
+    async function saveNodeSettings(nodeId, text, transferMode, controllerUrl) {
+      try {
+        const res = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/path_mappings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            path_mappings: parsePathMappingsText(text),
+            transfer_mode: transferMode || "local",
+            controller_url: controllerUrl || ""
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to save node settings");
+        if (window.appToast) appToast("Node settings saved.", "success");
+        await loadNodes();
+      } catch (err) {
+        if (window.appToast) appToast(err.message || "Failed to save node settings.", "error");
+      }
+    }
+
+    async function rotateNodeSecret(nodeId) {
+      if (!confirm("Rotate this node secret? The worker must be online.")) return;
+      try {
+        const res = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/rotate_secret`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Rotate failed");
+        if (window.appToast) appToast("Node secret rotated.", "success");
+        await loadNodes();
+      } catch (err) {
+        if (window.appToast) appToast(err.message || "Rotate failed.", "error");
+      }
+    }
+
+    async function unlinkNode(nodeId) {
+      if (!confirm("Unlink this worker node?")) return;
+      try {
+        const res = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/unlink`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Unlink failed");
+        if (window.appToast) appToast("Worker unlinked.", "success");
+        await loadNodes();
+      } catch (err) {
+        if (window.appToast) appToast(err.message || "Unlink failed.", "error");
+      }
+    }
+
+    // -------------------------------
     // DOM ready
     // -------------------------------
     document.addEventListener("DOMContentLoaded", () => {
       initEncodingSettings();
+      initAutoScanSettings();
       loadCpuProfiles();
       renderPresetFilesList(presetFiles);
       loadPresetConfigUI();
+      loadAutoScanStatus(true);
+      loadNodes();
 
       // Events + Storage
       resizeHistoryPane("eventsTablePane", "eventsVisibleRowsSelect");
@@ -1522,6 +2099,22 @@
       if (savePosterSettingsBtn) {
         savePosterSettingsBtn.onclick = () => saveSettings("posterSettingsSaveStatus");
       }
+
+      const saveAutoScanSettingsBtn = document.getElementById("saveAutoScanSettingsBtn");
+      if (saveAutoScanSettingsBtn) saveAutoScanSettingsBtn.onclick = saveAutoScanSettings;
+      const runAutoScanNowBtn = document.getElementById("runAutoScanNowBtn");
+      if (runAutoScanNowBtn) runAutoScanNowBtn.onclick = runAutoScanNow;
+      const refreshAutoScanStatusBtn = document.getElementById("refreshAutoScanStatusBtn");
+      if (refreshAutoScanStatusBtn) refreshAutoScanStatusBtn.onclick = () => loadAutoScanStatus(true);
+
+      const saveLocalNodeNameBtn = document.getElementById("saveLocalNodeNameBtn");
+      if (saveLocalNodeNameBtn) saveLocalNodeNameBtn.onclick = saveLocalNodeName;
+      const generatePairingCodeBtn = document.getElementById("generatePairingCodeBtn");
+      if (generatePairingCodeBtn) generatePairingCodeBtn.onclick = generatePairingCode;
+      const pairWorkerBtn = document.getElementById("pairWorkerBtn");
+      if (pairWorkerBtn) pairWorkerBtn.onclick = pairWorker;
+      const refreshNodesBtn = document.getElementById("refreshNodesBtn");
+      if (refreshNodesBtn) refreshNodesBtn.onclick = refreshAllNodes;
 
       updateFolderMapSummary();
       const mapFoldersBtn = document.getElementById("mapFoldersBtn");

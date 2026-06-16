@@ -42,6 +42,15 @@ DEFAULT_SETTINGS = {
         "movies": [],
         "shows": [],
     },
+
+    # Beta incremental auto scan. The scan engine reuses the Beta cache and
+    # only reparses files whose path, size, or modified time changed.
+    "beta_auto_scan_enabled": False,
+    "beta_auto_scan_interval_minutes": 30,
+    "beta_auto_scan_skip_while_encoding": True,
+    "beta_auto_scan_auto_queue_tracked": True,
+    "beta_auto_scan_file_stability_enabled": True,
+    "beta_auto_scan_file_stability_minutes": 10,
 }
 
 _settings_cache: dict | None = None
@@ -215,6 +224,53 @@ def save_settings(new_values: dict) -> dict:
         base.get("beta_media_folders", DEFAULT_SETTINGS["beta_media_folders"]),
     )
     base["beta_media_folders"] = _normalize_beta_media_folders(beta_media_folders)
+
+    # ------------------------------------------------------------------
+    # Beta auto scan settings
+    # ------------------------------------------------------------------
+    base["beta_auto_scan_enabled"] = bool(
+        new_values.get("beta_auto_scan_enabled", base.get("beta_auto_scan_enabled", False))
+    )
+    base["beta_auto_scan_skip_while_encoding"] = bool(
+        new_values.get(
+            "beta_auto_scan_skip_while_encoding",
+            base.get("beta_auto_scan_skip_while_encoding", True),
+        )
+    )
+    base["beta_auto_scan_auto_queue_tracked"] = bool(
+        new_values.get(
+            "beta_auto_scan_auto_queue_tracked",
+            base.get("beta_auto_scan_auto_queue_tracked", True),
+        )
+    )
+    base["beta_auto_scan_file_stability_enabled"] = bool(
+        new_values.get(
+            "beta_auto_scan_file_stability_enabled",
+            base.get("beta_auto_scan_file_stability_enabled", True),
+        )
+    )
+
+    try:
+        interval = int(
+            new_values.get(
+                "beta_auto_scan_interval_minutes",
+                base.get("beta_auto_scan_interval_minutes", 30),
+            )
+        )
+    except (TypeError, ValueError):
+        interval = 30
+    base["beta_auto_scan_interval_minutes"] = max(5, min(1440, interval))
+
+    try:
+        stability_minutes = int(
+            new_values.get(
+                "beta_auto_scan_file_stability_minutes",
+                base.get("beta_auto_scan_file_stability_minutes", 10),
+            )
+        )
+    except (TypeError, ValueError):
+        stability_minutes = 10
+    base["beta_auto_scan_file_stability_minutes"] = max(1, min(240, stability_minutes))
 
     # ------------------------------------------------------------------
     # Persist
