@@ -446,55 +446,77 @@
   </div>
 
   <div class="section-card settings-wide">
-    <h2>Linked Nodes</h2>
-    <p class="small">
-      Pair worker nodes, map controller paths to worker paths, and dispatch jobs to local or remote queues.
-    </p>
+    <div class="section-heading-row">
+      <div>
+        <h2>Linked Nodes</h2>
+        <p class="small">
+          Pair worker nodes, map controller paths to worker paths, and dispatch jobs to local or remote queues.
+        </p>
+      </div>
+      <button id="nodeTutorialBtn" class="node-info-button" type="button" aria-label="Open node linking tutorial">i</button>
+    </div>
 
-    <details class="node-tutorial" open>
-      <summary>Node linking tutorial</summary>
-      <div class="node-tutorial-grid">
-        <div class="node-tutorial-card">
-          <h3>1. Create a worker code</h3>
-          <ol>
-            <li>Open Settings on the worker node.</li>
-            <li>Click <strong>Generate pairing code</strong>.</li>
-            <li>Leave the worker running while you pair it from the controller.</li>
-          </ol>
+    <div id="nodeTutorialModal" class="settings-modal-backdrop" hidden>
+      <div class="settings-modal node-tutorial-modal" role="dialog" aria-modal="true" aria-labelledby="nodeTutorialTitle">
+        <div class="settings-modal-header">
+          <h2 id="nodeTutorialTitle">Node linking tutorial</h2>
+          <button id="closeNodeTutorialBtn" type="button">Close</button>
         </div>
 
-        <div class="node-tutorial-card">
-          <h3>2. Pair from the controller</h3>
-          <ol>
-            <li>Enter the worker URL, such as <code>http://192.168.1.50:8081</code>.</li>
-            <li>Paste the pairing code and add a friendly name.</li>
-            <li>Click <strong>Pair worker</strong>, then <strong>Refresh linked nodes</strong>.</li>
-          </ol>
-        </div>
-
-        <div class="node-tutorial-card">
-          <h3>3. Choose the media mode</h3>
-          <p><strong>Local mounted media mode</strong> is best when the worker can see the media folders directly. Add mappings from controller paths to worker paths.</p>
-          <div class="node-tutorial-code">
-            <code>/media/Movies =&gt; /mnt/media/Movies</code>
-            <code>/media/Shows =&gt; /storage/Shows</code>
+        <div class="node-tutorial-grid">
+          <div class="node-tutorial-card">
+            <h3>1. Create a worker code</h3>
+            <ol>
+              <li>Open Settings on the worker node.</li>
+              <li>Click <strong>Generate pairing code</strong>.</li>
+              <li>Leave the worker running while you pair it from the controller.</li>
+            </ol>
           </div>
-          <p><strong>Remote transfer mode</strong> is for workers without the media drives mounted. Set a controller URL the worker can reach; the worker downloads a temporary copy, encodes it, uploads the finished <code>-TSD</code> file, and the controller verifies it before replacing anything.</p>
-        </div>
 
-        <div class="node-tutorial-card">
-          <h3>4. Send jobs</h3>
-          <ol>
-            <li>Use Beta to select Local queue, Best worker, or a specific worker.</li>
-            <li>If a path mapping is missing, the job will be blocked with a clear error instead of guessing.</li>
-            <li>Pairing codes are one-use and expire quickly; node secrets and transfer links are not shown in logs.</li>
-          </ol>
+          <div class="node-tutorial-card">
+            <h3>2. Pair from the controller</h3>
+            <ol>
+              <li>Enter the worker URL, such as <code>http://192.168.1.50:8081</code>.</li>
+              <li>Paste the pairing code and add a friendly name.</li>
+              <li>Click <strong>Pair worker</strong>, then <strong>Refresh linked nodes</strong>.</li>
+            </ol>
+          </div>
+
+          <div class="node-tutorial-card">
+            <h3>3. Choose the media mode</h3>
+            <p><strong>Auto local then remote</strong> tries path mapping first, then uses remote transfer if no mapping matches.</p>
+            <p><strong>Local mounted media mode</strong> is best when the worker can see the media folders directly.</p>
+            <div class="node-tutorial-code">
+              <code>/media/Movies =&gt; /mnt/media/Movies</code>
+              <code>/media/Shows =&gt; /storage/Shows</code>
+            </div>
+            <p><strong>Remote transfer mode</strong> downloads a temporary copy to the worker temp folder, encodes it, uploads the finished <code>-TSD</code> file, and the controller verifies it before replacing anything.</p>
+          </div>
+
+          <div class="node-tutorial-card">
+            <h3>4. Send jobs</h3>
+            <ol>
+              <li>Use Beta to select Local queue, Best worker, or a specific worker.</li>
+              <li>The controller sends the selected preset JSON to the worker with each node job.</li>
+              <li>Pairing codes are one-use and expire quickly; node secrets and transfer links are not shown in logs.</li>
+            </ol>
+          </div>
         </div>
       </div>
-    </details>
+    </div>
 
     <div id="nodeRoleStatus" class="node-role-status">
       <div class="node-empty">Loading node pairing status...</div>
+    </div>
+
+    <div class="node-transfer-defaults">
+      <div>
+        <h3>Remote transfer temp folder</h3>
+        <p class="small">Worker-side folder for temporary source downloads and remote encodes. Blank uses the app data folder.</p>
+      </div>
+      <input id="remoteTransferTempDirInput" type="text" placeholder="/transcode-temp or D:\transcode-temp">
+      <button id="saveRemoteTransferSettingsBtn" type="button">Save temp folder</button>
+      <span id="remoteTransferTempStatus" class="small"></span>
     </div>
 
     <div class="row inline-input-group">
@@ -526,12 +548,16 @@
         </div>
         <div class="row">
           <select id="pairWorkerTransferModeSelect" style="width:100%;">
-            <option value="local" selected>Local mounted media mode</option>
+            <option value="auto" selected>Auto local then remote</option>
+            <option value="local">Local mounted media mode</option>
             <option value="remote">Remote transfer mode</option>
           </select>
         </div>
         <div class="row">
           <input id="pairWorkerControllerUrlInput" type="text" placeholder="Controller URL for remote transfer, optional" style="width:100%;">
+        </div>
+        <div class="row">
+          <input id="pairWorkerRemoteTempInput" type="text" placeholder="Worker temp folder for remote transfer, optional" style="width:100%;">
         </div>
         <div class="row">
           <textarea id="pairWorkerMappingsInput" rows="3" placeholder="/media/Shows => /mnt/media/Shows&#10;/media/Movies => /storage/Movies" style="width:100%;"></textarea>
@@ -1257,6 +1283,9 @@
 
       const tmdbBearerTokenInput = document.getElementById("tmdbBearerTokenInput");
       if (tmdbBearerTokenInput) tmdbBearerTokenInput.value = initialSettings?.tmdb_bearer_token || "";
+
+      const remoteTransferTempDirInput = document.getElementById("remoteTransferTempDirInput");
+      if (remoteTransferTempDirInput) remoteTransferTempDirInput.value = initialSettings?.remote_transfer_temp_dir || "";
     }
 
     async function loadCpuProfiles() {
@@ -1303,6 +1332,7 @@
       const queueUiMode = document.getElementById("queueUiModeSelect")?.value || "buttons";
       const tmdbApiKey = document.getElementById("tmdbApiKeyInput")?.value || "";
       const tmdbBearerToken = document.getElementById("tmdbBearerTokenInput")?.value || "";
+      const remoteTransferTempDir = document.getElementById("remoteTransferTempDirInput")?.value || "";
 
       let threads = parseInt(threadsRaw, 10);
       if (isNaN(threads) || threads < 0) threads = 0;
@@ -1319,6 +1349,7 @@
             queue_ui_mode: queueUiMode,
             tmdb_api_key: tmdbApiKey,
             tmdb_bearer_token: tmdbBearerToken,
+            remote_transfer_temp_dir: remoteTransferTempDir,
             beta_media_folders: getBetaMediaFoldersForSave(),
             ...getAutoScanSettingsForSave()
           })
@@ -2054,6 +2085,7 @@
         const modeSelect = document.createElement("select");
         modeSelect.className = "node-transfer-mode-select";
         [
+          ["auto", "Auto local then remote"],
           ["local", "Local mounted media mode"],
           ["remote", "Remote transfer mode"]
         ].forEach(([value, label]) => {
@@ -2068,8 +2100,14 @@
         controllerInput.className = "node-controller-url-input";
         controllerInput.placeholder = "Controller URL for remote transfer";
         controllerInput.value = node.controller_url || "";
+        const remoteTempInput = document.createElement("input");
+        remoteTempInput.type = "text";
+        remoteTempInput.className = "node-remote-temp-input";
+        remoteTempInput.placeholder = "Worker temp folder for remote transfer";
+        remoteTempInput.value = node.remote_temp_dir || "";
         modeRow.appendChild(modeSelect);
         modeRow.appendChild(controllerInput);
+        modeRow.appendChild(remoteTempInput);
         main.appendChild(modeRow);
 
         const textarea = document.createElement("textarea");
@@ -2084,7 +2122,7 @@
         actions.className = "node-actions";
         [
           ["Refresh", () => refreshNode(node.id)],
-          ["Save settings", () => saveNodeSettings(node.id, textarea.value, modeSelect.value, controllerInput.value)],
+          ["Save settings", () => saveNodeSettings(node.id, textarea.value, modeSelect.value, controllerInput.value, remoteTempInput.value)],
           ["Rotate secret", () => rotateNodeSecret(node.id)],
           ["Unlink", () => unlinkNode(node.id)]
         ].forEach(([label, handler]) => {
@@ -2165,13 +2203,14 @@
       const name = document.getElementById("pairWorkerNameInput")?.value || "";
       const transferMode = document.getElementById("pairWorkerTransferModeSelect")?.value || "local";
       const controllerUrl = document.getElementById("pairWorkerControllerUrlInput")?.value || "";
+      const remoteTempDir = document.getElementById("pairWorkerRemoteTempInput")?.value || "";
       const mappings = parsePathMappingsText(document.getElementById("pairWorkerMappingsInput")?.value || "");
       try {
         if (status) status.textContent = "Pairing...";
         const res = await fetch("/api/nodes/pair", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url, code, name, transfer_mode: transferMode, controller_url: controllerUrl, path_mappings: mappings })
+          body: JSON.stringify({ url, code, name, transfer_mode: transferMode, controller_url: controllerUrl, remote_temp_dir: remoteTempDir, path_mappings: mappings })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Pairing failed");
@@ -2208,7 +2247,7 @@
       }
     }
 
-    async function saveNodeSettings(nodeId, text, transferMode, controllerUrl) {
+    async function saveNodeSettings(nodeId, text, transferMode, controllerUrl, remoteTempDir) {
       try {
         const res = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/path_mappings`, {
           method: "POST",
@@ -2216,7 +2255,8 @@
           body: JSON.stringify({
             path_mappings: parsePathMappingsText(text),
             transfer_mode: transferMode || "local",
-            controller_url: controllerUrl || ""
+            controller_url: controllerUrl || "",
+            remote_temp_dir: remoteTempDir || ""
           })
         });
         const data = await res.json();
@@ -2282,6 +2322,11 @@
         saveUiSettingsBtn.onclick = () => saveSettings("uiSettingsSaveStatus");
       }
 
+      const saveRemoteTransferSettingsBtn = document.getElementById("saveRemoteTransferSettingsBtn");
+      if (saveRemoteTransferSettingsBtn) {
+        saveRemoteTransferSettingsBtn.onclick = () => saveSettings("remoteTransferTempStatus");
+      }
+
       const savePosterSettingsBtn = document.getElementById("savePosterSettingsBtn");
       if (savePosterSettingsBtn) {
         savePosterSettingsBtn.onclick = () => saveSettings("posterSettingsSaveStatus");
@@ -2302,6 +2347,16 @@
       if (pairWorkerBtn) pairWorkerBtn.onclick = pairWorker;
       const refreshNodesBtn = document.getElementById("refreshNodesBtn");
       if (refreshNodesBtn) refreshNodesBtn.onclick = refreshAllNodes;
+      const nodeTutorialBtn = document.getElementById("nodeTutorialBtn");
+      const nodeTutorialModal = document.getElementById("nodeTutorialModal");
+      const closeNodeTutorialBtn = document.getElementById("closeNodeTutorialBtn");
+      if (nodeTutorialBtn && nodeTutorialModal) nodeTutorialBtn.onclick = () => { nodeTutorialModal.hidden = false; };
+      if (closeNodeTutorialBtn && nodeTutorialModal) closeNodeTutorialBtn.onclick = () => { nodeTutorialModal.hidden = true; };
+      if (nodeTutorialModal) {
+        nodeTutorialModal.addEventListener("click", (e) => {
+          if (e.target === nodeTutorialModal) nodeTutorialModal.hidden = true;
+        });
+      }
 
       updateFolderMapSummary();
       const mapFoldersBtn = document.getElementById("mapFoldersBtn");

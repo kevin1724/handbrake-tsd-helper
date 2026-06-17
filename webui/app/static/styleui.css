@@ -578,6 +578,69 @@ td button {
   color: rgba(229,229,229,0.72);
 }
 
+.transfer-progress-line {
+  margin-top: 5px;
+  color: #baf7fb;
+  overflow-wrap: anywhere;
+}
+
+.transfer-mini-bar {
+  width: 100%;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 999px;
+  overflow: hidden;
+  background: rgba(22, 199, 214, 0.11);
+}
+
+.transfer-mini-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: linear-gradient(90deg, rgba(22, 199, 214, 0.65), rgba(91, 229, 238, 0.95));
+}
+
+.linked-node-jobs-panel {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 12px;
+}
+
+.linked-node-job-card {
+  display: grid;
+  gap: 10px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.18);
+  padding: 14px;
+}
+
+.linked-node-job-card.node-online {
+  border-color: rgba(22, 199, 214, 0.22);
+}
+
+.linked-node-job-list {
+  display: grid;
+  gap: 8px;
+}
+
+.linked-node-job-row {
+  display: grid;
+  gap: 4px;
+  padding: 9px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.linked-node-job-name {
+  color: #fff;
+  font-weight: 750;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .job-actions-cell {
   min-width: 170px;
 }
@@ -636,10 +699,8 @@ body.jobs-view-modern .jobs-table th:nth-child(7),
 body.jobs-view-modern .jobs-table td:nth-child(7),
 body.jobs-view-modern .jobs-table th:nth-child(8),
 body.jobs-view-modern .jobs-table td:nth-child(8),
-body.jobs-view-modern .jobs-table th:nth-child(9),
-body.jobs-view-modern .jobs-table td:nth-child(9),
-body.jobs-view-modern .jobs-table th:nth-child(10),
-body.jobs-view-modern .jobs-table td:nth-child(10) {
+body.jobs-view-modern .jobs-table th:nth-child(11),
+body.jobs-view-modern .jobs-table td:nth-child(11) {
   display: none;
 }
 
@@ -902,6 +963,18 @@ a {
   color: var(--muted);
   font-weight: 700;
   font-size: 12px;
+}
+
+.app-status-actions {
+  justify-self: end;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.clear-error-top-btn {
+  min-height: 34px;
+  padding: 7px 10px;
 }
 
 .app-status::before {
@@ -1769,6 +1842,49 @@ body.settings-page .folder-add-choice {
   overflow-wrap: anywhere;
 }
 
+.node-info-button {
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 16px;
+  font-weight: 900;
+  color: #baf7fb;
+}
+
+.node-tutorial-modal {
+  max-width: 980px;
+}
+
+.node-transfer-defaults {
+  display: grid;
+  grid-template-columns: minmax(240px, 1fr) minmax(260px, 0.9fr) auto auto;
+  gap: 12px;
+  align-items: center;
+  margin-top: 14px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(0, 0, 0, 0.18);
+}
+
+.node-transfer-defaults h3 {
+  margin: 0 0 4px;
+  color: #fff;
+  font-size: 14px;
+}
+
+.node-transfer-defaults p {
+  margin: 0;
+}
+
+.node-transfer-defaults input {
+  width: 100%;
+}
+
 .node-link-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -2038,12 +2154,13 @@ body.settings-page .folder-add-choice {
 
 .node-mode-row {
   display: grid;
-  grid-template-columns: minmax(220px, 0.45fr) minmax(260px, 0.55fr);
+  grid-template-columns: minmax(190px, 0.35fr) minmax(220px, 0.35fr) minmax(220px, 0.3fr);
   gap: 10px;
 }
 
 .node-transfer-mode-select,
-.node-controller-url-input {
+.node-controller-url-input,
+.node-remote-temp-input {
   width: 100%;
 }
 
@@ -2087,7 +2204,8 @@ body.settings-page .folder-add-choice {
     padding-bottom: 2px;
   }
 
-  .app-status {
+  .app-status,
+  .app-status-actions {
     justify-self: start;
   }
 
@@ -2117,6 +2235,10 @@ body.settings-page .folder-add-choice {
   }
 
   .node-role-status {
+    grid-template-columns: 1fr;
+  }
+
+  .node-transfer-defaults {
     grid-template-columns: 1fr;
   }
 

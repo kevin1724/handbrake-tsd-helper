@@ -94,6 +94,8 @@ def _hash_secret(value: str) -> str:
 
 def normalize_transfer_mode(value: str) -> str:
     mode = str(value or "local").strip().lower()
+    if mode in {"auto", "automatic", "local_then_remote", "fallback"}:
+        return "auto"
     if mode in {"remote", "remote_transfer", "transfer"}:
         return "remote"
     return "local"
@@ -177,8 +179,10 @@ def public_node(row: dict) -> dict:
         "path_mappings": row.get("path_mappings") if isinstance(row.get("path_mappings"), list) else [],
         "transfer_mode": normalize_transfer_mode(row.get("transfer_mode")),
         "controller_url": row.get("controller_url") or "",
+        "remote_temp_dir": row.get("remote_temp_dir") or "",
         "paired_at": row.get("paired_at") or 0,
         "paired_controllers": row.get("paired_controllers") if isinstance(row.get("paired_controllers"), list) else [],
+        "jobs": row.get("jobs") if isinstance(row.get("jobs"), list) else [],
     }
 
 
@@ -333,7 +337,7 @@ def _request_json(url: str, *, method: str = "GET", body: dict | None = None, he
     return payload if isinstance(payload, dict) else {}
 
 
-def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: list | None = None, transfer_mode: str = "local", controller_url: str = "") -> dict:
+def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: list | None = None, transfer_mode: str = "local", controller_url: str = "", remote_temp_dir: str = "") -> dict:
     url = normalize_url(worker_url)
     local = local_node_info()
     payload = {
@@ -363,6 +367,7 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
         "path_mappings": normalize_path_mappings(path_mappings or []),
         "transfer_mode": normalize_transfer_mode(transfer_mode),
         "controller_url": str(controller_url or "").strip().rstrip("/"),
+        "remote_temp_dir": str(remote_temp_dir or "").strip()[:500],
     }
     save_node(row)
     return public_node(row)

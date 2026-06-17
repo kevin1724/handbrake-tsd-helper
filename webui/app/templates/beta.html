@@ -796,7 +796,7 @@
         linkedNodes.forEach((node) => {
           const opt = document.createElement("option");
           opt.value = node.id || "";
-          const mode = node.transfer_mode === "remote" ? "remote transfer" : "local mount";
+          const mode = node.transfer_mode === "remote" ? "remote transfer" : (node.transfer_mode === "auto" ? "auto fallback" : "local mount");
           opt.textContent = `${node.name || "Worker"} (${node.online ? node.status || "online" : "offline"}, ${mode})`;
           nodeSelect.appendChild(opt);
         });

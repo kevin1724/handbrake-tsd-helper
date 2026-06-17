@@ -21,7 +21,10 @@
       <a href="/beta" class="nav-link nav-library">Library</a>
       <a href="/settings" class="nav-link nav-settings">Settings</a>
     </div>
-    <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>
+    <div class="app-status-actions">
+      <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>
+      <button id="clearErrorStatusTopBtn" type="button" class="danger-outline clear-error-top-btn">Clear</button>
+    </div>
   </nav>
 
   <main class="app-page jobs-shell">
@@ -140,6 +143,7 @@
     <section class="section-card">
       <div class="section-heading-row">
         <h2>Queue Dashboard</h2>
+        <button id="clearErrorStatusBtn" type="button" class="danger-outline">Clear error status</button>
       </div>
       <div class="dashboard-metrics">
         <div class="stat-chip stat-queued"><strong>Queued</strong><div id="summaryQueued">0</div></div>
@@ -154,11 +158,14 @@
     <section class="section-card">
       <div class="section-heading-row">
         <div>
-          <h2>Status / Log</h2>
-          <div id="statusText" class="small"></div>
+          <h2>Linked Nodes</h2>
+          <div class="small">Worker health, remote jobs, and transfer progress.</div>
         </div>
+        <button id="refreshLinkedNodesBtn" type="button">Refresh nodes</button>
       </div>
-      <div id="statusBox"></div>
+      <div id="linkedNodesJobsPanel" class="linked-node-jobs-panel">
+        <div class="node-empty">No linked node status loaded yet.</div>
+      </div>
     </section>
 
     <section class="section-card jobs-history-card">
@@ -218,6 +225,7 @@
             <th>Progress</th>
             <th>ETA</th>
             <th>Runtime</th>
+            <th>Est. Final</th>
             <th>Saved</th>
             <th>Log</th>
             <th>Actions</th>
@@ -237,6 +245,7 @@ let currentPath = null;
 let currentJobId = null;
 let statusTimer = null;
 let jobsTimer = null;
+let linkedNodesTimer = null;
 
 // --------------------------
 // Jobs page view mode
@@ -363,6 +372,11 @@ function formatFileBytes(bytes) {
   const mb = value / (1024 ** 2);
   if (mb >= 1) return `${mb.toFixed(mb >= 10 ? 1 : 2)} MB`;
   return `${Math.max(1, Math.round(value / 1024))} KB`;
+}
+
+function setTextIfPresent(id, text) {
+  const el = document.getElementById(id);
+  if (el) el.textContent = text;
 }
 
 function formatFileDate(ts) {
@@ -572,8 +586,8 @@ function startEncode() {
     currentJobId = data.job_id;
     if (window.appToast) appToast('Encode queued.', 'success');
     if (window.setAppStatus) setAppStatus('Encoding', 'encoding');
-    document.getElementById('statusText').textContent = 'Job queued: ' + currentJobId;
-    document.getElementById('statusBox').textContent = '';
+    setTextIfPresent('statusText', 'Job queued: ' + currentJobId);
+    setTextIfPresent('statusBox', '');
     const pb = document.getElementById('progressBar');
     pb.style.display = 'block';
     pb.value = 0;
@@ -593,20 +607,27 @@ function startEncode() {
 
 function cancelEncode() {
   if (!currentJobId) return;
-  fetch('/cancel/' + currentJobId, { method: 'POST' })
+  cancelJobById(currentJobId, true);
+}
+
+function cancelJobById(jobId, isCurrent = false) {
+  if (!jobId) return;
+  if (!confirm('Cancel this running job?')) return;
+  fetch('/cancel/' + encodeURIComponent(jobId), { method: 'POST' })
     .then(r => r.json())
     .then(data => {
       if (data.error) {
         alert(data.error);
         return;
       }
-      document.getElementById('statusText').textContent = 'Status: canceled';
+      if (isCurrent) setTextIfPresent('statusText', 'Status: canceled');
       if (window.appToast) appToast('Encode canceled.', 'warning');
-      document.getElementById('cancelBtn').disabled = true;
+      const cancelBtn = document.getElementById('cancelBtn');
+      if (cancelBtn && (isCurrent || currentJobId === jobId)) cancelBtn.disabled = true;
       const pb = document.getElementById('progressBar');
-      pb.value = 0;
-      document.getElementById('progressLabel').textContent = 'Canceled';
-      if (statusTimer) clearInterval(statusTimer);
+      if (pb && (isCurrent || currentJobId === jobId)) pb.value = 0;
+      if (isCurrent || currentJobId === jobId) document.getElementById('progressLabel').textContent = 'Canceled';
+      if ((isCurrent || currentJobId === jobId) && statusTimer) clearInterval(statusTimer);
       refreshJobs();
     })
     .catch(err => {
@@ -620,7 +641,7 @@ function checkStatus() {
     .then(r => r.json())
     .then(data => {
       if (data.error) {
-        document.getElementById('statusText').textContent = 'Error: ' + data.error;
+        setTextIfPresent('statusText', 'Error: ' + data.error);
         clearInterval(statusTimer);
         return;
       }
@@ -629,8 +650,8 @@ function checkStatus() {
         (data.returncode !== null && data.returncode !== undefined
            ? (' (code ' + data.returncode + ')')
            : '');
-      document.getElementById('statusText').textContent = statusText;
-      document.getElementById('statusBox').textContent = data.log || '';
+      setTextIfPresent('statusText', statusText);
+      setTextIfPresent('statusBox', data.log || '');
 
       const pb = document.getElementById('progressBar');
       if (data.progress !== undefined && data.progress !== null) {
@@ -698,6 +719,20 @@ function formatSavedGb(savedGb) {
   return `${Number(savedGb).toFixed(2)} GB`;
 }
 
+function formatBytesForDisplay(bytes) {
+  const text = formatFileBytes(bytes);
+  return text || '';
+}
+
+function formatEstimatedFinal(job) {
+  const actual = formatBytesForDisplay(job.out_bytes);
+  if (actual) return actual;
+  const estimate = formatBytesForDisplay(job.estimated_out_bytes);
+  if (!estimate) return '';
+  const pct = Number(job.estimated_out_checked_progress || 0);
+  return pct > 0 ? `${estimate} @ ${pct.toFixed(0)}%` : estimate;
+}
+
 const JOBS_VISIBLE_ROW_OPTIONS = [10, 25, 50, 100];
 const JOBS_HEADER_PX = 45;
 const JOBS_ROW_PX = 78;
@@ -750,6 +785,27 @@ function createProgressCell(job) {
 
   wrap.appendChild(bar);
   wrap.appendChild(label);
+
+  const transfer = job.transfer && typeof job.transfer === 'object' ? job.transfer : null;
+  const transferProgress = transfer && transfer.progress && typeof transfer.progress === 'object' ? transfer.progress : null;
+  if (transferProgress && transferProgress.phase) {
+    const transferBar = document.createElement('div');
+    transferBar.className = 'transfer-mini-bar';
+    const transferFill = document.createElement('div');
+    transferFill.className = 'transfer-mini-fill';
+    const transferPct = Number(transferProgress.percent || 0);
+    transferFill.style.width = `${Math.max(0, Math.min(100, transferPct))}%`;
+    transferBar.appendChild(transferFill);
+    wrap.appendChild(transferBar);
+
+    const transferLine = document.createElement('div');
+    transferLine.className = 'transfer-progress-line small';
+    const phase = String(transferProgress.phase || '').replace(/_/g, ' ');
+    const remaining = formatBytesForDisplay(transferProgress.remaining_bytes);
+    const speed = transferProgress.speed_label || '';
+    transferLine.textContent = `${phase} ${transferPct.toFixed(1)}%${speed ? ` / ${speed}` : ''}${remaining ? ` / ${remaining} left` : ''}`;
+    wrap.appendChild(transferLine);
+  }
   return wrap;
 }
 
@@ -845,12 +901,28 @@ function refreshJobsSummary() {
       document.getElementById('summarySaved').textContent = `${Number(s.saved_gb || 0).toFixed(2)} GB`;
       document.getElementById('summaryRuntime').textContent = formatDuration(s.total_runtime_seconds || 0);
       if (window.setAppStatus) {
-        if ((counts.error || 0) > 0) setAppStatus('Error', 'error');
+        if ((s.active_error_count || 0) > 0) setAppStatus('Error', 'error');
         else if ((counts.running || 0) > 0) setAppStatus('Encoding', 'encoding');
         else setAppStatus('Idle', 'idle');
       }
     })
     .catch(err => console.error(err));
+}
+
+function clearErrorStatus() {
+  if (!confirm('Clear error jobs and reset the red app error status?')) return;
+  fetch('/jobs/clear_error_status', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) throw new Error(data.error);
+      if (window.appToast) appToast(`Cleared ${data.cleared || 0} error item(s).`, 'success');
+      refreshJobs();
+      refreshJobsSummary();
+    })
+    .catch(err => {
+      console.error(err);
+      alert(err.message || 'Failed to clear error status');
+    });
 }
 
 function refreshJobs() {
@@ -931,6 +1003,10 @@ function refreshJobs() {
           const tdRuntime = document.createElement('td');
           tdRuntime.textContent = formatDuration(job.duration_seconds);
           tr.appendChild(tdRuntime);
+
+          const tdEstimate = document.createElement('td');
+          tdEstimate.textContent = formatEstimatedFinal(job);
+          tr.appendChild(tdEstimate);
 
           const tdSaved = document.createElement('td');
           tdSaved.textContent = formatSavedGb(job.saved_gb);
@@ -1015,12 +1091,137 @@ function refreshJobs() {
             tdActions.appendChild(removeBtn);
           }
 
+          if (job.status === 'running') {
+            const cancelBtn = document.createElement('button');
+            cancelBtn.textContent = 'Cancel';
+            cancelBtn.className = 'danger-outline';
+            cancelBtn.onclick = () => cancelJobById(job.id);
+            tdActions.appendChild(cancelBtn);
+          }
+
           tr.appendChild(tdActions);
           tbody.appendChild(tr);
         });
     })
     .catch(err => {
       console.error(err);
+    });
+}
+
+function nodeStatusClass(value) {
+  return String(value || 'idle').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
+}
+
+function renderLinkedNodeJobs(nodes) {
+  const panel = document.getElementById('linkedNodesJobsPanel');
+  if (!panel) return;
+  panel.innerHTML = '';
+  if (!Array.isArray(nodes) || nodes.length === 0) {
+    const empty = document.createElement('div');
+    empty.className = 'node-empty';
+    empty.textContent = 'No linked workers paired yet.';
+    panel.appendChild(empty);
+    return;
+  }
+
+  nodes.forEach(node => {
+    const card = document.createElement('article');
+    card.className = `linked-node-job-card ${node.online ? 'node-online' : 'node-offline'}`;
+
+    const head = document.createElement('div');
+    head.className = 'node-status-head';
+    const title = document.createElement('strong');
+    title.textContent = node.name || 'Worker';
+    const pill = document.createElement('span');
+    const state = node.online ? (node.status || 'online') : 'offline';
+    pill.className = `node-pill node-pill-${nodeStatusClass(state)}`;
+    pill.textContent = state;
+    head.appendChild(title);
+    head.appendChild(pill);
+    card.appendChild(head);
+
+    const meta = document.createElement('div');
+    meta.className = 'node-message small';
+    const counts = node.summary?.counts || {};
+    const mode = node.transfer_mode === 'remote' ? 'remote' : (node.transfer_mode === 'auto' ? 'auto' : 'local');
+    meta.textContent = `${node.url || ''} / ${mode} / queued ${counts.queued || 0} / running ${counts.running || 0} / errors ${counts.error || 0}`;
+    card.appendChild(meta);
+
+    if (node.last_error) {
+      const error = document.createElement('div');
+      error.className = 'node-error small';
+      error.textContent = node.last_error;
+      card.appendChild(error);
+    }
+
+    const jobs = Array.isArray(node.jobs) ? node.jobs.slice(0, 6) : [];
+    const list = document.createElement('div');
+    list.className = 'linked-node-job-list';
+    if (!jobs.length) {
+      const empty = document.createElement('div');
+      empty.className = 'node-message small';
+      empty.textContent = 'No worker jobs reported.';
+      list.appendChild(empty);
+    } else {
+      jobs.forEach(job => {
+        const row = document.createElement('div');
+        row.className = 'linked-node-job-row';
+        const name = document.createElement('div');
+        name.className = 'linked-node-job-name';
+        name.textContent = (job.src || '').split(/[\\/]/).pop() || job.id || 'job';
+        const detail = document.createElement('div');
+        detail.className = 'small';
+        const progress = Number(job.progress || 0);
+        const est = formatEstimatedFinal(job);
+        detail.textContent = `${job.status || ''} / ${progress.toFixed(1)}%${job.eta_seconds ? ` / ETA ${formatEta(job.eta_seconds)}` : ''}${est ? ` / est ${est}` : ''}`;
+        row.appendChild(name);
+        row.appendChild(detail);
+
+        const transfer = job.transfer?.progress;
+        if (transfer?.phase) {
+          const bar = document.createElement('div');
+          bar.className = 'transfer-mini-bar';
+          const fill = document.createElement('div');
+          fill.className = 'transfer-mini-fill';
+          fill.style.width = `${Math.max(0, Math.min(100, Number(transfer.percent || 0)))}%`;
+          bar.appendChild(fill);
+          row.appendChild(bar);
+
+          const t = document.createElement('div');
+          t.className = 'transfer-progress-line small';
+          const remaining = formatBytesForDisplay(transfer.remaining_bytes);
+          t.textContent = `${String(transfer.phase).replace(/_/g, ' ')} ${Number(transfer.percent || 0).toFixed(1)}%${transfer.speed_label ? ` / ${transfer.speed_label}` : ''}${remaining ? ` / ${remaining} left` : ''}`;
+          row.appendChild(t);
+        }
+
+        list.appendChild(row);
+      });
+    }
+    card.appendChild(list);
+    panel.appendChild(card);
+  });
+}
+
+function refreshLinkedNodesStatus() {
+  const panel = document.getElementById('linkedNodesJobsPanel');
+  if (panel && !panel.children.length) {
+    panel.innerHTML = '<div class="node-empty">Loading linked nodes...</div>';
+  }
+  fetch('/api/nodes/refresh', { method: 'POST' })
+    .then(r => r.json())
+    .then(data => {
+      if (data.error) throw new Error(data.error);
+      renderLinkedNodeJobs(data.nodes || []);
+    })
+    .catch(err => {
+      console.error(err);
+      if (panel) {
+        panel.innerHTML = '';
+        const error = document.createElement('div');
+        error.className = 'node-error';
+        error.textContent = err.message || 'Failed to load linked nodes.';
+        panel.appendChild(error);
+      }
     });
 }
 
@@ -1211,6 +1412,9 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('clearFinishedBtn').onclick = clearFinishedJobs;
   document.getElementById('clearQueuedBtn').onclick = clearQueuedJobs;
   document.getElementById('pauseQueueBtn').onclick = toggleQueuePause;
+  document.getElementById('clearErrorStatusBtn').onclick = clearErrorStatus;
+  document.getElementById('clearErrorStatusTopBtn').onclick = clearErrorStatus;
+  document.getElementById('refreshLinkedNodesBtn').onclick = refreshLinkedNodesStatus;
 
   document.getElementById('searchBtn').onclick = searchMedia;
   document.getElementById('searchInput').addEventListener('keypress', (e) => {
@@ -1235,12 +1439,14 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshJobs();
   refreshJobsSummary();
   refreshQueueState();
+  refreshLinkedNodesStatus();
 
   jobsTimer = setInterval(() => {
     refreshJobs();
     refreshJobsSummary();
     refreshQueueState();
   }, 5000);
+  linkedNodesTimer = setInterval(refreshLinkedNodesStatus, 10000);
 });
 </script>
 </body>

@@ -51,6 +51,10 @@ DEFAULT_SETTINGS = {
     "beta_auto_scan_auto_queue_tracked": True,
     "beta_auto_scan_file_stability_enabled": True,
     "beta_auto_scan_file_stability_minutes": 10,
+
+    # Worker-side folder used for remote-transfer source downloads and
+    # temporary encodes. Blank means DATA_DIR/node_transfer_work.
+    "remote_transfer_temp_dir": "",
 }
 
 _settings_cache: dict | None = None
@@ -271,6 +275,12 @@ def save_settings(new_values: dict) -> dict:
     except (TypeError, ValueError):
         stability_minutes = 10
     base["beta_auto_scan_file_stability_minutes"] = max(1, min(240, stability_minutes))
+
+    # ------------------------------------------------------------------
+    # Remote transfer worker temp folder
+    # ------------------------------------------------------------------
+    remote_temp = new_values.get("remote_transfer_temp_dir", base.get("remote_transfer_temp_dir", ""))
+    base["remote_transfer_temp_dir"] = str(remote_temp or "").strip()[:500]
 
     # ------------------------------------------------------------------
     # Persist

@@ -72,6 +72,7 @@ from .jobs import (
     get_job,
     list_jobs_for_api,
     cancel_job,
+    clear_error_status,
     remove_queued_job,
     clear_finished_jobs as clear_finished_jobs_core,
     clear_queued_jobs,
@@ -88,6 +89,7 @@ from .presets import (
     preset_config,
     save_preset_config,
     guess_preset_from_filename,
+    resolve_preset_file_and_name,
 )
 from .settings import (
     load_settings,
@@ -2911,6 +2913,7 @@ def _refresh_linked_node(row: dict) -> dict:
             "summary": summary,
             "last_error": "",
             "paired_controllers": data.get("paired_controllers") if isinstance(data.get("paired_controllers"), list) else [],
+            "jobs": data.get("jobs") if isinstance(data.get("jobs"), list) else [],
         })
     except Exception as e:
         row.update({
@@ -3009,6 +3012,31 @@ def _controller_base_url(default_url: str = "") -> str:
         return request.host_url.rstrip("/")
     except Exception:
         return ""
+
+
+def _node_preset_bundle(preset_key: str) -> dict | None:
+    key = str(preset_key or "").strip().lower()
+    if key not in {"1080", "4k"}:
+        key = "1080"
+    try:
+        file_path, preset_name = resolve_preset_file_and_name(key)
+        with open(file_path, "r", encoding="utf-8") as f:
+            contents = f.read()
+        json.loads(contents)
+        return {
+            "key": key,
+            "file_name": os.path.basename(file_path),
+            "name": preset_name,
+            "contents": contents,
+        }
+    except Exception as e:
+        log_event(
+            "node_preset_bundle_error",
+            f"Failed to prepare controller preset {key}: {e}",
+            level="warn",
+            extra={"preset": key},
+        )
+        return None
 
 
 def _transfer_output_path_for_src(src: str) -> str:
@@ -3686,6 +3714,7 @@ def register_routes(app):
             role_label=local["role_label"],
             paired_controllers=local["paired_controllers"],
             summary=get_job_summary(),
+            jobs=list_jobs_for_api(),
         )
 
     @app.route("/api/node/transfers/<transfer_id>/source")
@@ -3758,8 +3787,7 @@ def register_routes(app):
         jobs_payload = data.get("jobs")
         if not isinstance(jobs_payload, list):
             return jsonify(error="missing jobs"), 400
-        paths = []
-        presets = {}
+        local_jobs = []
         remote_jobs = []
         for job in jobs_payload:
             if not isinstance(job, dict):
@@ -3771,12 +3799,10 @@ def register_routes(app):
             src = str(job.get("src") or "").strip()
             if not src:
                 continue
-            paths.append(src)
-            presets[src] = str(job.get("preset") or "auto").strip().lower()
+            local_jobs.append(job)
 
         seen = []
         skipped = []
-        to_create = []
         count = 0
         for job in remote_jobs:
             transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else {}
@@ -3792,10 +3818,12 @@ def register_routes(app):
                 skipped.append({"path": src, "reason": "missing transfer data"})
                 continue
             effective = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
-            _job_id, created = create_remote_transfer_job(src, effective, transfer)
+            _job_id, created = create_remote_transfer_job(src, effective, transfer, preset_bundle=job.get("preset_bundle"))
             count += 1 if created else 0
 
-        for src in paths:
+        for job in local_jobs:
+            src = str(job.get("src") or "").strip()
+            original_path = str(job.get("original_path") or src).strip()
             if src in seen:
                 continue
             seen.append(src)
@@ -3809,15 +3837,16 @@ def register_routes(app):
             elif os.path.splitext(os.path.basename(src))[0].lower().endswith("-tsd"):
                 reason = "already tagged -TSD"
             if reason:
-                skipped.append({"path": src, "reason": reason})
+                skipped.append({"path": original_path or src, "worker_path": src, "reason": reason})
                 continue
-            preset = presets.get(src) or "auto"
+            preset = str(job.get("preset") or "auto").strip().lower()
             if preset not in {"auto", "1080", "4k"}:
                 preset = "auto"
             effective = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
-            to_create.append((src, effective))
-
-        count += create_jobs_batch(to_create)
+            before = len([j for j in list_jobs_for_api() if j.get("src") == src and j.get("status") in {"queued", "running"}])
+            create_job(src, effective, preset_bundle=job.get("preset_bundle"))
+            after = len([j for j in list_jobs_for_api() if j.get("src") == src and j.get("status") in {"queued", "running"}])
+            count += 1 if after > before else 0
         log_event("node_jobs_received", f"Received {count} node job(s).", level="info")
         return jsonify(ok=True, count=count, skipped=skipped, summary=get_job_summary())
 
@@ -3858,6 +3887,7 @@ def register_routes(app):
                 path_mappings=data.get("path_mappings") or [],
                 transfer_mode=data.get("transfer_mode") or "local",
                 controller_url=data.get("controller_url") or "",
+                remote_temp_dir=data.get("remote_temp_dir") or "",
             )
         except Exception as e:
             return jsonify(error=str(e)), 400
@@ -3889,6 +3919,7 @@ def register_routes(app):
         row["path_mappings"] = normalize_path_mappings(data.get("path_mappings") or [])
         row["transfer_mode"] = normalize_transfer_mode(data.get("transfer_mode") or row.get("transfer_mode") or "local")
         row["controller_url"] = str(data.get("controller_url") or row.get("controller_url") or "").strip().rstrip("/")
+        row["remote_temp_dir"] = str(data.get("remote_temp_dir") or row.get("remote_temp_dir") or "").strip()[:500]
         save_node(row)
         return jsonify(ok=True, node=public_node(row))
 
@@ -3953,6 +3984,33 @@ def register_routes(app):
         controller_url = _controller_base_url(selected.get("controller_url") or data.get("controller_url") or "")
         jobs_payload = []
         skipped = []
+
+        def build_remote_job_payload(src: str, effective_preset: str, preset_bundle: dict | None) -> tuple[dict | None, str | None]:
+            try:
+                source_size = int(os.path.getsize(src))
+                grant = create_transfer_grant(src, selected.get("id") or "", source_size=source_size)
+                transfer_row = get_transfer(grant["id"]) or {}
+                transfer_row["preset"] = effective_preset
+                transfer_row["controller_url"] = controller_url
+                transfer_row["remote_temp_dir"] = str(selected.get("remote_temp_dir") or "").strip()
+                save_transfer(transfer_row)
+                transfer_payload = {
+                    "id": grant["id"],
+                    "controller_url": controller_url,
+                    "source_url": f"{controller_url}/api/node/transfers/{grant['id']}/source",
+                    "upload_url": f"{controller_url}/api/node/transfers/{grant['id']}/output",
+                    "download_token": grant["download_token"],
+                    "upload_token": grant["upload_token"],
+                    "worker_node_id": selected.get("id") or "",
+                    "original_path": src,
+                    "source_basename": grant.get("source_basename") or os.path.basename(src),
+                    "source_size": source_size,
+                    "remote_temp_dir": str(selected.get("remote_temp_dir") or "").strip(),
+                }
+                return {"src": src, "preset": effective_preset, "preset_bundle": preset_bundle, "transfer": transfer_payload}, None
+            except Exception as e:
+                return None, f"transfer setup failed: {str(e)[:120]}"
+
         for raw in paths:
             src = str(raw or "").strip()
             if not src:
@@ -3970,36 +4028,23 @@ def register_routes(app):
                 skipped.append({"path": src, "reason": "already tagged -TSD"})
                 continue
 
-            if selected_mode == "remote":
-                try:
-                    source_size = int(os.path.getsize(src))
-                    grant = create_transfer_grant(src, selected.get("id") or "", source_size=source_size)
-                    transfer_row = get_transfer(grant["id"]) or {}
-                    transfer_row["preset"] = preset
-                    transfer_row["controller_url"] = controller_url
-                    save_transfer(transfer_row)
-                    transfer_payload = {
-                        "id": grant["id"],
-                        "controller_url": controller_url,
-                        "source_url": f"{controller_url}/api/node/transfers/{grant['id']}/source",
-                        "upload_url": f"{controller_url}/api/node/transfers/{grant['id']}/output",
-                        "download_token": grant["download_token"],
-                        "upload_token": grant["upload_token"],
-                        "worker_node_id": selected.get("id") or "",
-                        "original_path": src,
-                        "source_basename": grant.get("source_basename") or os.path.basename(src),
-                        "source_size": source_size,
-                    }
-                    jobs_payload.append({"src": src, "preset": preset, "transfer": transfer_payload})
-                except Exception as e:
-                    skipped.append({"path": src, "reason": f"transfer setup failed: {str(e)[:120]}"})
+            effective_preset = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
+            preset_bundle = _node_preset_bundle(effective_preset)
+            worker_path = translate_path(src, selected.get("path_mappings") or [])
+            use_remote = selected_mode == "remote" or (selected_mode == "auto" and not worker_path)
+
+            if use_remote:
+                remote_payload, remote_error = build_remote_job_payload(src, effective_preset, preset_bundle)
+                if remote_payload:
+                    jobs_payload.append(remote_payload)
+                else:
+                    skipped.append({"path": src, "reason": remote_error or "transfer setup failed"})
                 continue
 
-            worker_path = translate_path(src, selected.get("path_mappings") or [])
             if not worker_path:
                 skipped.append({"path": src, "reason": "no path mapping for worker"})
                 continue
-            jobs_payload.append({"src": worker_path, "preset": preset})
+            jobs_payload.append({"src": worker_path, "original_path": src, "preset": effective_preset, "preset_bundle": preset_bundle})
 
         if not jobs_payload:
             return jsonify(error="no worker-queueable files", skipped=skipped), 400
@@ -4014,6 +4059,49 @@ def register_routes(app):
             )
         except Exception as e:
             return jsonify(error=str(e), skipped=skipped), 400
+
+        result_skipped = result.get("skipped") if isinstance(result.get("skipped"), list) else []
+        if selected_mode == "auto" and result_skipped:
+            retry_payload = []
+            retried_paths = set()
+            remaining_result_skipped = []
+            for item in result_skipped:
+                if not isinstance(item, dict):
+                    remaining_result_skipped.append(item)
+                    continue
+                reason = str(item.get("reason") or "").lower()
+                original_path = str(item.get("path") or "").strip()
+                if reason not in {"not a file", "path not allowed"} or not original_path or original_path in retried_paths:
+                    remaining_result_skipped.append(item)
+                    continue
+                if not is_allowed_path(original_path) or not os.path.isfile(original_path):
+                    remaining_result_skipped.append(item)
+                    continue
+                effective_preset = guess_preset_from_filename(os.path.basename(original_path)) if preset == "auto" else preset
+                preset_bundle = _node_preset_bundle(effective_preset)
+                remote_payload, remote_error = build_remote_job_payload(original_path, effective_preset, preset_bundle)
+                if remote_payload:
+                    retry_payload.append(remote_payload)
+                    retried_paths.add(original_path)
+                else:
+                    remaining_result_skipped.append({"path": original_path, "reason": remote_error or "transfer setup failed"})
+
+            if retry_payload:
+                try:
+                    retry_result = signed_json_request(
+                        selected,
+                        "/api/node/jobs",
+                        method="POST",
+                        body={"jobs": retry_payload},
+                        timeout=15,
+                    )
+                    result["count"] = int(result.get("count") or 0) + int(retry_result.get("count") or 0)
+                    result_skipped = remaining_result_skipped + (retry_result.get("skipped") or [])
+                    result["skipped"] = result_skipped
+                except Exception as e:
+                    result_skipped = remaining_result_skipped + [{"path": path, "reason": f"remote fallback failed: {str(e)[:120]}"} for path in sorted(retried_paths)]
+                    result["skipped"] = result_skipped
+
         _refresh_linked_node(selected)
         return jsonify(ok=True, target=public_node(selected), count=result.get("count", 0), skipped=skipped + (result.get("skipped") or []), transfer_mode=selected_mode)
 
@@ -4511,6 +4599,12 @@ def register_routes(app):
     def jobs_summary():
         """Return dashboard metrics for the jobs page."""
         return jsonify(summary=get_job_summary())
+
+    @app.route("/jobs/clear_error_status", methods=["POST"])
+    def jobs_clear_error_status():
+        """Clear error jobs and archived error counters without touching successful savings totals."""
+        cleared = clear_error_status()
+        return jsonify(ok=True, cleared=cleared, summary=get_job_summary())
 
     # ------------- Job log download -------------
 

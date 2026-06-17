@@ -71,10 +71,25 @@ queue_paused: bool = False
 dispatcher_started: bool = False
 dashboard_totals: dict[str, float | int] = {}
 TRANSFER_WORK_DIR = os.path.join(DATA_DIR, "node_transfer_work")
+PRESET_WORK_DIR = os.path.join(DATA_DIR, "node_job_presets")
+OUTPUT_ESTIMATE_CHECKPOINTS = (2, 10, 25, 60, 90)
 
 
 def _now_ts() -> float:
     return float(time.time())
+
+
+def _remote_transfer_temp_root(transfer: dict | None = None) -> str:
+    transfer = transfer if isinstance(transfer, dict) else {}
+    value = str(transfer.get("remote_temp_dir") or "").strip()
+    if not value:
+        try:
+            value = str(load_settings().get("remote_transfer_temp_dir") or "").strip()
+        except Exception:
+            value = ""
+    if not value:
+        value = TRANSFER_WORK_DIR
+    return os.path.abspath(os.path.expanduser(value))
 
 
 def _empty_dashboard_totals() -> dict[str, float | int]:
@@ -296,7 +311,123 @@ def _safe_transfer_filename(name: str, fallback: str = "source.mkv") -> str:
     return value or fallback
 
 
-def _download_transfer_source(url: str, token: str, worker_node_id: str, destination: str, expected_size: int = 0) -> int:
+def _human_rate(bytes_per_second: float) -> str:
+    try:
+        value = float(bytes_per_second or 0.0)
+    except Exception:
+        value = 0.0
+    if value <= 0:
+        return ""
+    mb = value / (1024 ** 2)
+    if mb >= 1:
+        return f"{mb:.2f} MB/s"
+    return f"{max(1, round(value / 1024))} KB/s"
+
+
+def _transfer_progress_payload(phase: str, transferred: int, total: int, started_at: float) -> dict:
+    now = _now_ts()
+    elapsed = max(0.001, now - float(started_at or now))
+    transferred_i = max(0, int(transferred or 0))
+    total_i = max(0, int(total or 0))
+    speed = transferred_i / elapsed if transferred_i > 0 else 0.0
+    remaining = max(0, total_i - transferred_i) if total_i else 0
+    percent = (transferred_i / total_i * 100.0) if total_i else 0.0
+    eta = int(round(remaining / speed)) if speed > 0 and remaining > 0 else None
+    return {
+        "phase": phase,
+        "bytes": transferred_i,
+        "total_bytes": total_i,
+        "remaining_bytes": remaining,
+        "percent": round(max(0.0, min(100.0, percent)), 2),
+        "speed_bps": round(speed, 2),
+        "speed_label": _human_rate(speed),
+        "eta_seconds": eta,
+        "updated_at": now,
+    }
+
+
+def _normalize_preset_bundle(bundle) -> dict | None:
+    if not isinstance(bundle, dict):
+        return None
+    contents = bundle.get("contents")
+    if isinstance(contents, dict):
+        contents = json.dumps(contents, indent=2)
+    contents = str(contents or "")
+    if not contents.strip():
+        return None
+    try:
+        json.loads(contents)
+    except Exception:
+        return None
+    file_name = _safe_transfer_filename(bundle.get("file_name") or bundle.get("filename") or "controller-preset.json", "controller-preset.json")
+    if not file_name.lower().endswith(".json"):
+        file_name += ".json"
+    return {
+        "key": str(bundle.get("key") or "").strip()[:32],
+        "file_name": file_name,
+        "name": str(bundle.get("name") or "").strip()[:160],
+        "contents": contents,
+        "source": "controller",
+    }
+
+
+def _materialize_job_preset(job_id: str, bundle) -> tuple[str, str, str] | None:
+    clean = _normalize_preset_bundle(bundle)
+    if not clean:
+        return None
+    work_dir = os.path.join(PRESET_WORK_DIR, str(job_id))
+    os.makedirs(work_dir, exist_ok=True)
+    path = os.path.join(work_dir, clean["file_name"])
+    with open(path, "w", encoding="utf-8") as f:
+        f.write(clean["contents"])
+    return path, clean.get("name") or "", work_dir
+
+
+def _cleanup_job_preset_dir(path: str) -> None:
+    if not path:
+        return
+    try:
+        real = os.path.realpath(path)
+        root = os.path.realpath(PRESET_WORK_DIR)
+        if os.path.commonpath([real, root]) == root and os.path.isdir(real):
+            shutil.rmtree(real, ignore_errors=True)
+    except Exception:
+        pass
+
+
+def _maybe_update_output_estimate(job: dict, out_path: str, progress: float) -> bool:
+    try:
+        pct = float(progress or 0.0)
+    except Exception:
+        return False
+    if pct <= 0 or pct >= 100 or not out_path:
+        return False
+
+    seen = job.get("estimate_checkpoints_seen")
+    if not isinstance(seen, list):
+        seen = []
+    next_checkpoint = next((point for point in OUTPUT_ESTIMATE_CHECKPOINTS if pct >= point and point not in seen), None)
+    if next_checkpoint is None:
+        return False
+
+    seen.append(next_checkpoint)
+    job["estimate_checkpoints_seen"] = seen
+    try:
+        current_bytes = int(os.path.getsize(out_path))
+    except Exception:
+        return True
+    if current_bytes <= 0:
+        return True
+
+    estimated = int(round(current_bytes / max(0.01, pct / 100.0)))
+    job["estimated_out_bytes"] = estimated
+    job["estimated_out_current_bytes"] = current_bytes
+    job["estimated_out_checked_progress"] = round(pct, 2)
+    job["estimated_out_updated_at"] = _now_ts()
+    return True
+
+
+def _download_transfer_source(url: str, token: str, worker_node_id: str, destination: str, expected_size: int = 0, progress_callback=None) -> int:
     if not url or not token:
         raise RuntimeError("transfer download is missing URL or token")
     os.makedirs(os.path.dirname(destination), exist_ok=True)
@@ -311,11 +442,23 @@ def _download_transfer_source(url: str, token: str, worker_node_id: str, destina
     )
     try:
         with urlopen(req, timeout=60) as res, open(part_path, "wb") as f:
+            transferred = 0
+            header_size = 0
+            try:
+                header_size = int(res.headers.get("Content-Length") or 0)
+            except Exception:
+                header_size = 0
+            total = int(expected_size or header_size or 0)
+            if progress_callback:
+                progress_callback("downloading", 0, total, force=True)
             while True:
                 chunk = res.read(1024 * 1024)
                 if not chunk:
                     break
                 f.write(chunk)
+                transferred += len(chunk)
+                if progress_callback:
+                    progress_callback("downloading", transferred, total)
     except HTTPError as e:
         try:
             detail = e.read().decode("utf-8", errors="replace")
@@ -332,11 +475,13 @@ def _download_transfer_source(url: str, token: str, worker_node_id: str, destina
         except FileNotFoundError:
             pass
         raise RuntimeError(f"downloaded source size mismatch ({size} != {expected_size})")
+    if progress_callback:
+        progress_callback("downloaded", size, int(expected_size or size), force=True)
     os.replace(part_path, destination)
     return size
 
 
-def _upload_transfer_output(url: str, token: str, worker_node_id: str, out_path: str, *, job_id: str, duration_seconds: float | None) -> dict:
+def _upload_transfer_output(url: str, token: str, worker_node_id: str, out_path: str, *, job_id: str, duration_seconds: float | None, progress_callback=None) -> dict:
     if not url or not token:
         raise RuntimeError("transfer upload is missing URL or token")
     parsed = urlparse(url)
@@ -360,11 +505,19 @@ def _upload_transfer_output(url: str, token: str, worker_node_id: str, out_path:
             conn.putheader("X-Encode-Duration-Seconds", str(round(float(duration_seconds), 3)))
         conn.endheaders()
         with open(out_path, "rb") as f:
+            sent = 0
+            if progress_callback:
+                progress_callback("uploading", 0, size, force=True)
             while True:
                 chunk = f.read(1024 * 1024)
                 if not chunk:
                     break
                 conn.send(chunk)
+                sent += len(chunk)
+                if progress_callback:
+                    progress_callback("uploading", sent, size)
+        if progress_callback:
+            progress_callback("uploaded", size, size, force=True)
         res = conn.getresponse()
         body = res.read().decode("utf-8", errors="replace")
         try:
@@ -378,12 +531,12 @@ def _upload_transfer_output(url: str, token: str, worker_node_id: str, out_path:
         conn.close()
 
 
-def _cleanup_transfer_work_dir(path: str) -> None:
+def _cleanup_transfer_work_dir(path: str, transfer: dict | None = None) -> None:
     if not path:
         return
     try:
         real = os.path.realpath(path)
-        root = os.path.realpath(TRANSFER_WORK_DIR)
+        root = os.path.realpath(_remote_transfer_temp_root(transfer))
         if os.path.commonpath([real, root]) == root and os.path.isdir(real):
             shutil.rmtree(real, ignore_errors=True)
     except Exception:
@@ -399,6 +552,8 @@ def _remote_transfer_public(transfer: dict | None) -> dict:
         "source_basename": transfer.get("source_basename") or "",
         "source_size": transfer.get("source_size") or 0,
         "status": transfer.get("status") or "",
+        "remote_temp_dir": transfer.get("remote_temp_dir") or "",
+        "progress": transfer.get("progress") if isinstance(transfer.get("progress"), dict) else {},
     }
 
 
@@ -425,12 +580,18 @@ def save_jobs():
                 "extra_args": j.get("extra_args", ""),
                 "mode": j.get("mode", "local"),
                 "transfer": j.get("transfer") if isinstance(j.get("transfer"), dict) else None,
+                "preset_bundle": _normalize_preset_bundle(j.get("preset_bundle")),
                 "log": j.get("log", ""),
                 "returncode": j.get("returncode"),
                 "pid": None,  # never persist the actual pid
                 "progress": float(j.get("progress") or 0.0),
                 # NEW: persist ETA if present
                 "eta_seconds": j.get("eta_seconds"),
+                "estimated_out_bytes": j.get("estimated_out_bytes"),
+                "estimated_out_current_bytes": j.get("estimated_out_current_bytes"),
+                "estimated_out_checked_progress": j.get("estimated_out_checked_progress"),
+                "estimated_out_updated_at": j.get("estimated_out_updated_at"),
+                "estimate_checkpoints_seen": j.get("estimate_checkpoints_seen") if isinstance(j.get("estimate_checkpoints_seen"), list) else [],
                 # Storage tracking
                 "src_bytes": j.get("src_bytes"),
                 "out_bytes": j.get("out_bytes"),
@@ -500,12 +661,18 @@ def load_jobs():
                 "extra_args": j.get("extra_args", ""),
                 "mode": j.get("mode", "local"),
                 "transfer": j.get("transfer") if isinstance(j.get("transfer"), dict) else None,
+                "preset_bundle": _normalize_preset_bundle(j.get("preset_bundle")),
                 "log": j.get("log", ""),
                 "returncode": j.get("returncode"),
                 "pid": None,
                 "progress": float(j.get("progress") or 0.0),
                 # NEW: restore ETA if it was saved
                 "eta_seconds": j.get("eta_seconds"),
+                "estimated_out_bytes": j.get("estimated_out_bytes"),
+                "estimated_out_current_bytes": j.get("estimated_out_current_bytes"),
+                "estimated_out_checked_progress": j.get("estimated_out_checked_progress"),
+                "estimated_out_updated_at": j.get("estimated_out_updated_at"),
+                "estimate_checkpoints_seen": j.get("estimate_checkpoints_seen") if isinstance(j.get("estimate_checkpoints_seen"), list) else [],
                 # Storage tracking
                 "src_bytes": j.get("src_bytes"),
                 "out_bytes": j.get("out_bytes"),
@@ -564,7 +731,7 @@ def _find_existing_active_job_for_src(src: str) -> str | None:
 # Core job creation / lookup helpers (used by routes)
 # -------------------------------------------------------------------
 
-def create_job(src: str, preset: str, extra_args: str = "") -> str:
+def create_job(src: str, preset: str, extra_args: str = "", preset_bundle: dict | None = None) -> str:
     """
     Create a single job and append it to the queue.
 
@@ -597,11 +764,17 @@ def create_job(src: str, preset: str, extra_args: str = "") -> str:
         "extra_args": extra_args or "",
         "mode": "local",
         "transfer": None,
+        "preset_bundle": _normalize_preset_bundle(preset_bundle),
         "log": "",
         "returncode": None,
         "pid": None,
         "progress": 0.0,
         "eta_seconds": None,  # if you already added ETA support
+        "estimated_out_bytes": None,
+        "estimated_out_current_bytes": None,
+        "estimated_out_checked_progress": None,
+        "estimated_out_updated_at": None,
+        "estimate_checkpoints_seen": [],
         # Storage tracking (filled on completion)
         "src_bytes": None,
         "out_bytes": None,
@@ -664,11 +837,17 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
             "preset": preset,
             "mode": "local",
             "transfer": None,
+            "preset_bundle": None,
             "log": "",
             "returncode": None,
             "pid": None,
             "progress": 0.0,
             "eta_seconds": None,  # remove if you don't use ETA
+            "estimated_out_bytes": None,
+            "estimated_out_current_bytes": None,
+            "estimated_out_checked_progress": None,
+            "estimated_out_updated_at": None,
+            "estimate_checkpoints_seen": [],
             "src_bytes": None,
             "out_bytes": None,
             "saved_bytes": None,
@@ -696,7 +875,7 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
     return count
 
 
-def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args: str = "") -> tuple[str, bool]:
+def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args: str = "", preset_bundle: dict | None = None) -> tuple[str, bool]:
     """
     Queue a job whose source is downloaded from a paired controller/storage node.
 
@@ -720,6 +899,7 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "original_path": display_src,
         "source_basename": _safe_transfer_filename(transfer.get("source_basename") or os.path.basename(display_src)),
         "source_size": int(transfer.get("source_size") or 0),
+        "remote_temp_dir": str(transfer.get("remote_temp_dir") or "").strip()[:500],
         "status": "queued",
     }
     jobs[job_id] = {
@@ -729,11 +909,17 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "extra_args": extra_args or "",
         "mode": "remote_transfer",
         "transfer": clean_transfer,
+        "preset_bundle": _normalize_preset_bundle(preset_bundle),
         "log": "",
         "returncode": None,
         "pid": None,
         "progress": 0.0,
         "eta_seconds": None,
+        "estimated_out_bytes": None,
+        "estimated_out_current_bytes": None,
+        "estimated_out_checked_progress": None,
+        "estimated_out_updated_at": None,
+        "estimate_checkpoints_seen": [],
         "src_bytes": clean_transfer["source_size"] or None,
         "out_bytes": None,
         "saved_bytes": None,
@@ -805,6 +991,13 @@ def list_jobs_for_api() -> list[dict]:
                 "progress": float(j.get("progress") or 0.0),
                 "eta_seconds": eta_val,
                 "has_log": has_log,
+                "estimated_out_bytes": j.get("estimated_out_bytes"),
+                "estimated_out_gb": round((int(j.get("estimated_out_bytes") or 0) / (1024**3)), 3)
+                if j.get("estimated_out_bytes") is not None
+                else None,
+                "estimated_out_current_bytes": j.get("estimated_out_current_bytes"),
+                "estimated_out_checked_progress": j.get("estimated_out_checked_progress"),
+                "estimated_out_updated_at": j.get("estimated_out_updated_at"),
                 # Storage tracking
                 "src_bytes": j.get("src_bytes"),
                 "out_bytes": j.get("out_bytes"),
@@ -858,6 +1051,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else {}
     remote_transfer = job.get("mode") == "remote_transfer" and bool(transfer)
     transfer_work_dir = ""
+    preset_work_dir = ""
 
     job["status"] = "running"
     job["progress"] = 0.0
@@ -871,10 +1065,37 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job["saved_bytes"] = None
     job["out_path"] = None
     job["is_hdr"] = bool(job.get("is_hdr", False) or _looks_like_hdr_path(display_src_path))
+    job["estimated_out_bytes"] = None
+    job["estimated_out_current_bytes"] = None
+    job["estimated_out_checked_progress"] = None
+    job["estimated_out_updated_at"] = None
+    job["estimate_checkpoints_seen"] = []
+
+    transfer_progress_state = {"phase": "", "started_at": _now_ts(), "last_save": 0.0}
+
+    def update_transfer_progress(phase: str, transferred: int, total: int, force: bool = False) -> None:
+        if not remote_transfer:
+            return
+        now = _now_ts()
+        if phase != transfer_progress_state.get("phase"):
+            transfer_progress_state["phase"] = phase
+            transfer_progress_state["started_at"] = now
+            transfer_progress_state["last_save"] = 0.0
+        transfer["status"] = phase
+        transfer["progress"] = _transfer_progress_payload(
+            phase,
+            int(transferred or 0),
+            int(total or 0),
+            float(transfer_progress_state.get("started_at") or now),
+        )
+        job["transfer"] = transfer
+        if force or now - float(transfer_progress_state.get("last_save") or 0.0) >= 1.0:
+            transfer_progress_state["last_save"] = now
+            save_jobs()
 
     if remote_transfer:
         try:
-            transfer_work_dir = os.path.join(TRANSFER_WORK_DIR, job_id)
+            transfer_work_dir = os.path.join(_remote_transfer_temp_root(transfer), job_id)
             basename = _safe_transfer_filename(transfer.get("source_basename") or os.path.basename(display_src_path))
             encode_src_path = os.path.join(transfer_work_dir, basename)
             job["log"] = "Downloading source from controller...\n"
@@ -889,9 +1110,11 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                 transfer.get("worker_node_id") or "",
                 encode_src_path,
                 int(transfer.get("source_size") or 0),
+                progress_callback=update_transfer_progress,
             )
             job["src_bytes"] = downloaded_size
             transfer["status"] = "downloaded"
+            update_transfer_progress("downloaded", downloaded_size, int(transfer.get("source_size") or downloaded_size), force=True)
             job["transfer"] = transfer
             save_jobs()
         except Exception as e:
@@ -916,7 +1139,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             transfer.pop("local_src", None)
             transfer.pop("work_dir", None)
             job["transfer"] = transfer
-            _cleanup_transfer_work_dir(transfer_work_dir)
+            _cleanup_transfer_work_dir(transfer_work_dir, transfer)
             save_jobs()
             return
 
@@ -975,7 +1198,13 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
         # If hb_threads == 0 (auto), we simply do not set HB_THREADS.
 
     # Resolve HB_PRESET_FILE + HB_PRESET_NAME based on preset key ("1080" or "4k")
-    preset_file, preset_name = resolve_preset_file_and_name(preset_key)
+    preset_override = _materialize_job_preset(job_id, job.get("preset_bundle"))
+    if preset_override:
+        preset_file, preset_name, preset_work_dir = preset_override
+        if not preset_name:
+            _default_file, preset_name = resolve_preset_file_and_name(preset_key)
+    else:
+        preset_file, preset_name = resolve_preset_file_and_name(preset_key)
     env["HB_PRESET_FILE"] = preset_file
     env["HB_PRESET_NAME"] = preset_name
 
@@ -1025,6 +1254,9 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                     job["progress"] = float(m.group(1))
                 except ValueError:
                     pass
+                else:
+                    if _maybe_update_output_estimate(job, out_path, job["progress"]):
+                        save_jobs()
 
             # Parse ETA from this line, if present
             em = ETA_RE.search(line)
@@ -1056,6 +1288,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             if output_ok and out_path and os.path.isfile(out_path):
                 out_bytes = int(os.path.getsize(out_path))
                 job["out_bytes"] = out_bytes
+                job["estimated_out_bytes"] = out_bytes
 
                 src_bytes = job.get("src_bytes")
                 try:
@@ -1083,6 +1316,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                         out_path,
                         job_id=job_id,
                         duration_seconds=duration_seconds_for_stats,
+                        progress_callback=update_transfer_progress,
                     )
                     controller_out = upload_result.get("out_path") or out_path
                     controller_out_bytes = int(upload_result.get("out_bytes") or out_bytes)
@@ -1090,7 +1324,9 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                     job["out_path"] = controller_out
                     job["out_bytes"] = controller_out_bytes
                     job["saved_bytes"] = controller_saved
+                    job["estimated_out_bytes"] = controller_out_bytes
                     transfer["status"] = "complete"
+                    update_transfer_progress("complete", controller_out_bytes, controller_out_bytes, force=True)
                     transfer["controller_out_path"] = controller_out
                     transfer["source_deleted"] = bool(upload_result.get("source_deleted"))
                     job["transfer"] = transfer
@@ -1246,7 +1482,8 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
         transfer.pop("local_src", None)
         transfer.pop("work_dir", None)
         job["transfer"] = transfer
-        _cleanup_transfer_work_dir(transfer_work_dir)
+        _cleanup_transfer_work_dir(transfer_work_dir, transfer)
+    _cleanup_job_preset_dir(preset_work_dir)
     save_jobs()
 
 
@@ -1531,6 +1768,7 @@ def get_job_summary() -> dict:
         "error": int(archived.get("error") or 0),
         "canceled": int(archived.get("canceled") or 0),
     }
+    active_error_count = 0
     total_saved_bytes = int(archived.get("saved_bytes") or 0)
     live_done_runtime_seconds = 0.0
     live_error_runtime_seconds = 0.0
@@ -1540,6 +1778,8 @@ def get_job_summary() -> dict:
         status = str(job.get("status") or "").lower()
         if status in status_counts:
             status_counts[status] += 1
+        if status == "error":
+            active_error_count += 1
 
         try:
             total_saved_bytes += int(job.get("saved_bytes") or 0)
@@ -1598,6 +1838,7 @@ def get_job_summary() -> dict:
         "queue_paused": bool(queue_paused),
         "queued_count": len(queued_items),
         "running_job_id": running_job_id,
+        "active_error_count": active_error_count,
         "saved_bytes": total_saved_bytes,
         "saved_gb": round(total_saved_bytes / (1024**3), 3) if total_saved_bytes else 0.0,
         "total_runtime_seconds": round(total_runtime_seconds, 1),
@@ -1708,6 +1949,38 @@ def clear_finished_jobs() -> int:
     dashboard_totals = archived
     save_jobs()
     return removed
+
+
+def clear_error_status() -> int:
+    """Remove error jobs and reset archived error counts so the app status can return to idle."""
+    global jobs, job_queue, dashboard_totals
+
+    archived = _normalize_dashboard_totals(dashboard_totals)
+    cleared = int(archived.get("error") or 0)
+    archived["error"] = 0
+    archived["error_runtime_seconds"] = 0.0
+
+    for jid, job in list(jobs.items()):
+        if str(job.get("status") or "").lower() != "error":
+            continue
+        jobs.pop(jid, None)
+        cleared += 1
+        if jid in job_queue:
+            try:
+                job_queue.remove(jid)
+            except ValueError:
+                pass
+        log_path = os.path.join(LOG_DIR, f"{jid}.log")
+        try:
+            os.remove(log_path)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[WARN] Failed to remove error log for {jid}: {e}", flush=True)
+
+    dashboard_totals = archived
+    save_jobs()
+    return cleared
 
 def clear_queued_jobs() -> int:
     """
