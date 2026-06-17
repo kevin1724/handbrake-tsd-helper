@@ -397,34 +397,6 @@ The more jobs each node completes, the better that node's estimate gets.
 - ⚠️ Always keep backups of important media before enabling aggressive cleanup behavior
 
 ---
-
-## 🔐 API Keys And Cache Files
-
-Do not commit private runtime data.
-
-Keep these out of git:
-
-- `data/settings.json` if it contains TMDb credentials
-- `data/beta_library_cache.json`
-- `data/beta_scan_index.json`
-- `data/beta_tracked_shows.json`
-- `data/node_linking.json`
-- `data/jobs.json`
-- `data/storage_stats.json`
-- `data/logs/`
-
-Useful git command:
-
-```bash
-git add README.md webui worker presets Dockerfile docker-compose.yml .gitignore
-```
-
-Then check what is staged:
-
-```bash
-git status --short
-```
-
 ---
 
 ## 🔥 Performance Notes
