@@ -633,6 +633,29 @@ td button {
   background: rgba(255, 255, 255, 0.035);
 }
 
+.linked-node-encode-progress {
+  display: grid;
+  gap: 5px;
+  margin-top: 3px;
+}
+
+.linked-node-encode-bar {
+  height: 7px;
+  margin-bottom: 0;
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.linked-node-encode-fill {
+  background: linear-gradient(90deg, rgba(59, 130, 246, 0.7), rgba(22, 199, 214, 0.95));
+}
+
+.linked-node-encode-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  color: rgba(229, 229, 229, 0.72);
+}
+
 .linked-node-job-name {
   color: #fff;
   font-weight: 750;

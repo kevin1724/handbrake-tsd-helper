@@ -765,6 +765,74 @@ function createBadge(text, extraClass = '') {
   return span;
 }
 
+function getVisibleTransferProgress(transfer) {
+  const progress = transfer && typeof transfer === 'object' && transfer.progress && typeof transfer.progress === 'object'
+    ? transfer.progress
+    : null;
+  if (!progress) return null;
+
+  const phase = String(progress.phase || transfer.status || '').toLowerCase();
+  const labels = {
+    downloading: 'Downloading source',
+    uploading: 'Sending finished file back',
+    uploaded: 'Finished file uploaded',
+    complete: 'Finished file returned'
+  };
+
+  if (!labels[phase]) return null;
+  return { phase, label: labels[phase], progress };
+}
+
+function appendTransferProgress(parent, transfer) {
+  const visible = getVisibleTransferProgress(transfer);
+  if (!visible) return;
+
+  const transferPct = Number(visible.progress.percent || 0);
+  const transferBar = document.createElement('div');
+  transferBar.className = `transfer-mini-bar transfer-mini-bar-${visible.phase}`;
+  const transferFill = document.createElement('div');
+  transferFill.className = 'transfer-mini-fill';
+  transferFill.style.width = `${Math.max(0, Math.min(100, transferPct))}%`;
+  transferBar.appendChild(transferFill);
+  parent.appendChild(transferBar);
+
+  const transferLine = document.createElement('div');
+  transferLine.className = 'transfer-progress-line small';
+  const remaining = formatBytesForDisplay(visible.progress.remaining_bytes);
+  const speed = visible.progress.speed_label || '';
+  const showLiveStats = visible.phase === 'downloading' || visible.phase === 'uploading';
+  transferLine.textContent = `${visible.label} ${transferPct.toFixed(1)}%${showLiveStats && speed ? ` / ${speed}` : ''}${showLiveStats && remaining ? ` / ${remaining} left` : ''}`;
+  parent.appendChild(transferLine);
+}
+
+function appendEncodingProgress(parent, job) {
+  const progress = Number(job?.progress || 0);
+  const pct = Math.max(0, Math.min(100, Number.isFinite(progress) ? progress : 0));
+
+  const wrap = document.createElement('div');
+  wrap.className = 'linked-node-encode-progress';
+
+  const bar = document.createElement('div');
+  bar.className = 'job-progress-bar linked-node-encode-bar';
+  const fill = document.createElement('div');
+  fill.className = 'job-progress-fill linked-node-encode-fill';
+  fill.style.width = `${pct}%`;
+  bar.appendChild(fill);
+  wrap.appendChild(bar);
+
+  const line = document.createElement('div');
+  line.className = 'linked-node-encode-line small';
+  const label = document.createElement('span');
+  label.textContent = 'Encoding progress';
+  const value = document.createElement('span');
+  value.textContent = `${pct.toFixed(1)}%`;
+  line.appendChild(label);
+  line.appendChild(value);
+  wrap.appendChild(line);
+
+  parent.appendChild(wrap);
+}
+
 function createProgressCell(job) {
   const wrap = document.createElement('div');
   wrap.className = 'job-progress-wrap';
@@ -786,26 +854,7 @@ function createProgressCell(job) {
   wrap.appendChild(bar);
   wrap.appendChild(label);
 
-  const transfer = job.transfer && typeof job.transfer === 'object' ? job.transfer : null;
-  const transferProgress = transfer && transfer.progress && typeof transfer.progress === 'object' ? transfer.progress : null;
-  if (transferProgress && transferProgress.phase) {
-    const transferBar = document.createElement('div');
-    transferBar.className = 'transfer-mini-bar';
-    const transferFill = document.createElement('div');
-    transferFill.className = 'transfer-mini-fill';
-    const transferPct = Number(transferProgress.percent || 0);
-    transferFill.style.width = `${Math.max(0, Math.min(100, transferPct))}%`;
-    transferBar.appendChild(transferFill);
-    wrap.appendChild(transferBar);
-
-    const transferLine = document.createElement('div');
-    transferLine.className = 'transfer-progress-line small';
-    const phase = String(transferProgress.phase || '').replace(/_/g, ' ');
-    const remaining = formatBytesForDisplay(transferProgress.remaining_bytes);
-    const speed = transferProgress.speed_label || '';
-    transferLine.textContent = `${phase} ${transferPct.toFixed(1)}%${speed ? ` / ${speed}` : ''}${remaining ? ` / ${remaining} left` : ''}`;
-    wrap.appendChild(transferLine);
-  }
+  appendTransferProgress(wrap, job.transfer);
   return wrap;
 }
 
@@ -1177,22 +1226,8 @@ function renderLinkedNodeJobs(nodes) {
         row.appendChild(name);
         row.appendChild(detail);
 
-        const transfer = job.transfer?.progress;
-        if (transfer?.phase) {
-          const bar = document.createElement('div');
-          bar.className = 'transfer-mini-bar';
-          const fill = document.createElement('div');
-          fill.className = 'transfer-mini-fill';
-          fill.style.width = `${Math.max(0, Math.min(100, Number(transfer.percent || 0)))}%`;
-          bar.appendChild(fill);
-          row.appendChild(bar);
-
-          const t = document.createElement('div');
-          t.className = 'transfer-progress-line small';
-          const remaining = formatBytesForDisplay(transfer.remaining_bytes);
-          t.textContent = `${String(transfer.phase).replace(/_/g, ' ')} ${Number(transfer.percent || 0).toFixed(1)}%${transfer.speed_label ? ` / ${transfer.speed_label}` : ''}${remaining ? ` / ${remaining} left` : ''}`;
-          row.appendChild(t);
-        }
+        appendEncodingProgress(row, job);
+        appendTransferProgress(row, job.transfer);
 
         list.appendChild(row);
       });
