@@ -86,6 +86,8 @@ def record_encode(
     out_bytes: int,
     duration_seconds: float | None = None,
     is_hdr: bool | None = None,
+    node_id: str | None = None,
+    node_name: str | None = None,
 ) -> dict:
     """Record a successful encode's storage savings."""
     try:
@@ -116,6 +118,10 @@ def record_encode(
             pass
     if is_hdr is not None:
         row["is_hdr"] = bool(is_hdr)
+    if node_id:
+        row["node_id"] = str(node_id)
+    if node_name:
+        row["node_name"] = str(node_name)
 
     data = _load()
     encodes = _ensure_list(data.get("encodes"))

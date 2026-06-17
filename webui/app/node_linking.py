@@ -183,6 +183,7 @@ def public_node(row: dict) -> dict:
         "paired_at": row.get("paired_at") or 0,
         "paired_controllers": row.get("paired_controllers") if isinstance(row.get("paired_controllers"), list) else [],
         "jobs": row.get("jobs") if isinstance(row.get("jobs"), list) else [],
+        "prediction_profile": row.get("prediction_profile") if isinstance(row.get("prediction_profile"), dict) else {},
     }
 
 

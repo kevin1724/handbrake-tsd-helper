@@ -1515,12 +1515,15 @@ def _median(values: list[float]) -> float | None:
     return (float(values[mid - 1]) + float(values[mid])) / 2.0
 
 
-def _history_prediction_model() -> dict:
+def _history_prediction_model(node_id: str | None = None) -> dict:
     jobs_by_id = {row.get("id"): row for row in list_jobs_for_api()}
     buckets: dict[tuple[str, object], list[dict]] = {}
+    node_id = str(node_id or "").strip()
 
     for row in list_storage_encodes(limit=5000):
         if not isinstance(row, dict):
+            continue
+        if node_id and str(row.get("node_id") or "") != node_id:
             continue
         try:
             src_bytes = int(row.get("src_bytes") or 0)
@@ -1565,7 +1568,7 @@ def _history_prediction_model() -> dict:
         for key in ((preset, is_hdr), (preset, None), ("any", is_hdr), ("any", None)):
             buckets.setdefault(key, []).append(sample)
 
-    return {"buckets": buckets}
+    return {"buckets": buckets, "node_id": node_id}
 
 
 def _history_stats_from_samples(samples: list[dict]) -> dict | None:
@@ -1586,6 +1589,33 @@ def _history_stats_from_samples(samples: list[dict]) -> dict | None:
         "out_ratio": max(0.01, min(1.5, float(out_ratio))),
         "saved_ratio": max(0.0, min(1.0, float(saved_ratio or 0.0))),
         "seconds_per_gb": seconds_per_gb,
+    }
+
+
+def _history_prediction_profile(node_id: str | None = None) -> dict:
+    model = _history_prediction_model(node_id=node_id)
+    buckets = model.get("buckets") or {}
+    out = {}
+    total_samples = 0
+    for preset in ("1080", "4k", "any"):
+        for hdr_value, hdr_label in ((True, "hdr"), (False, "sdr"), (None, "any")):
+            stats = _history_stats_from_samples(buckets.get((preset, hdr_value)) or [])
+            if not stats:
+                continue
+            key = f"{preset}|{hdr_label}"
+            out[key] = {
+                "sample_count": int(stats.get("sample_count") or 0),
+                "runtime_sample_count": int(stats.get("runtime_sample_count") or 0),
+                "out_ratio": round(float(stats.get("out_ratio") or 0.0), 4),
+                "saved_ratio": round(float(stats.get("saved_ratio") or 0.0), 4),
+                "seconds_per_gb": round(float(stats.get("seconds_per_gb") or 0.0), 3) if stats.get("seconds_per_gb") else None,
+            }
+            if preset in {"1080", "4k"} and hdr_value is not None:
+                total_samples += int(stats.get("sample_count") or 0)
+    return {
+        "node_id": str(node_id or ""),
+        "sample_count": total_samples,
+        "buckets": out,
     }
 
 
@@ -2914,6 +2944,7 @@ def _refresh_linked_node(row: dict) -> dict:
             "last_error": "",
             "paired_controllers": data.get("paired_controllers") if isinstance(data.get("paired_controllers"), list) else [],
             "jobs": data.get("jobs") if isinstance(data.get("jobs"), list) else [],
+            "prediction_profile": data.get("prediction_profile") if isinstance(data.get("prediction_profile"), dict) else {},
         })
     except Exception as e:
         row.update({
@@ -3121,6 +3152,8 @@ def _finalize_transfer_output(row: dict, upload_tmp: str) -> dict:
         duration_seconds = float(request.headers.get("X-Encode-Duration-Seconds") or 0.0)
     except Exception:
         duration_seconds = 0.0
+    worker_node_id = str(row.get("worker_node_id") or "")
+    worker_node = get_node_private(worker_node_id) or {}
     record_encode(
         job_id=f"remote-{worker_job_id or transfer_id}",
         src=src,
@@ -3130,6 +3163,8 @@ def _finalize_transfer_output(row: dict, upload_tmp: str) -> dict:
         out_bytes=out_bytes,
         duration_seconds=duration_seconds if duration_seconds > 0 else None,
         is_hdr=bool(_path_looks_hdr(src)),
+        node_id=worker_node_id,
+        node_name=worker_node.get("name"),
     )
 
     source_deleted = False
@@ -3633,13 +3668,18 @@ def register_routes(app):
         return jsonify(ok=True, presets=_load_wizard_presets())
 
     @app.route("/settings")
-    def settings_page():
+    @app.route("/settings/<settings_page>")
+    def settings_page(settings_page="main"):
         """Render the settings page (global app settings)."""
+        settings_page = str(settings_page or "main").strip().lower()
+        if settings_page not in {"main", "beta", "nodes"}:
+            abort(404)
         settings = load_settings()
         preset_files = list_preset_files()
         return render_template(
             "settings.html",
             settings=settings,
+            settings_page=settings_page,
             preset_files=preset_files,
             preset_dir=PRESET_DIR,
             roots=_beta_roots_payload(settings),
@@ -3715,6 +3755,7 @@ def register_routes(app):
             paired_controllers=local["paired_controllers"],
             summary=get_job_summary(),
             jobs=list_jobs_for_api(),
+            prediction_profile=_history_prediction_profile(),
         )
 
     @app.route("/api/node/transfers/<transfer_id>/source")
@@ -3874,7 +3915,19 @@ def register_routes(app):
 
     @app.route("/api/nodes")
     def nodes_api():
-        return jsonify(local=local_node_overview(), nodes=list_nodes_public())
+        nodes = []
+        for node in list_nodes_public():
+            controller_profile = _history_prediction_profile(node.get("id"))
+            worker_profile = node.get("prediction_profile") if isinstance(node.get("prediction_profile"), dict) else {}
+            controller_samples = int(controller_profile.get("sample_count") or 0)
+            worker_samples = int(worker_profile.get("sample_count") or 0)
+            node["controller_prediction_profile"] = controller_profile
+            if controller_samples >= worker_samples and controller_samples > 0:
+                node["prediction_profile"] = controller_profile
+            elif worker_samples > 0:
+                node["prediction_profile"] = worker_profile
+            nodes.append(node)
+        return jsonify(local=local_node_overview(), nodes=nodes)
 
     @app.route("/api/nodes/pair", methods=["POST"])
     def nodes_pair_api():
@@ -3903,11 +3956,25 @@ def register_routes(app):
         if not row:
             return jsonify(error="node not found"), 404
         row = _refresh_linked_node(row)
-        return jsonify(ok=True, node=public_node(row))
+        node = public_node(row)
+        controller_profile = _history_prediction_profile(node.get("id"))
+        controller_samples = int(controller_profile.get("sample_count") or 0)
+        if controller_samples > 0 and controller_samples >= int((node.get("prediction_profile") or {}).get("sample_count") or 0):
+            node["prediction_profile"] = controller_profile
+        node["controller_prediction_profile"] = controller_profile
+        return jsonify(ok=True, node=node)
 
     @app.route("/api/nodes/refresh", methods=["POST"])
     def nodes_refresh_all_api():
-        nodes = [public_node(_refresh_linked_node(row)) for row in list_nodes_private()]
+        nodes = []
+        for row in list_nodes_private():
+            node = public_node(_refresh_linked_node(row))
+            controller_profile = _history_prediction_profile(node.get("id"))
+            controller_samples = int(controller_profile.get("sample_count") or 0)
+            if controller_samples > 0 and controller_samples >= int((node.get("prediction_profile") or {}).get("sample_count") or 0):
+                node["prediction_profile"] = controller_profile
+            node["controller_prediction_profile"] = controller_profile
+            nodes.append(node)
         return jsonify(ok=True, nodes=nodes)
 
     @app.route("/api/nodes/<node_id>/path_mappings", methods=["POST"])

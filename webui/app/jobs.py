@@ -1342,6 +1342,11 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                         },
                     )
                 else:
+                    try:
+                        from .node_linking import local_node_info
+                        local_node = local_node_info()
+                    except Exception:
+                        local_node = {}
                     # Persist to long-term history
                     record_encode(
                         job_id=job_id,
@@ -1352,6 +1357,8 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                         out_bytes=out_bytes,
                         duration_seconds=duration_seconds_for_stats,
                         is_hdr=bool(job.get("is_hdr", False)),
+                        node_id=local_node.get("id"),
+                        node_name=local_node.get("name"),
                     )
 
                     source_deleted = False

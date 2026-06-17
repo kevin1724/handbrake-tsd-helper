@@ -215,7 +215,7 @@
     }
   </style>
 </head>
-<body class="settings-page">
+<body class="settings-page settings-subpage-{{ settings_page|default('main') }}">
 
   <nav class="top-nav app-nav">
     <a href="/" class="app-brand">
@@ -237,17 +237,48 @@
   <main class="settings-shell">
     <header class="page-hero">
       <div>
-        <h1>Settings</h1>
-        <p class="page-subtitle">Tune encoding defaults, presets, library folders, posters, and UI behavior.</p>
+        <h1>
+          {% if settings_page == 'beta' %}
+            Beta Settings
+          {% elif settings_page == 'nodes' %}
+            Linked Node Settings
+          {% else %}
+            Settings
+          {% endif %}
+        </h1>
+        <p class="page-subtitle">
+          {% if settings_page == 'beta' %}
+            Library folders, posters, and automatic Beta scans.
+          {% elif settings_page == 'nodes' %}
+            Pair workers, choose local or remote transfer modes, and review node status.
+          {% else %}
+            Encoding defaults, presets, UI behavior, events, and storage history.
+          {% endif %}
+        </p>
       </div>
     </header>
+
+    <nav class="settings-section-nav" aria-label="Settings sections">
+      <a class="settings-section-link {% if settings_page == 'main' %}settings-section-link-active{% endif %}" href="/settings">
+        <strong>Main</strong>
+        <span>Encoding, presets, events, storage</span>
+      </a>
+      <a class="settings-section-link {% if settings_page == 'beta' %}settings-section-link-active{% endif %}" href="/settings/beta">
+        <strong>Beta</strong>
+        <span>Library folders, posters, auto scan</span>
+      </a>
+      <a class="settings-section-link {% if settings_page == 'nodes' %}settings-section-link-active{% endif %}" href="/settings/nodes">
+        <strong>Linked Nodes</strong>
+        <span>Pairing, transfer modes, workers</span>
+      </a>
+    </nav>
 
     <div class="settings-grid">
 
   <!-- ============================================================
        Global encoding settings
        ------------------------------------------------------------ -->
-  <div class="section-card">
+  <div class="section-card main-settings-section">
     <h2>Encoding settings</h2>
 
     <div class="row">
@@ -271,7 +302,7 @@
   <!-- ============================================================
        Preset files management
        ------------------------------------------------------------ -->
-  <div class="section-card">
+  <div class="section-card main-settings-section">
     <h2>Preset files</h2>
     <p class="small">
       Upload HandBrake <code>.json</code> preset files here. Stored in: <code>{{ preset_dir }}</code>
@@ -292,7 +323,7 @@
   <!-- ============================================================
        Preset Settings (saved defaults for Auto mode)
        ------------------------------------------------------------ -->
-  <div class="section-card">
+  <div class="section-card main-settings-section">
     <h2>Preset Settings (saved defaults for Auto mode)</h2>
     <p class="small">
       These control which HandBrake <code>.json</code> preset file is used when a job is tagged
@@ -326,7 +357,7 @@
   <!-- ============================================================
        Beta folder mapping
        ------------------------------------------------------------ -->
-  <div class="section-card">
+  <div class="section-card beta-settings-section">
     <h2>Beta library folders</h2>
     <p class="small">
       Map the exact movie and show folders Beta should scan. This keeps Beta away from unrelated folders.
@@ -337,7 +368,7 @@
     </div>
   </div>
 
-  <div class="section-card">
+  <div class="section-card beta-settings-section">
     <h2>Beta Auto Scan</h2>
     <p class="small">
       Incremental scans only re-parse new or changed media and can auto-queue stable new tracked episodes.
@@ -392,7 +423,7 @@
   <!-- ============================================================
        Poster metadata
        ------------------------------------------------------------ -->
-  <div class="section-card">
+  <div class="section-card beta-settings-section">
     <h2>Poster metadata</h2>
     <p class="small">
       Optional TMDb credentials for the Beta page. Blank fields keep poster lookup off and use local placeholders.
@@ -421,7 +452,7 @@
   <!-- ============================================================
        UI settings
        ------------------------------------------------------------ -->
-  <div class="section-card">
+  <div class="section-card main-settings-section">
     <h2>UI Settings</h2>
     <p class="small">
       Control how queued jobs are reordered on the Jobs page.
@@ -445,7 +476,7 @@
     </div>
   </div>
 
-  <div class="section-card settings-wide">
+  <div class="section-card settings-wide node-settings-section">
     <div class="section-heading-row">
       <div>
         <h2>Linked Nodes</h2>
@@ -643,7 +674,7 @@
   <!-- ============================================================
        Events feed (Lidarr-style)
        ------------------------------------------------------------ -->
-  <div class="section-card">
+  <div class="section-card main-settings-section">
     <h2>Events</h2>
     <p class="small">Recent activity (queue, encodes, errors, etc.).</p>
 
@@ -685,7 +716,7 @@
   <!-- ============================================================
        Storage savings history
        ------------------------------------------------------------ -->
-  <div class="section-card">
+  <div class="section-card main-settings-section">
     <h2>Storage Savings</h2>
     <p class="small">
       Tracks how much space was saved per encode and over time.

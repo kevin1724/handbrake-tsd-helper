@@ -522,6 +522,7 @@
         <select id="dispatchNodeSelect" disabled>
           <option value="">No workers paired</option>
         </select>
+        <span id="nodePredictionHint" class="small node-prediction-hint"></span>
         <button id="queueSelectedBtn" type="button" disabled>Queue selected</button>
         <button id="clearSelectedBtn" type="button">Clear selection</button>
         <span id="selectedCount" class="small">0 selected</span>
@@ -721,9 +722,24 @@
       return "Episode";
     }
 
+    function showEpisodes(item) {
+      const episodes = [];
+      if (Array.isArray(item?.files)) episodes.push(...item.files);
+      if (Array.isArray(item?.episodes)) episodes.push(...item.episodes);
+      (item?.seasons || []).forEach((season) => {
+        const seasonNumber = season?.season ?? season?.number ?? season?.season_number;
+        const seasonEpisodes = season?.episodes || season?.files || [];
+        seasonEpisodes.forEach((ep) => episodes.push({
+          ...ep,
+          season: ep?.season ?? seasonNumber
+        }));
+      });
+      return episodes;
+    }
+
     function seasonGroups(item) {
       const groups = new Map();
-      (item.files || []).forEach((ep) => {
+      showEpisodes(item).forEach((ep) => {
         const number = ep.season ?? "unknown";
         if (!groups.has(number)) {
           groups.set(number, {
@@ -779,6 +795,124 @@
       const count = selectionCount();
       el("selectedCount").textContent = `${count} selected`;
       el("queueSelectedBtn").disabled = count === 0;
+      updateNodePredictionHint();
+    }
+
+    function selectedNodeForPrediction() {
+      const mode = el("dispatchModeSelect")?.value || "local";
+      if (mode !== "node") return null;
+      const nodeId = el("dispatchNodeSelect")?.value || "";
+      return linkedNodes.find((node) => String(node.id || "") === String(nodeId)) || null;
+    }
+
+    function presetForPath(path) {
+      const selected = el("queuePresetSelect")?.value || "auto";
+      if (selected === "1080" || selected === "4k") return selected;
+      const lower = String(path || "").toLowerCase();
+      return /(?:2160p|4k|uhd)/.test(lower) ? "4k" : "1080";
+    }
+
+    function pathInfo(path) {
+      for (const movie of libraryData.movies || []) {
+        if (movie?.path === path) {
+          return {
+            path,
+            size_bytes: Number(movie.size_bytes || 0) || 0,
+            is_hdr: Boolean(movie.is_hdr),
+            preset: presetForPath(path)
+          };
+        }
+      }
+      for (const show of libraryData.shows || []) {
+        for (const ep of showEpisodes(show)) {
+          if (ep?.path === path) {
+            return {
+              path,
+              size_bytes: Number(ep.size_bytes || 0) || 0,
+              is_hdr: Boolean(ep.is_hdr),
+              preset: presetForPath(path)
+            };
+          }
+        }
+      }
+      return { path, size_bytes: 0, is_hdr: false, preset: presetForPath(path) };
+    }
+
+    function nodePredictionStats(profile, preset, isHdr) {
+      const buckets = profile?.buckets || {};
+      const hdrKey = isHdr ? "hdr" : "sdr";
+      return buckets[`${preset}|${hdrKey}`]
+        || buckets[`${preset}|any`]
+        || buckets[`any|${hdrKey}`]
+        || buckets["any|any"]
+        || null;
+    }
+
+    function estimateNodeSelection(node, paths) {
+      const profile = node?.prediction_profile || {};
+      const infos = (paths || []).map(pathInfo).filter((info) => info.size_bytes > 0);
+      if (!node || !infos.length || !profile || !profile.buckets) return null;
+      let estimatedOut = 0;
+      let estimatedSaved = 0;
+      let estimatedRuntime = 0;
+      let hasRuntime = false;
+      let sampleCount = 0;
+      let predictedCount = 0;
+
+      infos.forEach((info) => {
+        const stats = nodePredictionStats(profile, info.preset, info.is_hdr);
+        if (!stats) return;
+        const outRatio = Number(stats.out_ratio || 0);
+        if (outRatio > 0) {
+          const out = Math.round(info.size_bytes * outRatio);
+          estimatedOut += out;
+          estimatedSaved += Math.max(0, info.size_bytes - out);
+          predictedCount += 1;
+        }
+        const secondsPerGb = Number(stats.seconds_per_gb || 0);
+        if (secondsPerGb > 0) {
+          estimatedRuntime += Math.round((info.size_bytes / (1024 ** 3)) * secondsPerGb);
+          hasRuntime = true;
+        }
+        sampleCount += Number(stats.sample_count || 0) || 0;
+      });
+
+      if (!predictedCount && !hasRuntime) return null;
+      return {
+        estimated_out_bytes: estimatedOut || null,
+        estimated_saved_bytes: estimatedSaved || null,
+        estimated_runtime_seconds: hasRuntime ? estimatedRuntime : null,
+        sample_count: sampleCount,
+        predicted_count: predictedCount,
+        total_count: infos.length
+      };
+    }
+
+    function updateNodePredictionHint() {
+      const hint = el("nodePredictionHint");
+      if (!hint) return;
+      const node = selectedNodeForPrediction();
+      const paths = Array.from(selectedPaths);
+      if (!node) {
+        hint.textContent = (el("dispatchModeSelect")?.value || "local") === "node" ? "Pick a worker for node ETA." : "";
+        return;
+      }
+      if (!paths.length) {
+        hint.textContent = "Select files to estimate this worker.";
+        return;
+      }
+      const estimate = estimateNodeSelection(node, paths);
+      if (!estimate) {
+        hint.textContent = `${node.name || "Worker"} ETA: learning from this node's history.`;
+        return;
+      }
+      const bits = [];
+      const runtime = fmtDuration(estimate.estimated_runtime_seconds);
+      if (runtime) bits.push(runtime);
+      if (estimate.estimated_out_bytes) bits.push(`${fmtBytes(estimate.estimated_out_bytes)} final`);
+      if (estimate.estimated_saved_bytes) bits.push(`${fmtBytes(estimate.estimated_saved_bytes)} saved`);
+      const samples = Number(estimate.sample_count || 0);
+      hint.textContent = `${node.name || "Worker"} estimate: ${bits.join(" / ")} (${samples} node sample${samples === 1 ? "" : "s"})`;
     }
 
     function updateDispatchControls() {
@@ -802,17 +936,25 @@
         });
       }
       nodeSelect.disabled = mode !== "node" || linkedNodes.length === 0;
+      updateNodePredictionHint();
     }
 
     async function loadLinkedNodesForDispatch() {
       try {
-        const res = await fetch("/api/nodes");
+        const res = await fetch("/api/nodes/refresh", { method: "POST" });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Failed to load nodes");
         linkedNodes = Array.isArray(data.nodes) ? data.nodes : [];
         updateDispatchControls();
       } catch (err) {
-        linkedNodes = [];
+        try {
+          const res = await fetch("/api/nodes");
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || "Failed to load nodes");
+          linkedNodes = Array.isArray(data.nodes) ? data.nodes : [];
+        } catch (_fallbackErr) {
+          linkedNodes = [];
+        }
         updateDispatchControls();
       }
     }
@@ -1285,7 +1427,7 @@
         body.appendChild(note);
       }
 
-      const first = Array.isArray(item.files) ? item.files[0] : null;
+      const first = showEpisodes(item)[0] || null;
       const actions = document.createElement("div");
       actions.className = "beta-card-actions";
       if (first) {
@@ -1473,6 +1615,8 @@
       el("queueSelectedBtn").addEventListener("click", queueSelected);
       el("clearSelectedBtn").addEventListener("click", clearSelection);
       el("dispatchModeSelect").addEventListener("change", updateDispatchControls);
+      el("dispatchNodeSelect").addEventListener("change", updateNodePredictionHint);
+      el("queuePresetSelect").addEventListener("change", updateNodePredictionHint);
       el("posterToggle").checked = true;
       loadLinkedNodesForDispatch();
       updateSelectionUi();

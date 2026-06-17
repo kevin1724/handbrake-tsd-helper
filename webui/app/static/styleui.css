@@ -1021,6 +1021,56 @@ a {
   margin-bottom: 18px;
 }
 
+.settings-section-nav {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin: 0 0 18px;
+}
+
+.settings-section-link {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--text);
+  text-decoration: none;
+  transition: border-color 0.16s ease, background 0.16s ease, transform 0.16s ease;
+}
+
+.settings-section-link:hover {
+  border-color: rgba(22, 199, 214, 0.34);
+  background: rgba(22, 199, 214, 0.08);
+  text-decoration: none;
+  transform: translateY(-1px);
+}
+
+.settings-section-link strong {
+  color: #fff;
+}
+
+.settings-section-link span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.settings-section-link-active {
+  border-color: rgba(22, 199, 214, 0.42);
+  background: rgba(22, 199, 214, 0.13);
+}
+
+body.settings-subpage-main .beta-settings-section,
+body.settings-subpage-main .node-settings-section,
+body.settings-subpage-beta .main-settings-section,
+body.settings-subpage-beta .node-settings-section,
+body.settings-subpage-nodes .main-settings-section,
+body.settings-subpage-nodes .beta-settings-section {
+  display: none;
+}
+
 .section-card h2 {
   margin-bottom: 12px;
 }
@@ -1055,6 +1105,22 @@ button {
   padding: 8px 11px;
   outline: none;
   transition: border-color 0.16s ease, background 0.16s ease, box-shadow 0.16s ease, transform 0.16s ease;
+}
+
+select {
+  color-scheme: dark;
+  background-color: #1b222c;
+}
+
+select option,
+select optgroup {
+  background-color: #111820;
+  color: #edf3f7;
+}
+
+select option:checked {
+  background-color: #0d7d88;
+  color: #ffffff;
 }
 
 input[readonly] {
@@ -1558,6 +1624,12 @@ body.beta-page .beta-bulkbar {
   padding: 12px;
   border-radius: var(--radius);
   background: rgba(0, 0, 0, 0.18);
+}
+
+.node-prediction-hint {
+  align-self: center;
+  min-width: 180px;
+  color: #baf7fb;
 }
 
 body.beta-page .beta-layout {
@@ -2213,6 +2285,10 @@ body.settings-page .folder-add-choice {
   .wizard-heading {
     align-items: flex-start;
     flex-direction: column;
+  }
+
+  .settings-section-nav {
+    grid-template-columns: 1fr;
   }
 
   .jobs-action-grid,
