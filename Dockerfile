@@ -2,12 +2,10 @@
 # HandBrake TSD Helper - WebUI + Worker
 # ===============================
 
-
 FROM python:3.11-slim-bookworm
 
 # ------------------------------------------------
 # Enable contrib + non-free + non-free-firmware
-# Needed for Intel iGPU media drivers.
 # ------------------------------------------------
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
@@ -21,11 +19,7 @@ RUN set -eux; \
     apt-get update
 
 # ------------------------------------------------
-# System deps
-#
-# handbrake-cli is kept for software encodes.
-# FFmpeg + VAAPI are used by worker/encode-one.sh for GPU encodes because
-# FFmpeg already works with your Intel GPU while Debian trixie HandBrake QSV fails.
+# System deps + HandBrakeCLI + FFmpeg + Intel VAAPI/QSV tools
 # ------------------------------------------------
 RUN apt-get install -y --no-install-recommends \
         handbrake-cli \
@@ -33,16 +27,14 @@ RUN apt-get install -y --no-install-recommends \
         bash \
         ca-certificates \
         jq \
-        \
-        # VAAPI runtime + info tool
+        pciutils \
+        procps \
+        vainfo \
         libva2 \
         libva-drm2 \
         libva-x11-2 \
-        vainfo \
-        \
-        # Intel iGPU media drivers
         intel-media-va-driver-non-free \
-        i965-va-driver-shaders \
+        intel-gpu-tools \
     && rm -rf /var/lib/apt/lists/*
 
 # -------------------------------
@@ -73,18 +65,7 @@ RUN pip install --no-cache-dir flask
 # -------------------------------
 ENV HB_DATA_DIR=/app/data
 ENV HB_PRESET_DIR=/presets
-
-# Force Intel iHD driver for newer Intel iGPUs like UHD 630.
 ENV LIBVA_DRIVER_NAME=iHD
-
-# Default GPU path used by FFmpeg VAAPI mode.
-ENV VAAPI_DEVICE=/dev/dri/renderD128
-
-# auto = use FFmpeg VAAPI when qsv_* encoder is requested, otherwise HandBrake.
-# handbrake = always use HandBrakeCLI.
-# vaapi = force FFmpeg VAAPI.
-ENV TSD_GPU_MODE=auto
-
 ENV PYTHONPATH=/app
 ENV FLASK_ENV=development
 ENV FLASK_DEBUG=1
@@ -94,4 +75,5 @@ ENV PYTHONUNBUFFERED=1
 # Expose port & start app
 # -------------------------------
 EXPOSE 8080
+
 CMD ["python", "-m", "webui.app"]
