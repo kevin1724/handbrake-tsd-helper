@@ -1193,7 +1193,9 @@ function renderLinkedNodeJobs(nodes) {
     meta.className = 'node-message small';
     const counts = node.summary?.counts || {};
     const mode = node.transfer_mode === 'remote' ? 'remote' : (node.transfer_mode === 'auto' ? 'auto' : 'local');
-    meta.textContent = `${node.url || ''} / ${mode} / queued ${counts.queued || 0} / running ${counts.running || 0} / errors ${counts.error || 0}`;
+    const missText = Number(node.heartbeat_misses || 0) > 0 ? ` / missed ${node.heartbeat_misses}` : '';
+    const ageText = node.last_heartbeat_age_seconds != null ? ` / heartbeat age ${Math.round(Number(node.last_heartbeat_age_seconds || 0))}s` : '';
+    meta.textContent = `${node.url || ''} / ${mode} / queued ${counts.queued || 0} / running ${counts.running || 0} / errors ${counts.error || 0}${ageText}${missText}`;
     card.appendChild(meta);
 
     if (node.last_error) {

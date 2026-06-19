@@ -18,7 +18,8 @@ Schema (loose):
        "out_bytes": 456,
        "saved_bytes": 789,
        "duration_seconds": 1234.5,
-       "is_hdr": false
+       "is_hdr": false,
+       "encode_method": "x265_10bit"
      }, ...
   ],
   "totals": {"count": 0, "saved_bytes": 0}
@@ -88,6 +89,11 @@ def record_encode(
     is_hdr: bool | None = None,
     node_id: str | None = None,
     node_name: str | None = None,
+    encode_method: str | None = None,
+    encoder: str | None = None,
+    video_codec: str | None = None,
+    encoder_family: str | None = None,
+    bit_depth: str | None = None,
 ) -> dict:
     """Record a successful encode's storage savings."""
     try:
@@ -122,6 +128,16 @@ def record_encode(
         row["node_id"] = str(node_id)
     if node_name:
         row["node_name"] = str(node_name)
+    if encode_method:
+        row["encode_method"] = str(encode_method)
+    if encoder:
+        row["encoder"] = str(encoder)
+    if video_codec:
+        row["video_codec"] = str(video_codec)
+    if encoder_family:
+        row["encoder_family"] = str(encoder_family)
+    if bit_depth:
+        row["bit_depth"] = str(bit_depth)
 
     data = _load()
     encodes = _ensure_list(data.get("encodes"))

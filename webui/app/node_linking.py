@@ -17,8 +17,11 @@ from .config import DATA_DIR
 NODE_LINK_FILE = os.path.join(DATA_DIR.rstrip("/"), "linked_nodes.json")
 NODE_TRANSFER_FILE = os.path.join(DATA_DIR.rstrip("/"), "node_transfers.json")
 PAIRING_TTL_SECONDS = 15 * 60
-HEARTBEAT_STALE_SECONDS = 90
-TRANSFER_TTL_SECONDS = 6 * 60 * 60
+HEARTBEAT_WARN_SECONDS = 2 * 60
+HEARTBEAT_STALE_SECONDS = 10 * 60
+HEARTBEAT_RUNNING_GRACE_SECONDS = 2 * 60 * 60
+HEARTBEAT_MAX_MISSES = 3
+TRANSFER_TTL_SECONDS = 48 * 60 * 60
 
 
 def _now() -> float:
@@ -101,6 +104,23 @@ def normalize_transfer_mode(value: str) -> str:
     return "local"
 
 
+def node_has_running_work(row: dict) -> bool:
+    row = row if isinstance(row, dict) else {}
+    summary = row.get("summary") if isinstance(row.get("summary"), dict) else {}
+    counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+    try:
+        if int(counts.get("running") or 0) > 0:
+            return True
+    except Exception:
+        pass
+    jobs = row.get("jobs") if isinstance(row.get("jobs"), list) else []
+    return any(str(job.get("status") or "").lower() == "running" for job in jobs if isinstance(job, dict))
+
+
+def heartbeat_allowed_age(row: dict) -> int:
+    return HEARTBEAT_RUNNING_GRACE_SECONDS if node_has_running_work(row) else HEARTBEAT_STALE_SECONDS
+
+
 def create_pairing_code(ttl_seconds: int = PAIRING_TTL_SECONDS) -> dict:
     data = _load_state()
     code = secrets.token_urlsafe(10)
@@ -160,11 +180,22 @@ def accept_pairing(code: str, controller: dict) -> dict:
 def public_node(row: dict) -> dict:
     row = row if isinstance(row, dict) else {}
     last_heartbeat = float(row.get("last_heartbeat") or 0)
-    online = bool(row.get("online")) and (_now() - last_heartbeat <= HEARTBEAT_STALE_SECONDS)
+    now = _now()
+    age = max(0.0, now - last_heartbeat) if last_heartbeat else None
+    allowed_age = heartbeat_allowed_age(row)
+    online = bool(last_heartbeat) and bool(row.get("online")) and (age is not None and age <= allowed_age)
     status = str(row.get("status") or ("online" if online else "offline")).strip().lower()
     if online and status == "error" and not row.get("last_error"):
         status = "idle"
-    if not online:
+    heartbeat_misses = int(row.get("heartbeat_misses") or 0)
+    running_work = node_has_running_work(row)
+    if online and heartbeat_misses > 0:
+        status = "reconnecting" if running_work else "stale"
+    elif online and age is not None and age > HEARTBEAT_WARN_SECONDS:
+        status = "reconnecting" if running_work else "stale"
+    if not online and not last_heartbeat:
+        status = "paired"
+    elif not online:
         status = "offline"
     return {
         "id": row.get("id"),
@@ -173,6 +204,11 @@ def public_node(row: dict) -> dict:
         "role": row.get("role") or "worker",
         "online": online,
         "status": status,
+        "connection_state": status,
+        "heartbeat_misses": heartbeat_misses,
+        "last_heartbeat_age_seconds": round(age, 1) if age is not None else None,
+        "heartbeat_grace_seconds": allowed_age,
+        "running_work": running_work,
         "summary": row.get("summary") if isinstance(row.get("summary"), dict) else {},
         "last_heartbeat": last_heartbeat,
         "last_error": row.get("last_error") or "",
@@ -278,6 +314,24 @@ def delete_node(node_id: str) -> bool:
     return existed
 
 
+def delete_nodes_by_url(url: str, *, keep_id: str = "") -> int:
+    value = str(url or "").strip().rstrip("/")
+    if not value:
+        return 0
+    data = _load_state()
+    nodes = data.setdefault("nodes", {})
+    removed = 0
+    for node_id, row in list(nodes.items()):
+        if str(node_id) == str(keep_id or ""):
+            continue
+        if isinstance(row, dict) and str(row.get("url") or "").strip().rstrip("/") == value:
+            nodes.pop(node_id, None)
+            removed += 1
+    if removed:
+        _save_state(data)
+    return removed
+
+
 def trusted_controller(controller_id: str) -> dict | None:
     data = _load_state()
     row = (data.get("trusted_controllers") or {}).get(str(controller_id or ""))
@@ -361,6 +415,8 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
         "token": token,
         "paired_at": _now(),
         "last_heartbeat": 0,
+        "heartbeat_misses": 0,
+        "last_failed_at": 0,
         "online": False,
         "status": "paired",
         "summary": {},
@@ -370,6 +426,7 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
         "controller_url": str(controller_url or "").strip().rstrip("/"),
         "remote_temp_dir": str(remote_temp_dir or "").strip()[:500],
     }
+    delete_nodes_by_url(url, keep_id=worker_id)
     save_node(row)
     return public_node(row)
 
@@ -450,7 +507,7 @@ def create_transfer_grant(src: str, worker_node_id: str, *, source_size: int = 0
     transfer_id = uuid.uuid4().hex
     download_token = secrets.token_urlsafe(32)
     upload_token = secrets.token_urlsafe(32)
-    expires_at = now + max(300, min(24 * 60 * 60, int(ttl_seconds or TRANSFER_TTL_SECONDS)))
+    expires_at = now + max(300, min(72 * 60 * 60, int(ttl_seconds or TRANSFER_TTL_SECONDS)))
     row = {
         "id": transfer_id,
         "src": str(src or ""),
@@ -526,7 +583,7 @@ def hmac_headers(method: str, path: str, body_bytes: bytes, *, node_id: str, tok
     }
 
 
-def verify_hmac(method: str, path: str, body_bytes: bytes, *, node_id: str, token: str, timestamp: str, signature: str, max_skew: int = 300) -> bool:
+def verify_hmac(method: str, path: str, body_bytes: bytes, *, node_id: str, token: str, timestamp: str, signature: str, max_skew: int = 15 * 60) -> bool:
     try:
         ts = int(timestamp)
     except (TypeError, ValueError):

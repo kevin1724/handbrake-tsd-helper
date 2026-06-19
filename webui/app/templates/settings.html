@@ -293,6 +293,14 @@
       </select>
     </div>
 
+    <div class="row" style="margin-top:10px;">
+      <label class="toggle-line" for="qsvDeviceAvailableInput">
+        <input id="qsvDeviceAvailableInput" type="checkbox">
+        Intel QSV render device is available to this container
+      </label>
+      <span class="small">Turn this on only when <code>/dev/dri</code> is mounted and usable.</span>
+    </div>
+
     <div class="row" style="margin-top:12px;">
       <button id="saveSettingsBtn">Save settings</button>
       <span id="settingsSaveStatus" class="small"></span>
@@ -750,12 +758,13 @@
     </div>
 
     <div id="storageTablePane" class="row history-table-pane">
-      <table class="simple-table" style="width:100%; min-width:980px;">
+      <table class="simple-table" style="width:100%; min-width:1080px;">
         <thead>
           <tr>
             <th style="width:170px;">Time</th>
             <th>Movie / File</th>
             <th style="width:90px;">Preset</th>
+            <th style="width:150px;">Encoder</th>
             <th style="width:110px;">Runtime</th>
             <th style="width:80px;">HDR</th>
             <th style="width:110px;">Old (GB)</th>
@@ -1317,6 +1326,9 @@
 
       const remoteTransferTempDirInput = document.getElementById("remoteTransferTempDirInput");
       if (remoteTransferTempDirInput) remoteTransferTempDirInput.value = initialSettings?.remote_transfer_temp_dir || "";
+
+      const qsvDeviceAvailableInput = document.getElementById("qsvDeviceAvailableInput");
+      if (qsvDeviceAvailableInput) qsvDeviceAvailableInput.checked = Boolean(initialSettings?.qsv_device_available);
     }
 
     async function loadCpuProfiles() {
@@ -1364,6 +1376,7 @@
       const tmdbApiKey = document.getElementById("tmdbApiKeyInput")?.value || "";
       const tmdbBearerToken = document.getElementById("tmdbBearerTokenInput")?.value || "";
       const remoteTransferTempDir = document.getElementById("remoteTransferTempDirInput")?.value || "";
+      const qsvDeviceAvailable = Boolean(document.getElementById("qsvDeviceAvailableInput")?.checked);
 
       let threads = parseInt(threadsRaw, 10);
       if (isNaN(threads) || threads < 0) threads = 0;
@@ -1377,6 +1390,7 @@
           body: JSON.stringify({
             hb_threads: threads,
             cpu_profile: cpuProfile,
+            qsv_device_available: qsvDeviceAvailable,
             queue_ui_mode: queueUiMode,
             tmdb_api_key: tmdbApiKey,
             tmdb_bearer_token: tmdbBearerToken,
@@ -1712,7 +1726,7 @@
         if (tbody) {
           tbody.innerHTML = "";
           if (rows.length === 0) {
-            tbody.innerHTML = "<tr><td colspan='8' class='small'>(no history yet)</td></tr>";
+            tbody.innerHTML = "<tr><td colspan='9' class='small'>(no history yet)</td></tr>";
           } else {
             rows.forEach(r => {
               const tr = document.createElement("tr");
@@ -1720,6 +1734,7 @@
               appendTextCell(tr, fmtTs(r.ts));
               appendTextCell(tr, file || r.src || "", "history-file-cell");
               appendTextCell(tr, r.preset || "");
+              appendTextCell(tr, r.encode_method || r.encoder || "preset");
               appendTextCell(tr, fmtDuration(r.duration_seconds));
               appendTextCell(tr, r.is_hdr ? "HDR" : "SDR");
               appendTextCell(tr, fmtGB(r.src_bytes));
@@ -2094,7 +2109,9 @@
 
         const meta = document.createElement("div");
         meta.className = "node-message";
-        meta.textContent = `${node.url || ""} / ${jobSummaryText(node.summary)} / last heartbeat ${fmtNodeTime(node.last_heartbeat)}`;
+        const missText = Number(node.heartbeat_misses || 0) > 0 ? ` / missed ${node.heartbeat_misses}` : "";
+        const ageText = node.last_heartbeat_age_seconds != null ? ` / age ${Math.round(Number(node.last_heartbeat_age_seconds || 0))}s` : "";
+        meta.textContent = `${node.url || ""} / ${jobSummaryText(node.summary)} / last heartbeat ${fmtNodeTime(node.last_heartbeat)}${ageText}${missText}`;
         main.appendChild(meta);
 
         if (Array.isArray(node.paired_controllers) && node.paired_controllers.length) {
@@ -2155,12 +2172,13 @@
           ["Refresh", () => refreshNode(node.id)],
           ["Save settings", () => saveNodeSettings(node.id, textarea.value, modeSelect.value, controllerInput.value, remoteTempInput.value)],
           ["Rotate secret", () => rotateNodeSecret(node.id)],
-          ["Unlink", () => unlinkNode(node.id)]
+          ["Unlink", () => unlinkNode(node.id)],
+          ["Forget local record", () => forgetNode(node.id)]
         ].forEach(([label, handler]) => {
           const btn = document.createElement("button");
           btn.type = "button";
           btn.textContent = label;
-          if (label === "Unlink") btn.className = "danger-outline";
+          if (label === "Unlink" || label === "Forget local record") btn.className = "danger-outline";
           btn.onclick = handler;
           actions.appendChild(btn);
         });
@@ -2322,6 +2340,19 @@
         await loadNodes();
       } catch (err) {
         if (window.appToast) appToast(err.message || "Unlink failed.", "error");
+      }
+    }
+
+    async function forgetNode(nodeId) {
+      if (!confirm("Forget this local node record? Use this when the worker is gone or stale and cannot answer unlink.")) return;
+      try {
+        const res = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/forget`, { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Forget failed");
+        if (window.appToast) appToast("Local worker record forgotten.", "success");
+        await loadNodes();
+      } catch (err) {
+        if (window.appToast) appToast(err.message || "Forget failed.", "error");
       }
     }
 

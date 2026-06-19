@@ -111,8 +111,6 @@ if [ ! -f "$OUT" ]; then
   exit 1
 fi
 
-echo "Encode complete, deleting original: $SRC"
-rm -f "$SRC"
-
 echo "Done!"
 echo "New file: $OUT"
+echo "Source kept for app-level validation: $SRC"

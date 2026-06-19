@@ -23,6 +23,7 @@ import re
 import json
 import uuid
 import signal
+import shlex
 import time
 import threading
 import subprocess
@@ -501,6 +502,17 @@ def _upload_transfer_output(url: str, token: str, worker_node_id: str, out_path:
         conn.putheader("X-Worker-Node-Id", str(worker_node_id or ""))
         conn.putheader("X-Worker-Job-Id", str(job_id or ""))
         conn.putheader("X-Output-Filename", os.path.basename(out_path))
+        job = jobs.get(job_id) or {}
+        for header, key in (
+            ("X-Encode-Method", "encode_method"),
+            ("X-Encode-Encoder", "encoder"),
+            ("X-Encode-Video-Codec", "video_codec"),
+            ("X-Encode-Encoder-Family", "encoder_family"),
+            ("X-Encode-Bit-Depth", "bit_depth"),
+        ):
+            value = str(job.get(key) or "").strip()
+            if value:
+                conn.putheader(header, value[:120])
         if duration_seconds is not None:
             conn.putheader("X-Encode-Duration-Seconds", str(round(float(duration_seconds), 3)))
         conn.endheaders()
@@ -557,6 +569,92 @@ def _remote_transfer_public(transfer: dict | None) -> dict:
     }
 
 
+def _encoder_method_from_encoder(encoder: str, preset: str = "") -> dict:
+    value = str(encoder or "").strip().lower()
+    preset_key = str(preset or "auto").strip().lower() or "auto"
+    if not value:
+        return {
+            "encode_method": f"preset:{preset_key}",
+            "encoder": "",
+            "video_codec": "",
+            "encoder_family": "preset",
+            "bit_depth": "",
+        }
+
+    family = "software"
+    if value.startswith("qsv_"):
+        family = "qsv"
+    elif value.startswith("nvenc_"):
+        family = "nvenc"
+    elif value.startswith("vce_"):
+        family = "vce"
+
+    codec = ""
+    if "av1" in value:
+        codec = "av1"
+    elif "265" in value or "h265" in value or "hevc" in value:
+        codec = "h265"
+    elif "264" in value or "h264" in value:
+        codec = "h264"
+    elif "vp9" in value:
+        codec = "vp9"
+    elif "vp8" in value:
+        codec = "vp8"
+
+    bit_depth = "10" if "10bit" in value or "_10" in value else ("12" if "12bit" in value or "_12" in value else "8")
+    return {
+        "encode_method": value,
+        "encoder": value,
+        "video_codec": codec,
+        "encoder_family": family,
+        "bit_depth": bit_depth,
+    }
+
+
+def _encode_metadata_from_extra_args(extra_args: str = "", preset: str = "", metadata: dict | None = None) -> dict:
+    out = _encoder_method_from_encoder("", preset)
+    if isinstance(metadata, dict):
+        out.update({
+            key: str(metadata.get(key) or out.get(key) or "")
+            for key in ("encode_method", "encoder", "video_codec", "encoder_family", "bit_depth")
+        })
+
+    encoder = str(out.get("encoder") or "").strip()
+    if not encoder:
+        try:
+            parts = shlex.split(str(extra_args or ""))
+        except Exception:
+            parts = str(extra_args or "").split()
+        for idx, part in enumerate(parts):
+            if part in {"--encoder", "-e"} and idx + 1 < len(parts):
+                encoder = parts[idx + 1]
+                break
+            if part.startswith("--encoder="):
+                encoder = part.split("=", 1)[1]
+                break
+            if part.startswith("-e="):
+                encoder = part.split("=", 1)[1]
+                break
+    if encoder:
+        return _encoder_method_from_encoder(encoder, preset)
+    return out
+
+
+def _job_encode_metadata(job: dict | None) -> dict:
+    job = job if isinstance(job, dict) else {}
+    return _encode_metadata_from_extra_args(
+        job.get("extra_args", ""),
+        job.get("preset", ""),
+        {
+            "encode_method": job.get("encode_method") or "",
+            "encoder": job.get("encoder") or "",
+            "video_codec": job.get("video_codec") or "",
+            "encoder_family": job.get("encoder_family") or "",
+            "bit_depth": job.get("bit_depth") or "",
+        },
+    )
+
+
 # -------------------------------------------------------------------
 # Persistence: saving / loading jobs.json
 # -------------------------------------------------------------------
@@ -581,6 +679,11 @@ def save_jobs():
                 "mode": j.get("mode", "local"),
                 "transfer": j.get("transfer") if isinstance(j.get("transfer"), dict) else None,
                 "preset_bundle": _normalize_preset_bundle(j.get("preset_bundle")),
+                "encode_method": j.get("encode_method"),
+                "encoder": j.get("encoder"),
+                "video_codec": j.get("video_codec"),
+                "encoder_family": j.get("encoder_family"),
+                "bit_depth": j.get("bit_depth"),
                 "log": j.get("log", ""),
                 "returncode": j.get("returncode"),
                 "pid": None,  # never persist the actual pid
@@ -653,6 +756,7 @@ def load_jobs():
             # If the container died while it was running, treat it as queued again.
             if status == "running":
                 status = "queued"
+            method = _encode_metadata_from_extra_args(j.get("extra_args", ""), j.get("preset"), j)
 
             jobs[jid] = {
                 "status": status,
@@ -662,6 +766,11 @@ def load_jobs():
                 "mode": j.get("mode", "local"),
                 "transfer": j.get("transfer") if isinstance(j.get("transfer"), dict) else None,
                 "preset_bundle": _normalize_preset_bundle(j.get("preset_bundle")),
+                "encode_method": method.get("encode_method"),
+                "encoder": method.get("encoder"),
+                "video_codec": method.get("video_codec"),
+                "encoder_family": method.get("encoder_family"),
+                "bit_depth": method.get("bit_depth"),
                 "log": j.get("log", ""),
                 "returncode": j.get("returncode"),
                 "pid": None,
@@ -731,7 +840,7 @@ def _find_existing_active_job_for_src(src: str) -> str | None:
 # Core job creation / lookup helpers (used by routes)
 # -------------------------------------------------------------------
 
-def create_job(src: str, preset: str, extra_args: str = "", preset_bundle: dict | None = None) -> str:
+def create_job(src: str, preset: str, extra_args: str = "", preset_bundle: dict | None = None, encode_metadata: dict | None = None) -> str:
     """
     Create a single job and append it to the queue.
 
@@ -757,6 +866,7 @@ def create_job(src: str, preset: str, extra_args: str = "", preset_bundle: dict 
         return existing_id
 
     job_id = str(uuid.uuid4())
+    method = _encode_metadata_from_extra_args(extra_args, preset, encode_metadata)
     jobs[job_id] = {
         "status": "queued",
         "src": src,
@@ -765,6 +875,11 @@ def create_job(src: str, preset: str, extra_args: str = "", preset_bundle: dict 
         "mode": "local",
         "transfer": None,
         "preset_bundle": _normalize_preset_bundle(preset_bundle),
+        "encode_method": method.get("encode_method"),
+        "encoder": method.get("encoder"),
+        "video_codec": method.get("video_codec"),
+        "encoder_family": method.get("encoder_family"),
+        "bit_depth": method.get("bit_depth"),
         "log": "",
         "returncode": None,
         "pid": None,
@@ -790,7 +905,7 @@ def create_job(src: str, preset: str, extra_args: str = "", preset_bundle: dict 
     save_jobs()
     log_event(
         "job_queued",
-        f"Queued: {os.path.basename(src)} ({preset})",
+        f"Queued: {os.path.basename(src)} ({preset}, {method.get('encode_method') or 'preset'})",
         job_id=job_id,
         src=src,
     )
@@ -831,6 +946,7 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
             continue
 
         job_id = str(uuid.uuid4())
+        method = _encode_metadata_from_extra_args("", preset)
         jobs[job_id] = {
             "status": "queued",
             "src": src,
@@ -838,6 +954,11 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
             "mode": "local",
             "transfer": None,
             "preset_bundle": None,
+            "encode_method": method.get("encode_method"),
+            "encoder": method.get("encoder"),
+            "video_codec": method.get("video_codec"),
+            "encoder_family": method.get("encoder_family"),
+            "bit_depth": method.get("bit_depth"),
             "log": "",
             "returncode": None,
             "pid": None,
@@ -875,7 +996,7 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
     return count
 
 
-def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args: str = "", preset_bundle: dict | None = None) -> tuple[str, bool]:
+def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args: str = "", preset_bundle: dict | None = None, encode_metadata: dict | None = None) -> tuple[str, bool]:
     """
     Queue a job whose source is downloaded from a paired controller/storage node.
 
@@ -900,8 +1021,10 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "source_basename": _safe_transfer_filename(transfer.get("source_basename") or os.path.basename(display_src)),
         "source_size": int(transfer.get("source_size") or 0),
         "remote_temp_dir": str(transfer.get("remote_temp_dir") or "").strip()[:500],
+        "encode_metadata": transfer.get("encode_metadata") if isinstance(transfer.get("encode_metadata"), dict) else {},
         "status": "queued",
     }
+    method = _encode_metadata_from_extra_args(extra_args, preset, encode_metadata or transfer.get("encode_metadata"))
     jobs[job_id] = {
         "status": "queued",
         "src": display_src,
@@ -910,6 +1033,11 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "mode": "remote_transfer",
         "transfer": clean_transfer,
         "preset_bundle": _normalize_preset_bundle(preset_bundle),
+        "encode_method": method.get("encode_method"),
+        "encoder": method.get("encoder"),
+        "video_codec": method.get("video_codec"),
+        "encoder_family": method.get("encoder_family"),
+        "bit_depth": method.get("bit_depth"),
         "log": "",
         "returncode": None,
         "pid": None,
@@ -978,12 +1106,18 @@ def list_jobs_for_api() -> list[dict]:
                 eta_val = float(eta_val)
             except (TypeError, ValueError):
                 eta_val = None
+        method = _job_encode_metadata(j)
 
         job_items.append(
             {
                 "id": jid,
                 "src": j.get("src"),
                 "preset": j.get("preset"),
+                "encode_method": j.get("encode_method") or method.get("encode_method"),
+                "encoder": j.get("encoder") or method.get("encoder"),
+                "video_codec": j.get("video_codec") or method.get("video_codec"),
+                "encoder_family": j.get("encoder_family") or method.get("encoder_family"),
+                "bit_depth": j.get("bit_depth") or method.get("bit_depth"),
                 "mode": j.get("mode", "local"),
                 "transfer": _remote_transfer_public(j.get("transfer")) if j.get("mode") == "remote_transfer" else None,
                 "status": j.get("status"),
@@ -1059,6 +1193,12 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job["finished_at"] = None
     job["duration_seconds"] = None
     job["eta_seconds"] = None  # reset ETA at the start
+    method = _job_encode_metadata(job)
+    job["encode_method"] = method.get("encode_method")
+    job["encoder"] = method.get("encoder")
+    job["video_codec"] = method.get("video_codec")
+    job["encoder_family"] = method.get("encoder_family")
+    job["bit_depth"] = method.get("bit_depth")
     # Reset storage tracking fields for this run
     job["src_bytes"] = None
     job["out_bytes"] = None
@@ -1359,6 +1499,11 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                         is_hdr=bool(job.get("is_hdr", False)),
                         node_id=local_node.get("id"),
                         node_name=local_node.get("name"),
+                        encode_method=job.get("encode_method"),
+                        encoder=job.get("encoder"),
+                        video_codec=job.get("video_codec"),
+                        encoder_family=job.get("encoder_family"),
+                        bit_depth=job.get("bit_depth"),
                     )
 
                     source_deleted = False

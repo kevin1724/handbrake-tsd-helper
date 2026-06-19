@@ -2056,6 +2056,13 @@ body.settings-page .folder-add-choice {
   color: #bfdbfe;
 }
 
+.node-pill-stale,
+.node-pill-reconnecting {
+  border-color: rgba(245, 158, 11, 0.38);
+  background: rgba(245, 158, 11, 0.13);
+  color: #fde68a;
+}
+
 .node-pill-skipped,
 .node-pill-disabled,
 .node-pill-offline,

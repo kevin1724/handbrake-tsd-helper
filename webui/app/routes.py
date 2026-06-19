@@ -110,12 +110,14 @@ from .node_linking import (
     delete_node,
     delete_trusted_controller,
     get_node_private,
+    heartbeat_allowed_age,
     hmac_headers,
     list_nodes_private,
     list_nodes_public,
     local_node_overview,
     normalize_path_mappings,
     normalize_transfer_mode,
+    node_has_running_work,
     pair_worker,
     public_node,
     save_node,
@@ -748,7 +750,7 @@ def _quality_label_from_bpp(bpp):
 WIZARD_PRESETS_FILE = os.path.join(DATA_DIR, "wizard_presets.json")
 WIZARD_PRESET_LIMIT = 100
 
-WIZARD_VIDEO_CODECS = {"h265", "h264"}
+WIZARD_VIDEO_CODECS = {"h265", "h264", "av1"}
 WIZARD_ENCODER_FAMILIES = {"software", "qsv"}
 WIZARD_BIT_DEPTHS = {"8", "10"}
 WIZARD_QUALITIES = {"high", "balanced", "small"}
@@ -763,6 +765,7 @@ WIZARD_DEINTERLACE_MODES = {"off", "decomb", "yadif"}
 WIZARD_CROP_MODES = {"auto", "none"}
 WIZARD_AI_GOALS = {"balanced", "quality", "speed", "small", "archive"}
 WIZARD_AI_HARDWARE = {"auto", "software", "qsv"}
+WIZARD_AI_CODEC_PREFS = {"auto", "h264", "h265", "av1"}
 WIZARD_AI_TRACK_SCOPES = {"first", "all"}
 WIZARD_AI_SUBTITLE_SCOPES = {"none", "first", "all"}
 
@@ -770,6 +773,7 @@ WIZARD_DEFAULT_OPTIONS = {
     "ai_mode": False,
     "ai_goal": "balanced",
     "ai_hardware": "auto",
+    "ai_codec_preference": "auto",
     "ai_copy_audio": True,
     "ai_audio_scope": "all",
     "ai_subtitle_scope": "all",
@@ -952,6 +956,8 @@ def _wizard_encoder_label(encoder_name: str) -> str:
         "x264": "H.264 CPU",
         "x265": "H.265 CPU",
         "x265_10bit": "H.265 10-bit CPU",
+        "svt_av1": "AV1 SVT CPU",
+        "svt_av1_10bit": "AV1 10-bit SVT CPU",
         "qsv_h264": "H.264 Intel QSV",
         "qsv_h265": "H.265 Intel QSV",
         "qsv_h265_10bit": "H.265 10-bit Intel QSV",
@@ -963,6 +969,9 @@ def _wizard_encoder_name(options: dict) -> str:
     codec = options["video_codec"]
     family = options["encoder_family"]
     bit_depth = options["bit_depth"]
+
+    if codec == "av1":
+        return "svt_av1_10bit" if bit_depth == "10" else "svt_av1"
 
     if family == "qsv":
         if codec == "h264":
@@ -978,10 +987,13 @@ def _wizard_encoder_preset(options: dict) -> str:
     speed = options["encoder_speed"]
     quality = options["quality"]
     family = options["encoder_family"]
+    codec = options.get("video_codec")
 
     if speed == "auto":
         speed = "slow" if quality == "high" else ("fast" if quality == "small" else "medium")
 
+    if codec == "av1":
+        return {"fast": "8", "medium": "6", "slow": "4"}.get(speed, "6")
     if family == "qsv":
         return {"fast": "speed", "medium": "balanced", "slow": "quality"}.get(speed, "balanced")
     return {"fast": "fast", "medium": "medium", "slow": "slow"}.get(speed, "medium")
@@ -1080,6 +1092,8 @@ def _wizard_ai_choices(
     source_type: dict,
     source_size_bytes: int,
     target_mb: float,
+    effective_preset: str,
+    qsv_device_available: bool,
 ) -> tuple[dict, dict]:
     if not options.get("ai_mode"):
         return options, {
@@ -1092,8 +1106,10 @@ def _wizard_ai_choices(
     out = options.copy()
     goal = out["ai_goal"]
     hw = out["ai_hardware"]
+    codec_pref = out.get("ai_codec_preference") or "auto"
     cpu_score = max(0.1, float(getattr(cpu, "speed_index", 1.0)) * float(cpu_override or 1.0))
-    qsv_ok = hw == "qsv" or (hw == "auto" and _wizard_likely_qsv(getattr(cpu, "label", "")))
+    cpu_qsv_capable = _wizard_likely_qsv(getattr(cpu, "label", ""))
+    qsv_ok = bool(qsv_device_available) and (hw == "qsv" or (hw == "auto" and cpu_qsv_capable))
     weak_cpu = cpu_score < 0.75
     strong_cpu = cpu_score >= 1.35
     very_strong_cpu = cpu_score >= 2.0
@@ -1116,24 +1132,30 @@ def _wizard_ai_choices(
     warnings: list[str] = []
 
     if is_hdr:
-        decisions.append("Detected HDR/10-bit hints, so AI protects HEVC 10-bit choices.")
+        decisions.append("Detected HDR/10-bit hints, so AI protects 10-bit encoder choices.")
     if target_ratio < 0.18:
         warnings.append("Target is much smaller than the source; expect stronger compression.")
     elif target_ratio < 0.35:
         decisions.append("Target is a meaningful storage-saving encode.")
 
-    if hw == "software":
+    if hw == "qsv" and not qsv_device_available:
+        out["encoder_family"] = "software"
+        warnings.append("Intel QSV was requested, but Settings says /dev/dri is not available, so AI used CPU encoding.")
+    elif hw == "qsv" and not cpu_qsv_capable:
+        out["encoder_family"] = "software"
+        warnings.append("Intel QSV was requested, but the selected CPU profile does not look QSV-capable.")
+    elif hw == "software":
         out["encoder_family"] = "software"
         decisions.append("Hardware set to CPU only.")
     elif hw == "qsv":
         out["encoder_family"] = "qsv"
-        warnings.append("Intel QSV was requested; make sure the worker has /dev/dri or GPU access.")
+        decisions.append("Intel QSV is enabled in Settings and was requested.")
     elif goal == "speed" and qsv_ok:
         out["encoder_family"] = "qsv"
-        decisions.append("Using Intel QSV because speed is the goal.")
+        decisions.append("Using Intel QSV because speed is the goal and /dev/dri is enabled.")
     elif weak_cpu and qsv_ok:
         out["encoder_family"] = "qsv"
-        decisions.append("Using Intel QSV because the selected CPU profile is slower.")
+        decisions.append("Using Intel QSV because the selected CPU profile is slower and /dev/dri is enabled.")
     elif goal in {"small", "archive", "quality"} and not weak_cpu:
         out["encoder_family"] = "software"
         decisions.append("Using CPU software encoding for better compression efficiency.")
@@ -1166,6 +1188,113 @@ def _wizard_ai_choices(
         out["encoder_speed"] = "medium" if out["encoder_family"] == "software" else "auto"
         decisions.append("Balanced profile selected a safe quality/size mix.")
 
+    history_choice = {}
+    history_candidates = []
+    preset_for_history = effective_preset if effective_preset in {"1080", "4k"} else ("4k" if is_4k else "1080")
+    try:
+        history_model = _history_prediction_model()
+        for method, codec, family, depth, runtime_weight in (
+            ("x264", "h264", "software", "8", 1.15),
+            ("x265_10bit", "h265", "software", "10", 1.0),
+            ("qsv_h265_10bit", "h265", "qsv", "10", 0.35),
+            ("svt_av1_10bit", "av1", "software", "10", 2.8),
+        ):
+            if family == "qsv" and not qsv_ok:
+                continue
+            if codec == "av1" and goal == "speed" and codec_pref != "av1":
+                continue
+            pred = _history_prediction_for(
+                source_size_bytes_i,
+                preset_for_history,
+                is_hdr,
+                history_model,
+                encode_method=method,
+                strict_method=True,
+            )
+            if pred.get("available"):
+                src_gb = max(source_size_bytes_i / float(1024**3), 0.01)
+                history_candidates.append({
+                    "method": method,
+                    "codec": codec,
+                    "family": family,
+                    "bit_depth": depth,
+                    "out_ratio": float(pred.get("out_ratio") or 0.0),
+                    "seconds_per_gb": (float(pred.get("estimated_runtime_seconds") or 0.0) / src_gb) if pred.get("estimated_runtime_seconds") else None,
+                    "sample_count": int(pred.get("sample_count") or 0),
+                    "runtime_weight": runtime_weight,
+                })
+    except Exception:
+        history_candidates = []
+
+    def apply_history_candidate(candidate: dict, reason: str) -> None:
+        nonlocal history_choice
+        if not candidate:
+            return
+        out["video_codec"] = candidate["codec"]
+        out["encoder_family"] = candidate["family"]
+        out["bit_depth"] = candidate["bit_depth"]
+        if candidate["codec"] == "av1":
+            out["encoder_speed"] = "slow" if very_strong_cpu and goal in {"quality", "archive"} else "medium"
+        elif candidate["family"] == "qsv":
+            out["encoder_speed"] = "fast" if goal == "speed" else "auto"
+        history_choice = {
+            "method": candidate["method"],
+            "sample_count": candidate["sample_count"],
+            "out_ratio": round(candidate["out_ratio"], 4),
+            "reason": reason,
+        }
+        decisions.append(
+            f"History learned from {candidate['sample_count']} {candidate['method']} job"
+            f"{'' if candidate['sample_count'] == 1 else 's'} and selected it because {reason}."
+        )
+
+    if codec_pref in {"h264", "h265", "av1"}:
+        out["video_codec"] = codec_pref
+        if codec_pref == "av1":
+            out["encoder_family"] = "software"
+            out["bit_depth"] = "10"
+            if goal == "speed":
+                warnings.append("AV1 was requested, but AV1 is usually not a fast encode. Expect longer runtimes.")
+        elif codec_pref == "h264":
+            out["encoder_family"] = "software" if out["encoder_family"] != "qsv" else out["encoder_family"]
+            out["bit_depth"] = "8"
+        decisions.append(f"AI codec preference forced {codec_pref.upper()}.")
+    elif history_candidates:
+        if goal == "speed":
+            speed_candidates = [c for c in history_candidates if c["codec"] != "av1"]
+            if speed_candidates:
+                best = min(speed_candidates, key=lambda c: c["seconds_per_gb"] if c["seconds_per_gb"] else c["runtime_weight"] * 9999)
+                if best["family"] == "qsv" or best["sample_count"] >= 3:
+                    apply_history_candidate(best, "it has been the fastest matching method in past history")
+        else:
+            efficient_candidates = [c for c in history_candidates if c["codec"] in {"h265", "av1"}]
+            if efficient_candidates:
+                best = min(efficient_candidates, key=lambda c: c["out_ratio"])
+                current_method = "svt_av1_10bit" if out["video_codec"] == "av1" else ("qsv_h265_10bit" if out["encoder_family"] == "qsv" else "x265_10bit")
+                current = next((c for c in efficient_candidates if c["method"] == current_method), None)
+                improvement = (current["out_ratio"] - best["out_ratio"]) if current else 0.0
+                av1_reasonable = best["codec"] != "av1" or (
+                    cpu_score >= 1.0
+                    and duration_sec <= 4 * 60 * 60
+                    and (target_ratio < 0.35 or goal in {"quality", "archive", "small"})
+                )
+                if av1_reasonable and ((best["codec"] == "av1" and (improvement >= 0.06 or target_ratio < 0.22)) or (best["sample_count"] >= 3 and improvement >= 0.08)):
+                    apply_history_candidate(best, "it has produced better size efficiency for similar source and preset history")
+
+    if codec_pref == "auto" and out["video_codec"] != "av1":
+        if goal in {"quality", "archive"} and target_ratio < 0.22 and strong_cpu and duration_sec <= 3 * 60 * 60:
+            out["video_codec"] = "av1"
+            out["encoder_family"] = "software"
+            out["bit_depth"] = "10"
+            out["encoder_speed"] = "medium" if goal == "quality" else "slow"
+            decisions.append("Target is tight and CPU profile is strong, so AI selected AV1 for better compression efficiency.")
+        elif goal == "balanced" and target_ratio < 0.16 and strong_cpu and duration_sec <= 2.5 * 60 * 60:
+            out["video_codec"] = "av1"
+            out["encoder_family"] = "software"
+            out["bit_depth"] = "10"
+            out["encoder_speed"] = "medium"
+            warnings.append("Balanced target is very aggressive; AI selected AV1, which may be much slower but can preserve quality at smaller sizes.")
+
     resolution_mode, resolution_notes, resolution_warnings = _wizard_ai_resolution_mode(
         goal=goal,
         src_w=src_w,
@@ -1179,10 +1308,15 @@ def _wizard_ai_choices(
     warnings.extend(resolution_warnings)
 
     if is_hdr:
-        out["video_codec"] = "h265"
+        if out["video_codec"] == "h264":
+            out["video_codec"] = "h265"
         out["bit_depth"] = "10"
     else:
         out["bit_depth"] = "8" if out["video_codec"] == "h264" else "10"
+
+    if out["video_codec"] == "av1":
+        out["encoder_family"] = "software"
+        out["bit_depth"] = "10" if out.get("bit_depth") != "8" else "8"
 
     if out["encoder_family"] == "qsv" and out["video_codec"] == "h264" and is_hdr:
         out["video_codec"] = "h265"
@@ -1261,6 +1395,9 @@ def _wizard_ai_choices(
         "target_bpp_at_source": round(bpp_source, 5),
         "cpu_score": round(cpu_score, 3),
         "qsv_likely": bool(qsv_ok),
+        "qsv_device_available": bool(qsv_device_available),
+        "codec_preference": codec_pref,
+        "history_choice": history_choice,
         "hdr": bool(is_hdr),
         "resolution_mode": out["resolution_mode"],
     }
@@ -1360,6 +1497,16 @@ def _wizard_ai_plan_insights(
         confidence -= 10
         confidence_reasons.append("no matching history yet")
 
+    ai_profile = ai_info.get("profile") if isinstance(ai_info.get("profile"), dict) else {}
+    history_choice = ai_profile.get("history_choice") if isinstance(ai_profile.get("history_choice"), dict) else {}
+    if history_choice:
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Learned choice",
+            f"AI used past {history_choice.get('method', 'encoder')} results because {history_choice.get('reason', 'it matched this plan')}.",
+            "success",
+        )
+
     if target_ratio and target_ratio < 0.12:
         confidence -= 18
         flags.append({"label": "Very aggressive target", "detail": "The output target is below 12% of the source size.", "severity": "danger"})
@@ -1390,8 +1537,8 @@ def _wizard_ai_plan_insights(
             "success",
         )
 
-    if is_hdr and (options.get("video_codec") != "h265" or options.get("bit_depth") != "10"):
-        flags.append({"label": "HDR protection", "detail": "HDR sources should use HEVC 10-bit to avoid bad color/detail choices.", "severity": "danger"})
+    if is_hdr and (options.get("video_codec") not in {"h265", "av1"} or options.get("bit_depth") != "10"):
+        flags.append({"label": "HDR protection", "detail": "HDR sources should use HEVC or AV1 10-bit to avoid bad color/detail choices.", "severity": "danger"})
     elif is_hdr:
         _wizard_ai_add_recommendation(
             recommendations,
@@ -1549,6 +1696,7 @@ def _wizard_normalize_options(data: dict) -> dict:
             "ai_mode": _truthy(data.get("ai_mode"), options["ai_mode"]),
             "ai_goal": _choice(data.get("ai_goal"), WIZARD_AI_GOALS, options["ai_goal"]),
             "ai_hardware": _choice(data.get("ai_hardware"), WIZARD_AI_HARDWARE, options["ai_hardware"]),
+            "ai_codec_preference": _choice(data.get("ai_codec_preference"), WIZARD_AI_CODEC_PREFS, options["ai_codec_preference"]),
             "ai_copy_audio": _truthy(data.get("ai_copy_audio"), options["ai_copy_audio"]),
             "ai_audio_scope": _choice(data.get("ai_audio_scope"), WIZARD_AI_TRACK_SCOPES, options["ai_audio_scope"]),
             "ai_subtitle_scope": _choice(data.get("ai_subtitle_scope"), WIZARD_AI_SUBTITLE_SCOPES, options["ai_subtitle_scope"]),
@@ -1589,6 +1737,11 @@ def _wizard_normalize_options(data: dict) -> dict:
         allow_downscale = _truthy(data.get("allow_downscale"), True)
         resolution_mode = "keep" if force_4k or not allow_downscale else "auto"
     options["resolution_mode"] = _choice(resolution_mode, WIZARD_RESOLUTION_MODES, options["resolution_mode"])
+
+    if options["video_codec"] == "av1":
+        options["encoder_family"] = "software"
+        if options["bit_depth"] not in {"8", "10"}:
+            options["bit_depth"] = "10"
 
     return options
 
@@ -1678,7 +1831,7 @@ def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h
             args.append("--subtitle-burned=none")
 
         if options["two_pass"] and options["encoder_family"] == "software":
-            args.append("--two-pass")
+            args.append("--multi-pass" if options.get("video_codec") == "av1" else "--two-pass")
 
     return args
 
@@ -1741,6 +1894,8 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
         source_type,
         source_size_bytes,
         pre_ai_target_mb,
+        effective_preset,
+        bool(settings.get("qsv_device_available", False)),
     )
     target_mb = _size_to_mb(options["target_size_value"], options["target_size_unit"])
     target_bytes = target_mb * 1024.0 * 1024.0
@@ -1758,11 +1913,18 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
     base_est_fps = _estimate_encode_fps(out_w, out_h, encoder_preset)
     if options["encoder_family"] == "qsv":
         base_est_fps *= 3.0
+    if encoder_name.startswith("svt_av1"):
+        base_est_fps *= 0.38
     if info.get("is_hdr"):
         base_est_fps *= 0.88
     est_fps = max(1.0, min(base_est_fps * float(cpu.speed_index) * cpu_override_f, 500.0))
     eta_sec = (duration_sec * fps) / est_fps if est_fps > 0 else 0.0
-    history_prediction = _history_prediction_for(source_size_bytes, effective_preset, bool(info.get("is_hdr")))
+    history_prediction = _history_prediction_for(
+        source_size_bytes,
+        effective_preset,
+        bool(info.get("is_hdr")),
+        encode_method=encoder_name,
+    )
     ai_insights = _wizard_ai_plan_insights(
         options=options,
         ai_info=ai_info,
@@ -1975,9 +2137,29 @@ def _median(values: list[float]) -> float | None:
     return (float(values[mid - 1]) + float(values[mid])) / 2.0
 
 
+def _history_clean_encode_method(value: str, preset: str = "") -> str:
+    method = str(value or "").strip().lower()
+    if method:
+        return re.sub(r"[^a-z0-9_:+.-]+", "_", method)[:80]
+    preset_key = str(preset or "auto").strip().lower() or "auto"
+    return f"preset:{preset_key}"
+
+
+def _history_row_encode_method(row: dict, job: dict, preset: str) -> str:
+    for key in ("encode_method", "encoder"):
+        value = row.get(key)
+        if value:
+            return _history_clean_encode_method(str(value), preset)
+    for key in ("encode_method", "encoder"):
+        value = job.get(key)
+        if value:
+            return _history_clean_encode_method(str(value), preset)
+    return _history_clean_encode_method("", preset)
+
+
 def _history_prediction_model(node_id: str | None = None) -> dict:
     jobs_by_id = {row.get("id"): row for row in list_jobs_for_api()}
-    buckets: dict[tuple[str, object], list[dict]] = {}
+    buckets: dict[tuple, list[dict]] = {}
     node_id = str(node_id or "").strip()
 
     for row in list_storage_encodes(limit=5000):
@@ -2011,6 +2193,7 @@ def _history_prediction_model(node_id: str | None = None) -> dict:
             is_hdr = job.get("is_hdr")
         filename_hdr = _path_looks_hdr(str(row.get("src") or row.get("out") or ""))
         is_hdr = bool(is_hdr) or filename_hdr
+        encode_method = _history_row_encode_method(row, job, preset)
 
         out_ratio = out_bytes / float(src_bytes)
         if out_ratio <= 0 or out_ratio > 2.0:
@@ -2020,12 +2203,22 @@ def _history_prediction_model(node_id: str | None = None) -> dict:
         sample = {
             "preset": preset,
             "is_hdr": is_hdr,
+            "encode_method": encode_method,
             "out_ratio": out_ratio,
             "saved_ratio": max(0.0, (src_bytes - out_bytes) / float(src_bytes)),
             "seconds_per_gb": (duration_seconds / src_gb) if duration_seconds > 0 and src_gb > 0 else None,
         }
 
-        for key in ((preset, is_hdr), (preset, None), ("any", is_hdr), ("any", None)):
+        for key in (
+            (preset, is_hdr, encode_method),
+            (preset, None, encode_method),
+            ("any", is_hdr, encode_method),
+            ("any", None, encode_method),
+            (preset, is_hdr),
+            (preset, None),
+            ("any", is_hdr),
+            ("any", None),
+        ):
             buckets.setdefault(key, []).append(sample)
 
     return {"buckets": buckets, "node_id": node_id}
@@ -2072,6 +2265,24 @@ def _history_prediction_profile(node_id: str | None = None) -> dict:
             }
             if preset in {"1080", "4k"} and hdr_value is not None:
                 total_samples += int(stats.get("sample_count") or 0)
+    method_keys = [
+        key for key in buckets.keys()
+        if isinstance(key, tuple) and len(key) == 3 and key[2]
+    ]
+    for key in sorted(method_keys, key=lambda item: (str(item[0]), str(item[1]), str(item[2])))[:120]:
+        preset, hdr_value, method = key
+        stats = _history_stats_from_samples(buckets.get(key) or [])
+        if not stats:
+            continue
+        hdr_label = "hdr" if hdr_value is True else ("sdr" if hdr_value is False else "any")
+        out[f"{preset}|{hdr_label}|{method}"] = {
+            "sample_count": int(stats.get("sample_count") or 0),
+            "runtime_sample_count": int(stats.get("runtime_sample_count") or 0),
+            "out_ratio": round(float(stats.get("out_ratio") or 0.0), 4),
+            "saved_ratio": round(float(stats.get("saved_ratio") or 0.0), 4),
+            "seconds_per_gb": round(float(stats.get("seconds_per_gb") or 0.0), 3) if stats.get("seconds_per_gb") else None,
+            "encode_method": str(method),
+        }
     return {
         "node_id": str(node_id or ""),
         "sample_count": total_samples,
@@ -2079,7 +2290,14 @@ def _history_prediction_profile(node_id: str | None = None) -> dict:
     }
 
 
-def _history_prediction_for(src_bytes: int, preset: str, is_hdr: bool, model: dict | None = None) -> dict:
+def _history_prediction_for(
+    src_bytes: int,
+    preset: str,
+    is_hdr: bool,
+    model: dict | None = None,
+    encode_method: str = "",
+    strict_method: bool = False,
+) -> dict:
     try:
         src_bytes_i = int(src_bytes or 0)
     except Exception:
@@ -2088,23 +2306,41 @@ def _history_prediction_for(src_bytes: int, preset: str, is_hdr: bool, model: di
         return {"available": False, "sample_count": 0, "reason": "missing source size"}
 
     preset_key = preset if preset in {"1080", "4k"} else "1080"
+    method_key = _history_clean_encode_method(encode_method, preset_key) if encode_method else ""
     model = model or _history_prediction_model()
     buckets = model.get("buckets") or {}
     match = "none"
     stats = None
-    for key, label in (
-        ((preset_key, bool(is_hdr)), "preset+hdr"),
-        ((preset_key, None), "preset"),
-        (("any", bool(is_hdr)), "hdr"),
-        (("any", None), "all"),
-    ):
+    candidates = []
+    if method_key:
+        candidates.extend([
+            ((preset_key, bool(is_hdr), method_key), "preset+hdr+method"),
+            ((preset_key, None, method_key), "preset+method"),
+            (("any", bool(is_hdr), method_key), "hdr+method"),
+            (("any", None, method_key), "method"),
+        ])
+    if not strict_method:
+        candidates.extend([
+            ((preset_key, bool(is_hdr)), "preset+hdr"),
+            ((preset_key, None), "preset"),
+            (("any", bool(is_hdr)), "hdr"),
+            (("any", None), "all"),
+        ])
+    for key, label in candidates:
         stats = _history_stats_from_samples(buckets.get(key) or [])
         if stats:
             match = label
             break
 
     if not stats:
-        return {"available": False, "sample_count": 0, "reason": "not enough history", "preset": preset_key, "is_hdr": bool(is_hdr)}
+        return {
+            "available": False,
+            "sample_count": 0,
+            "reason": "not enough matching encoder history" if strict_method and method_key else "not enough history",
+            "preset": preset_key,
+            "is_hdr": bool(is_hdr),
+            "encode_method": method_key,
+        }
 
     estimated_out = int(round(src_bytes_i * stats["out_ratio"]))
     estimated_saved = max(0, src_bytes_i - estimated_out)
@@ -2115,15 +2351,16 @@ def _history_prediction_for(src_bytes: int, preset: str, is_hdr: bool, model: di
 
     sample_count = int(stats.get("sample_count") or 0)
     confidence = "low"
-    if match == "preset+hdr" and sample_count >= 8:
+    if match == "preset+hdr+method" and sample_count >= 6:
         confidence = "high"
-    elif match in {"preset+hdr", "preset"} and sample_count >= 3:
+    elif match in {"preset+hdr+method", "preset+method", "preset+hdr", "preset"} and sample_count >= 3:
         confidence = "medium"
 
     return {
         "available": True,
         "preset": preset_key,
         "is_hdr": bool(is_hdr),
+        "encode_method": method_key,
         "match": match,
         "confidence": confidence,
         "sample_count": sample_count,
@@ -3393,11 +3630,13 @@ def _node_summary_status(summary: dict) -> str:
 def _refresh_linked_node(row: dict) -> dict:
     row = row.copy()
     try:
-        data = signed_json_request(row, "/api/node/status", method="GET", timeout=5)
+        data = signed_json_request(row, "/api/node/status", method="GET", timeout=12)
         summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
         row.update({
             "name": data.get("name") or row.get("name") or "Worker",
             "last_heartbeat": time.time(),
+            "heartbeat_misses": 0,
+            "last_failed_at": 0,
             "online": True,
             "status": _node_summary_status(summary),
             "summary": summary,
@@ -3407,11 +3646,20 @@ def _refresh_linked_node(row: dict) -> dict:
             "prediction_profile": data.get("prediction_profile") if isinstance(data.get("prediction_profile"), dict) else {},
         })
     except Exception as e:
-        row.update({
-            "online": False,
-            "status": "offline",
-            "last_error": str(e)[:180],
-        })
+        now = time.time()
+        misses = int(row.get("heartbeat_misses") or 0) + 1
+        row["heartbeat_misses"] = misses
+        row["last_failed_at"] = now
+        row["last_error"] = str(e)[:180]
+        last_heartbeat = float(row.get("last_heartbeat") or 0.0)
+        age = now - last_heartbeat if last_heartbeat else None
+        still_in_grace = bool(last_heartbeat and age is not None and age <= heartbeat_allowed_age(row))
+        if still_in_grace:
+            row["online"] = True
+            row["status"] = "reconnecting" if node_has_running_work(row) else "stale"
+        else:
+            row["online"] = False
+            row["status"] = "offline"
     save_node(row)
     return row
 
@@ -3420,7 +3668,7 @@ def _node_heartbeat_loop() -> None:
     while not NODE_HEARTBEAT_STOP.is_set():
         for row in list_nodes_private():
             _refresh_linked_node(row)
-        NODE_HEARTBEAT_STOP.wait(timeout=60)
+        NODE_HEARTBEAT_STOP.wait(timeout=45)
 
 
 def _start_node_heartbeat_thread() -> None:
@@ -3614,6 +3862,12 @@ def _finalize_transfer_output(row: dict, upload_tmp: str) -> dict:
         duration_seconds = 0.0
     worker_node_id = str(row.get("worker_node_id") or "")
     worker_node = get_node_private(worker_node_id) or {}
+    encode_metadata = row.get("encode_metadata") if isinstance(row.get("encode_metadata"), dict) else {}
+    encode_method = request.headers.get("X-Encode-Method") or encode_metadata.get("encode_method") or ""
+    encoder = request.headers.get("X-Encode-Encoder") or encode_metadata.get("encoder") or ""
+    video_codec = request.headers.get("X-Encode-Video-Codec") or encode_metadata.get("video_codec") or ""
+    encoder_family = request.headers.get("X-Encode-Encoder-Family") or encode_metadata.get("encoder_family") or ""
+    bit_depth = request.headers.get("X-Encode-Bit-Depth") or encode_metadata.get("bit_depth") or ""
     record_encode(
         job_id=f"remote-{worker_job_id or transfer_id}",
         src=src,
@@ -3625,6 +3879,11 @@ def _finalize_transfer_output(row: dict, upload_tmp: str) -> dict:
         is_hdr=bool(_path_looks_hdr(src)),
         node_id=worker_node_id,
         node_name=worker_node.get("name"),
+        encode_method=encode_method,
+        encoder=encoder,
+        video_codec=video_codec,
+        encoder_family=encoder_family,
+        bit_depth=bit_depth,
     )
 
     source_deleted = False
@@ -4319,7 +4578,14 @@ def register_routes(app):
                 skipped.append({"path": src, "reason": "missing transfer data"})
                 continue
             effective = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
-            _job_id, created = create_remote_transfer_job(src, effective, transfer, preset_bundle=job.get("preset_bundle"))
+            _job_id, created = create_remote_transfer_job(
+                src,
+                effective,
+                transfer,
+                extra_args=str(job.get("extra_args") or ""),
+                preset_bundle=job.get("preset_bundle"),
+                encode_metadata=job.get("encode_metadata") if isinstance(job.get("encode_metadata"), dict) else None,
+            )
             count += 1 if created else 0
 
         for job in local_jobs:
@@ -4345,7 +4611,13 @@ def register_routes(app):
                 preset = "auto"
             effective = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
             before = len([j for j in list_jobs_for_api() if j.get("src") == src and j.get("status") in {"queued", "running"}])
-            create_job(src, effective, preset_bundle=job.get("preset_bundle"))
+            create_job(
+                src,
+                effective,
+                extra_args=str(job.get("extra_args") or ""),
+                preset_bundle=job.get("preset_bundle"),
+                encode_metadata=job.get("encode_metadata") if isinstance(job.get("encode_metadata"), dict) else None,
+            )
             after = len([j for j in list_jobs_for_api() if j.get("src") == src and j.get("status") in {"queued", "running"}])
             count += 1 if after > before else 0
         log_event("node_jobs_received", f"Received {count} node job(s).", level="info")
@@ -4478,6 +4750,15 @@ def register_routes(app):
         log_event("node_unlinked", f"Unlinked worker node: {row.get('name') or node_id}", level="warn")
         return jsonify(ok=True)
 
+    @app.route("/api/nodes/<node_id>/forget", methods=["POST", "DELETE"])
+    def nodes_forget_api(node_id):
+        row = get_node_private(node_id)
+        existed = delete_node(node_id)
+        if not existed:
+            return jsonify(error="node not found"), 404
+        log_event("node_forgotten", f"Forgot local worker node record: {(row or {}).get('name') or node_id}", level="warn")
+        return jsonify(ok=True)
+
     @app.route("/api/nodes/dispatch", methods=["POST"])
     def nodes_dispatch_api():
         data = request.get_json(force=True) or {}
@@ -4516,10 +4797,18 @@ def register_routes(app):
             try:
                 source_size = int(os.path.getsize(src))
                 grant = create_transfer_grant(src, selected.get("id") or "", source_size=source_size)
+                encode_metadata = {
+                    "encode_method": f"preset:{effective_preset}",
+                    "encoder": "",
+                    "video_codec": "",
+                    "encoder_family": "preset",
+                    "bit_depth": "",
+                }
                 transfer_row = get_transfer(grant["id"]) or {}
                 transfer_row["preset"] = effective_preset
                 transfer_row["controller_url"] = controller_url
                 transfer_row["remote_temp_dir"] = str(selected.get("remote_temp_dir") or "").strip()
+                transfer_row["encode_metadata"] = encode_metadata
                 save_transfer(transfer_row)
                 transfer_payload = {
                     "id": grant["id"],
@@ -4533,8 +4822,15 @@ def register_routes(app):
                     "source_basename": grant.get("source_basename") or os.path.basename(src),
                     "source_size": source_size,
                     "remote_temp_dir": str(selected.get("remote_temp_dir") or "").strip(),
+                    "encode_metadata": encode_metadata,
                 }
-                return {"src": src, "preset": effective_preset, "preset_bundle": preset_bundle, "transfer": transfer_payload}, None
+                return {
+                    "src": src,
+                    "preset": effective_preset,
+                    "preset_bundle": preset_bundle,
+                    "encode_metadata": encode_metadata,
+                    "transfer": transfer_payload,
+                }, None
             except Exception as e:
                 return None, f"transfer setup failed: {str(e)[:120]}"
 
@@ -4764,7 +5060,18 @@ def register_routes(app):
         except Exception as e:
             return jsonify(error=str(e)), 500
 
-        job_id = create_job(plan["src"], plan["preset"], extra_args=" ".join(plan["extra_args"]))
+        job_id = create_job(
+            plan["src"],
+            plan["preset"],
+            extra_args=" ".join(plan["extra_args"]),
+            encode_metadata={
+                "encode_method": plan["estimates"].get("encoder"),
+                "encoder": plan["estimates"].get("encoder"),
+                "video_codec": plan["options"].get("video_codec"),
+                "encoder_family": plan["options"].get("encoder_family"),
+                "bit_depth": plan["options"].get("bit_depth"),
+            },
+        )
         return jsonify(
             job_id=job_id,
             preset=plan["preset"],

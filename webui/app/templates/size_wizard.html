@@ -127,8 +127,33 @@
       gap: 8px;
     }
 
+    .simple-size-slider-wrap {
+      display: grid;
+      gap: 8px;
+    }
+
+    .simple-size-slider-row {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .simple-size-slider-row input[type="range"] {
+      width: 100%;
+      accent-color: #16c7d6;
+    }
+
+    .simple-size-readout {
+      min-width: 82px;
+      text-align: right;
+      color: #baf7fb;
+      font-weight: 850;
+    }
+
     .simple-risk-warning,
-    .plan-warning {
+    .plan-warning,
+    .simple-recommendation-box {
       display: none;
       padding: 10px 12px;
       border-radius: 8px;
@@ -139,8 +164,15 @@
     }
 
     .simple-risk-warning.has-warning,
-    .plan-warning.has-warning {
+    .plan-warning.has-warning,
+    .simple-recommendation-box.has-message {
       display: block;
+    }
+
+    .simple-recommendation-box {
+      border-color: rgba(22, 199, 214, 0.3);
+      background: rgba(22, 199, 214, 0.1);
+      color: #baf7fb;
     }
 
     .big-queue-btn {
@@ -676,40 +708,73 @@
             <div class="wizard-field">
               <label for="simpleGoal">What matters most?</label>
               <select id="simpleGoal">
-                <option value="smaller">Smaller file</option>
                 <option value="balanced" selected>Balanced</option>
                 <option value="quality">Best quality</option>
-                <option value="custom">Custom size</option>
+                <option value="speed">Finish faster</option>
+                <option value="archive">Long-term archive</option>
               </select>
-              <div class="help-text">Balanced is the safest default for most movies and shows.</div>
+              <div class="help-text">Balanced is safest. Best quality protects detail. Archive allows slower, more efficient choices.</div>
             </div>
 
-            <div id="simpleCustomSizeRow" class="wizard-field">
-              <label>Target size</label>
-              <div class="simple-custom-size">
-                <input id="simpleSizeValue" type="number" min="1" step="0.1" value="5">
-                <select id="simpleSizeUnit">
-                  <option value="GB" selected>GB</option>
-                  <option value="MB">MB</option>
-                </select>
-              </div>
-              <div class="help-text">Use this only when you need a specific file size.</div>
+            <div class="wizard-field">
+              <label for="simpleCodecPreference">Codec preference</label>
+              <select id="simpleCodecPreference">
+                <option value="auto" selected>Auto recommended</option>
+                <option value="h265">Efficient H.265</option>
+                <option value="av1">Maximum compression AV1</option>
+                <option value="h264">Best compatibility H.264</option>
+              </select>
+              <div class="help-text">Auto can learn from past jobs. AV1 may look better at small sizes but is much slower.</div>
             </div>
+          </div>
+
+          <div class="wizard-field simple-size-slider-wrap">
+            <label for="simpleSizeSlider">Target size</label>
+            <div class="simple-size-slider-row">
+              <input id="simpleSizeSlider" type="range" min="0.2" max="60" step="0.1" value="5">
+              <span id="simpleSizeReadout" class="simple-size-readout">5 GB</span>
+            </div>
+            <div class="simple-custom-size">
+              <input id="simpleSizeValue" type="number" min="0.1" step="0.1" value="5">
+              <select id="simpleSizeUnit">
+                <option value="GB" selected>GB</option>
+                <option value="MB">MB</option>
+              </select>
+            </div>
+            <div class="help-text">The AI will try to make the best-looking file it can at this size.</div>
           </div>
         </div>
 
         <div class="simple-section">
           <h2>Device / Speed</h2>
-          <div class="wizard-field">
-            <label for="simpleDevice">Encoding style</label>
-            <select id="simpleDevice">
-              <option value="auto" selected>Auto recommended</option>
-              <option value="fast">Faster encode</option>
-              <option value="small">Smaller file</option>
-              <option value="compat">Best compatibility</option>
-            </select>
-            <div class="help-text">Auto uses the current CPU profile and picks a good default. Compatibility favors H.264 8-bit.</div>
+          <div class="simple-grid">
+            <div class="wizard-field">
+              <label for="simpleDevice">Encoding style</label>
+              <select id="simpleDevice">
+                <option value="auto" selected>Auto recommended</option>
+                <option value="fast">Faster encode</option>
+                <option value="efficient">Better compression</option>
+                <option value="compat">Best compatibility</option>
+              </select>
+              <div class="help-text">Faster uses QSV only when Settings says /dev/dri is available. Better compression may take longer.</div>
+            </div>
+
+            <div class="wizard-field">
+              <label for="simpleResolutionPreference">Resolution behavior</label>
+              <select id="simpleResolutionPreference">
+                <option value="auto" selected>Auto protect quality</option>
+                <option value="keep">Keep source resolution</option>
+                <option value="1080">Cap at 1080p</option>
+                <option value="720">Cap at 720p</option>
+              </select>
+              <div class="help-text">Auto may cap resolution when the size target is too tight.</div>
+            </div>
           </div>
+        </div>
+
+        <div class="simple-section">
+          <h2>Recommendation</h2>
+          <div id="simpleRecommendationBox" class="simple-recommendation-box small"></div>
         </div>
 
         <div class="simple-section">
@@ -825,6 +890,17 @@
               <div class="help-text">QSV can be much faster when the worker/container has Intel media hardware available.</div>
             </div>
 
+            <div class="wizard-field">
+              <label for="aiCodecPreference">Codec preference</label>
+              <select id="aiCodecPreference">
+                <option value="auto" selected>Auto learned choice</option>
+                <option value="h265">Prefer H.265</option>
+                <option value="av1">Prefer AV1</option>
+                <option value="h264">Prefer H.264</option>
+              </select>
+              <div class="help-text">Auto can use past jobs to pick a better encoder for the selected size and goal.</div>
+            </div>
+
             <label class="toggle-line">
               <input id="aiCopyAudio" type="checkbox" checked>
               Copy audio
@@ -936,9 +1012,10 @@
               <label for="videoCodec">Codec</label>
               <select id="videoCodec">
                 <option value="h265" selected>H.265 / HEVC</option>
+                <option value="av1">AV1 / SVT-AV1</option>
                 <option value="h264">H.264 / AVC</option>
               </select>
-              <div class="help-text">H.265 saves more space. H.264 is usually more compatible.</div>
+              <div class="help-text">AV1 can save more space but is much slower. H.265 is the safer everyday choice. H.264 is usually most compatible.</div>
             </div>
 
             <div class="wizard-field">
@@ -1218,6 +1295,7 @@
       ai_mode: false,
       ai_goal: "balanced",
       ai_hardware: "auto",
+      ai_codec_preference: "auto",
       ai_copy_audio: true,
       ai_audio_scope: "all",
       ai_subtitle_scope: "all",
@@ -1248,6 +1326,7 @@
       "aiMode",
       "aiGoal",
       "aiHardware",
+      "aiCodecPreference",
       "aiCopyAudio",
       "aiAudioScope",
       "audioLanguages",
@@ -1278,9 +1357,12 @@
     const WIZARD_MODE_KEY = "hbwiz_mode";
     const simpleControlIds = [
       "simpleGoal",
+      "simpleCodecPreference",
+      "simpleSizeSlider",
       "simpleSizeValue",
       "simpleSizeUnit",
       "simpleDevice",
+      "simpleResolutionPreference",
       "simpleKeepAllAudio",
       "simpleAudioLanguages",
       "simpleKeepSubtitles",
@@ -1693,34 +1775,98 @@
         const goal = String(payload.ai_goal || "balanced").replace(/^\w/, (c) => c.toUpperCase());
         return `AI ${goal} ${payload.target_size_value}${payload.target_size_unit}`;
       }
-      const codec = payload.video_codec === "h264" ? "H.264" : "H.265";
+      const codec = payload.video_codec === "h264" ? "H.264" : (payload.video_codec === "av1" ? "AV1" : "H.265");
       const encoder = payload.encoder_family === "qsv" ? "QSV" : "CPU";
       return `${codec} ${encoder} ${payload.target_size_value}${payload.target_size_unit}`;
     }
 
     function updateSimpleUi() {
-      const custom = el("simpleGoal")?.value === "custom";
-      const customRow = el("simpleCustomSizeRow");
-      if (customRow) customRow.style.display = custom ? "" : "none";
+      syncSimpleSizeControls();
       const keepSubs = !!el("simpleKeepSubtitles")?.checked;
       if (el("simpleSubtitleLanguages")) el("simpleSubtitleLanguages").disabled = !keepSubs;
+      updateSimpleRecommendation();
+    }
+
+    function simpleSizeGb() {
+      const value = Number(el("simpleSizeValue")?.value || defaultOptions.target_size_value);
+      const unit = el("simpleSizeUnit")?.value || "GB";
+      const gb = unit === "MB" ? value / 1024 : value;
+      return Math.max(0.1, Math.min(60, gb || 0.1));
+    }
+
+    function setSimpleSizeFromGb(gb, { updateInput = true } = {}) {
+      const clean = Math.max(0.1, Math.min(60, Number(gb || 0.1)));
+      if (el("simpleSizeSlider")) el("simpleSizeSlider").value = String(Math.round(clean * 10) / 10);
+      if (updateInput) {
+        setValue("simpleSizeUnit", "GB");
+        setValue("simpleSizeValue", String(Math.round(clean * 10) / 10));
+      }
+      if (el("simpleSizeReadout")) el("simpleSizeReadout").textContent = `${Math.round(clean * 10) / 10} GB`;
+    }
+
+    function syncSimpleSizeControls() {
+      if (!el("simpleSizeSlider") || !el("simpleSizeValue")) return;
+      setSimpleSizeFromGb(simpleSizeGb(), { updateInput: false });
+    }
+
+    function updateSimpleRecommendation(planData = null) {
+      const box = el("simpleRecommendationBox");
+      if (!box) return;
+      const goal = el("simpleGoal")?.value || "balanced";
+      const device = el("simpleDevice")?.value || "auto";
+      const codec = el("simpleCodecPreference")?.value || "auto";
+      const sizeGb = simpleSizeGb();
+      const estimates = planData?.estimates || {};
+      const probe = planData?.probe || {};
+      const sourceGb = Number(probe.source_size_bytes || 0) / (1024 ** 3);
+      const ratio = sourceGb > 0 ? sizeGb / sourceGb : 0;
+      const messages = [];
+
+      if (goal === "quality" && device === "fast") {
+        messages.push("Best quality and faster encode fight each other. AI will favor speed if QSV is available, but CPU H.265 or AV1 will usually look better.");
+      }
+      if (goal === "quality" && ratio > 0 && ratio < 0.22) {
+        messages.push(`That is a tight best-quality target. A more realistic target is about ${Math.max(sizeGb + 1, sourceGb * 0.25).toFixed(1)} GB, or let AI cap resolution.`);
+      }
+      if (goal === "balanced" && ratio > 0 && ratio < 0.14) {
+        messages.push("Balanced at this size is very aggressive. AI may choose AV1 or lower resolution to avoid ugly artifacts.");
+      }
+      if (codec === "av1" && device === "fast") {
+        messages.push("AV1 is the wrong tool for fast encodes. It can be efficient, but expect much longer runtimes.");
+      }
+      if (codec === "h264" && ratio > 0 && ratio < 0.25) {
+        messages.push("H.264 is compatible but less efficient at small targets. H.265 is the safer recommendation here.");
+      }
+      if (device === "fast" && estimates.ai_warnings?.some((text) => String(text).toLowerCase().includes("qsv"))) {
+        messages.push("Fast mode asked for QSV, but Settings says the render device may not be available. Enable /dev/dri in Settings or use Auto.");
+      }
+      if (!messages.length && estimates.ai_recommendations?.length) {
+        messages.push(estimates.ai_recommendations[0].detail || "");
+      }
+      if (!messages.length) {
+        messages.push("Looks reasonable. AI will use the file size, CPU profile, history, HDR, and codec preference to build the plan.");
+      }
+      box.textContent = messages.filter(Boolean).slice(0, 2).join(" ");
+      box.classList.toggle("has-message", messages.length > 0);
     }
 
     function syncSimpleFromAdvanced() {
       const quality = el("quality")?.value || "balanced";
-      const autoTarget = !!el("targetSizeAuto")?.checked;
-      if (!autoTarget) setValue("simpleGoal", "custom");
-      else if (quality === "small") setValue("simpleGoal", "smaller");
+      if (el("aiGoal")?.value === "speed") setValue("simpleGoal", "speed");
+      else if (el("aiGoal")?.value === "archive") setValue("simpleGoal", "archive");
       else if (quality === "high") setValue("simpleGoal", "quality");
       else setValue("simpleGoal", "balanced");
 
       setValue("simpleSizeValue", el("sizeValue")?.value || defaultOptions.target_size_value);
       setValue("simpleSizeUnit", el("sizeUnit")?.value || defaultOptions.target_size_unit);
+      setSimpleSizeFromGb(simpleSizeGb(), { updateInput: false });
 
       if (el("videoCodec")?.value === "h264") setValue("simpleDevice", "compat");
       else if (el("aiGoal")?.value === "speed" || el("aiHardware")?.value === "qsv") setValue("simpleDevice", "fast");
-      else if (el("aiGoal")?.value === "small") setValue("simpleDevice", "small");
+      else if (el("encoderSpeed")?.value === "slow" || el("aiGoal")?.value === "archive") setValue("simpleDevice", "efficient");
       else setValue("simpleDevice", "auto");
+      setValue("simpleCodecPreference", el("aiCodecPreference")?.value || el("videoCodec")?.value || "auto");
+      setValue("simpleResolutionPreference", el("resolutionMode")?.value || "auto");
 
       setChecked("simpleKeepAllAudio", (el("audioTracks")?.value || "all") === "all");
       setValue("simpleAudioLanguages", languagesForInput(el("audioLanguages")?.value || "eng, spa"));
@@ -1735,43 +1881,42 @@
       const goal = el("simpleGoal")?.value || "balanced";
       const device = el("simpleDevice")?.value || "auto";
       const goalToAi = {
-        smaller: "small",
         balanced: "balanced",
         quality: "quality",
-        custom: "balanced"
+        speed: "speed",
+        archive: "archive"
       };
       const goalToQuality = {
-        smaller: "small",
         balanced: "balanced",
         quality: "high",
-        custom: "balanced"
+        speed: "small",
+        archive: "balanced"
       };
 
-      setChecked("targetSizeAuto", goal !== "custom");
-      if (goal === "custom") {
-        setValue("sizeValue", el("simpleSizeValue")?.value || defaultOptions.target_size_value);
-        setValue("sizeUnit", el("simpleSizeUnit")?.value || defaultOptions.target_size_unit);
-      } else {
-        applyAutoTargetForSource(el("src").value);
-      }
+      setChecked("targetSizeAuto", false);
+      setValue("sizeValue", el("simpleSizeValue")?.value || defaultOptions.target_size_value);
+      setValue("sizeUnit", el("simpleSizeUnit")?.value || defaultOptions.target_size_unit);
 
       setValue("quality", goalToQuality[goal] || "balanced");
       setChecked("aiMode", device !== "compat");
-      setValue("aiGoal", device === "fast" ? "speed" : (device === "small" ? "small" : (goalToAi[goal] || "balanced")));
+      const aiGoal = device === "fast" ? "speed" : (device === "efficient" && goal === "balanced" ? "archive" : (goalToAi[goal] || "balanced"));
+      setValue("aiGoal", aiGoal);
       setValue("aiHardware", device === "fast" ? "qsv" : (device === "compat" ? "software" : "auto"));
+      const codecPref = el("simpleCodecPreference")?.value || "auto";
+      setValue("aiCodecPreference", codecPref);
 
-      if (device === "compat") {
+      if (device === "compat" || codecPref === "h264") {
         setValue("videoCodec", "h264");
         setValue("bitDepth", "8");
         setValue("encoderFamily", "software");
         setValue("encoderSpeed", "medium");
         setValue("resolutionMode", "auto");
       } else {
-        setValue("videoCodec", "h265");
+        setValue("videoCodec", codecPref === "av1" ? "av1" : "h265");
         setValue("bitDepth", "10");
-        setValue("encoderFamily", device === "fast" ? "qsv" : "software");
-        setValue("encoderSpeed", device === "small" ? "slow" : "auto");
-        setValue("resolutionMode", "auto");
+        setValue("encoderFamily", device === "fast" && codecPref !== "av1" ? "qsv" : "software");
+        setValue("encoderSpeed", device === "efficient" || goal === "archive" ? "slow" : "auto");
+        setValue("resolutionMode", el("simpleResolutionPreference")?.value || "auto");
       }
 
       const keepAllAudio = !!el("simpleKeepAllAudio")?.checked;
@@ -1802,6 +1947,7 @@
         ai_mode: aiEnabled,
         ai_goal: el("aiGoal").value,
         ai_hardware: el("aiHardware").value,
+        ai_codec_preference: el("aiCodecPreference").value,
         ai_copy_audio: el("aiCopyAudio").checked,
         ai_audio_scope: el("aiAudioScope").value,
         ai_subtitle_scope: el("aiSubtitleScope").value,
@@ -1841,6 +1987,7 @@
       setChecked("aiMode", o.ai_mode);
       setValue("aiGoal", o.ai_goal);
       setValue("aiHardware", o.ai_hardware);
+      setValue("aiCodecPreference", o.ai_codec_preference);
       setChecked("aiCopyAudio", o.ai_copy_audio);
       setValue("aiAudioScope", o.ai_audio_scope);
       setValue("aiSubtitleScope", o.ai_subtitle_scope);
@@ -1917,8 +2064,11 @@
       }
 
       const isH264 = el("videoCodec").value === "h264";
+      const isAv1 = el("videoCodec").value === "av1";
+      if (isAv1) el("encoderFamily").value = "software";
       if (isH264) el("bitDepth").value = "8";
       el("bitDepth").disabled = isH264;
+      el("encoderFamily").disabled = isAv1;
 
       const audioMode = el("audioMode").value;
       el("audioBitrate").disabled = audioMode === "copy";
@@ -2115,6 +2265,7 @@
       el("decisionNote").textContent = [e.decision_note, e.ai_summary, aiAdvice].filter(Boolean).join(" ");
       el("argsPreview").textContent = args.length ? args.join(" ") : "-";
       updateRiskWarnings(data, inputs);
+      updateSimpleRecommendation(data);
     }
 
     async function refreshPreviewText() {
@@ -2371,6 +2522,11 @@
         const node = el(id);
         if (!node) return;
         const handler = () => {
+          if (id === "simpleSizeSlider") {
+            setSimpleSizeFromGb(Number(el("simpleSizeSlider")?.value || 5));
+          } else if (id === "simpleSizeValue" || id === "simpleSizeUnit") {
+            syncSimpleSizeControls();
+          }
           applySimpleControlsToAdvanced({ schedule: false });
           updateControlStates();
           updateSimpleUi();

@@ -26,6 +26,7 @@ DEFAULT_SETTINGS = {
     # Size Wizard / ETA estimation
     "cpu_profile": "i5-9500t",      # baseline CPU
     "cpu_speed_override": 1.0,       # multiplier (1.0 = no adjustment)
+    "qsv_device_available": False,   # True only when /dev/dri is mounted into the container.
 
     # Queue UI behavior on the Jobs page
     # buttons = classic button controls
@@ -200,6 +201,13 @@ def save_settings(new_values: dict) -> dict:
         cpu_speed_override = 1.0
 
     base["cpu_speed_override"] = cpu_speed_override
+
+    # ------------------------------------------------------------------
+    # Intel QSV render device availability
+    # ------------------------------------------------------------------
+    base["qsv_device_available"] = bool(
+        new_values.get("qsv_device_available", base.get("qsv_device_available", False))
+    )
 
     # ------------------------------------------------------------------
     # Queue UI mode
