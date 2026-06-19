@@ -1014,9 +1014,80 @@ def _wizard_likely_qsv(cpu_label: str) -> bool:
     return "no igpu" not in label and "kf" not in label
 
 
-def _wizard_ai_choices(options: dict, cpu, cpu_override: float, src_w: int, src_h: int, duration_sec: float) -> tuple[dict, list[str]]:
+def _wizard_ai_resolution_mode(
+    *,
+    goal: str,
+    src_w: int,
+    src_h: int,
+    bpp_source: float,
+    cpu_score: float,
+    source_kind: str,
+) -> tuple[str, list[str], list[str]]:
+    """Choose a resolution cap from target-size pressure without probing again."""
+    notes: list[str] = []
+    warnings: list[str] = []
+    is_4k = src_h >= 1800 or src_w >= 3200
+    is_1080 = src_h >= 900 or src_w >= 1600
+    weak_cpu = cpu_score < 0.75
+
+    if goal == "speed":
+        if is_4k and (weak_cpu or bpp_source < 0.055):
+            notes.append("Capped 4K source at 1080p for a faster, safer encode.")
+            return "1080", notes, warnings
+        if is_1080 and source_kind == "show" and bpp_source < 0.032:
+            warnings.append("Target is very tight for this episode; 720p may look cleaner than starved 1080p.")
+            return "720", notes, warnings
+        return "auto", notes, warnings
+
+    if goal == "small":
+        if is_4k:
+            cap = "1080" if bpp_source < 0.055 else "1440"
+            notes.append(f"Capped 4K source at {cap}p to save space without starving bitrate.")
+            return cap, notes, warnings
+        if is_1080 and bpp_source < 0.035:
+            notes.append("Capped tight 1080p target at 720p to avoid blocky output.")
+            return "720", notes, warnings
+        return "auto", notes, warnings
+
+    if goal == "quality":
+        if is_4k and bpp_source < 0.035:
+            warnings.append("Target size is tight for 4K quality; AI will allow auto downscale to protect detail.")
+            return "auto", notes, warnings
+        notes.append("Keeping resolution unless the target is too tight.")
+        return "keep", notes, warnings
+
+    if goal == "archive":
+        if is_4k and bpp_source < 0.04:
+            notes.append("Archive target is tight for 4K, so AI will allow a 1440p cap.")
+            return "1440", notes, warnings
+        return "auto", notes, warnings
+
+    # Balanced profile.
+    if is_4k and bpp_source < 0.038:
+        warnings.append("Target is aggressive for 4K; AI capped at 1080p for a cleaner result.")
+        return "1080", notes, warnings
+    if is_4k and bpp_source < 0.055:
+        notes.append("Target is moderately tight for 4K; AI capped at 1440p.")
+        return "1440", notes, warnings
+    return "auto", notes, warnings
+
+
+def _wizard_ai_choices(
+    options: dict,
+    cpu,
+    cpu_override: float,
+    info: dict,
+    source_type: dict,
+    source_size_bytes: int,
+    target_mb: float,
+) -> tuple[dict, dict]:
     if not options.get("ai_mode"):
-        return options, []
+        return options, {
+            "summary": "",
+            "decisions": [],
+            "warnings": [],
+            "profile": {},
+        }
 
     out = options.copy()
     goal = out["ai_goal"]
@@ -1026,83 +1097,433 @@ def _wizard_ai_choices(options: dict, cpu, cpu_override: float, src_w: int, src_
     weak_cpu = cpu_score < 0.75
     strong_cpu = cpu_score >= 1.35
     very_strong_cpu = cpu_score >= 2.0
+    src_w = int(info.get("width") or 0)
+    src_h = int(info.get("height") or 0)
+    duration_sec = float(info.get("duration_sec") or 0.0)
+    fps = float(info.get("fps") or 0.0) or 24.0
+    is_hdr = bool(info.get("is_hdr"))
     is_4k = src_h >= 1800 or src_w >= 3200
-    notes = []
+    source_kind = source_type.get("kind") or "movie"
+    source_size_bytes_i = max(1, int(source_size_bytes or 1))
+    target_bytes = max(1.0, float(target_mb or 0.0) * 1024.0 * 1024.0)
+    target_ratio = target_bytes / float(source_size_bytes_i)
+    source_bitrate_kbps = (source_size_bytes_i * 8.0 / max(1.0, duration_sec)) / 1000.0
+    target_total_kbps = (target_bytes * 8.0 / max(1.0, duration_sec)) / 1000.0
+    rough_audio_kbps = 256 if out.get("ai_copy_audio", True) else _quality_audio_kbps(out.get("quality"))
+    rough_video_kbps = max(250.0, target_total_kbps - rough_audio_kbps)
+    bpp_source = _bpp(rough_video_kbps, src_w, src_h, fps)
+    decisions: list[str] = []
+    warnings: list[str] = []
+
+    if is_hdr:
+        decisions.append("Detected HDR/10-bit hints, so AI protects HEVC 10-bit choices.")
+    if target_ratio < 0.18:
+        warnings.append("Target is much smaller than the source; expect stronger compression.")
+    elif target_ratio < 0.35:
+        decisions.append("Target is a meaningful storage-saving encode.")
 
     if hw == "software":
         out["encoder_family"] = "software"
+        decisions.append("Hardware set to CPU only.")
     elif hw == "qsv":
         out["encoder_family"] = "qsv"
+        warnings.append("Intel QSV was requested; make sure the worker has /dev/dri or GPU access.")
     elif goal == "speed" and qsv_ok:
         out["encoder_family"] = "qsv"
+        decisions.append("Using Intel QSV because speed is the goal.")
     elif weak_cpu and qsv_ok:
         out["encoder_family"] = "qsv"
+        decisions.append("Using Intel QSV because the selected CPU profile is slower.")
+    elif goal in {"small", "archive", "quality"} and not weak_cpu:
+        out["encoder_family"] = "software"
+        decisions.append("Using CPU software encoding for better compression efficiency.")
     else:
         out["encoder_family"] = "software"
 
     if goal == "speed":
         out["quality"] = "small"
-        out["video_codec"] = "h265" if out["encoder_family"] == "qsv" else ("h264" if weak_cpu else "h265")
+        out["video_codec"] = "h265" if (is_hdr or out["encoder_family"] == "qsv" or not weak_cpu) else "h264"
         out["encoder_speed"] = "fast"
-        out["resolution_mode"] = "1080" if is_4k and weak_cpu else "auto"
-        notes.append("speed-first choices")
+        decisions.append("Speed profile selected fast encoder settings.")
     elif goal == "small":
         out["quality"] = "small"
         out["video_codec"] = "h265"
         out["encoder_speed"] = "slow" if out["encoder_family"] == "software" and strong_cpu else "medium"
-        out["resolution_mode"] = "auto"
-        notes.append("smaller-file choices")
+        decisions.append("Small-file profile selected HEVC and tighter compression.")
     elif goal == "quality":
         out["quality"] = "high"
         out["video_codec"] = "h265"
         out["encoder_speed"] = "slow" if out["encoder_family"] == "software" and strong_cpu else "medium"
-        out["resolution_mode"] = "keep" if (not is_4k or very_strong_cpu) else "auto"
-        notes.append("quality-first choices")
+        decisions.append("Quality profile selected higher bitrate protection.")
     elif goal == "archive":
         out["quality"] = "balanced"
         out["video_codec"] = "h265"
         out["encoder_speed"] = "slow" if out["encoder_family"] == "software" and very_strong_cpu else "medium"
-        out["resolution_mode"] = "auto"
-        notes.append("archive choices")
+        decisions.append("Archive profile selected long-term HEVC settings.")
     else:
         out["quality"] = "balanced"
         out["video_codec"] = "h265"
         out["encoder_speed"] = "medium" if out["encoder_family"] == "software" else "auto"
-        out["resolution_mode"] = "auto"
-        notes.append("balanced choices")
+        decisions.append("Balanced profile selected a safe quality/size mix.")
 
-    out["bit_depth"] = "8" if out["video_codec"] == "h264" else "10"
+    resolution_mode, resolution_notes, resolution_warnings = _wizard_ai_resolution_mode(
+        goal=goal,
+        src_w=src_w,
+        src_h=src_h,
+        bpp_source=bpp_source,
+        cpu_score=cpu_score,
+        source_kind=source_kind,
+    )
+    out["resolution_mode"] = resolution_mode
+    decisions.extend(resolution_notes)
+    warnings.extend(resolution_warnings)
+
+    if is_hdr:
+        out["video_codec"] = "h265"
+        out["bit_depth"] = "10"
+    else:
+        out["bit_depth"] = "8" if out["video_codec"] == "h264" else "10"
+
+    if out["encoder_family"] == "qsv" and out["video_codec"] == "h264" and is_hdr:
+        out["video_codec"] = "h265"
+        out["bit_depth"] = "10"
+
+    deinterlace_hint = bool(re.search(r"(?<!\d)(480i|576i|1080i)(?!\d)|interlac", str(info.get("path") or "") + " " + str(info.get("source_name") or ""), re.IGNORECASE))
+    if deinterlace_hint:
+        out["deinterlace"] = "decomb"
+        decisions.append("Detected interlaced filename hint, so decomb is enabled.")
+    else:
+        out["deinterlace"] = "off"
+
     out["two_pass"] = (
         out["encoder_family"] == "software"
-        and goal in {"quality", "small", "archive"}
+        and goal in {"small", "archive"}
         and cpu_score >= 1.0
         and duration_sec <= 4 * 60 * 60
+        and bpp_source < 0.07
     )
+    if out["two_pass"]:
+        decisions.append("Enabled two-pass because the target is tight and CPU mode can benefit from it.")
 
     out["audio_mode"] = "copy" if out["ai_copy_audio"] else "aac"
     if out["audio_mode"] == "copy":
         out["audio_bitrate"] = "auto"
-        notes.append("audio copy")
+        decisions.append("Copying audio to avoid quality loss.")
     elif goal == "quality":
         out["audio_bitrate"] = "256"
+        decisions.append("Converting audio at 256 kbps for quality.")
     elif goal in {"small", "speed"}:
         out["audio_bitrate"] = "160"
+        decisions.append("Converting audio at 160 kbps to save space.")
     else:
         out["audio_bitrate"] = "192"
 
-    out["audio_tracks"] = out["ai_audio_scope"] if out["audio_languages"] else "first"
-    out["subtitle_mode"] = out["ai_subtitle_scope"] if out["subtitle_languages"] else "none"
+    out["audio_tracks"] = out["ai_audio_scope"]
+    out["subtitle_mode"] = out["ai_subtitle_scope"]
     out["framerate_mode"] = "same"
-    out["deinterlace"] = "off"
     out["crop_mode"] = "auto"
 
-    notes.append(f"CPU profile {getattr(cpu, 'label', 'default')} at x{cpu_score:.2f}")
-    notes.append(f"{out['encoder_family'].upper()} {out['video_codec'].upper()} {out['encoder_speed']}")
+    if out["subtitle_mode"] == "none":
+        warnings.append("Subtitles are disabled for this AI profile.")
+    elif out["subtitle_mode"] == "all":
+        decisions.append("Keeping all matching subtitles without burn-in.")
+
+    decisions.append(f"CPU profile {getattr(cpu, 'label', 'default')} at x{cpu_score:.2f}.")
+    decisions.append(f"Selected {out['encoder_family'].upper()} {out['video_codec'].upper()} {out['bit_depth']}-bit, {out['encoder_speed']} speed.")
     if out["audio_languages"]:
-        notes.append("audio languages " + ", ".join(out["audio_languages"]))
+        decisions.append("Audio languages: " + ", ".join(out["audio_languages"]) + ".")
+    else:
+        decisions.append("Audio language filter disabled; track scope controls what is kept.")
     if out["subtitle_languages"]:
-        notes.append("subtitle languages " + ", ".join(out["subtitle_languages"]))
-    return out, notes
+        decisions.append("Subtitle languages: " + ", ".join(out["subtitle_languages"]) + ".")
+    elif out["subtitle_mode"] != "none":
+        decisions.append("Subtitle language filter disabled; keeping by subtitle scope.")
+
+    goal_label = {
+        "balanced": "Balanced",
+        "quality": "Best quality",
+        "speed": "Fast encode",
+        "small": "Small file",
+        "archive": "Archive",
+    }.get(goal, "AI")
+    summary = (
+        f"{goal_label}: {_wizard_encoder_label(_wizard_encoder_name(out))}, "
+        f"{out['resolution_mode']} resolution, "
+        f"{'copy audio' if out['audio_mode'] == 'copy' else out['audio_bitrate'] + ' kbps audio'}, "
+        f"{out['subtitle_mode']} subtitles."
+    )
+    profile = {
+        "goal": goal,
+        "source_kind": source_kind,
+        "source_resolution": f"{src_w}x{src_h}",
+        "source_bitrate_kbps": round(source_bitrate_kbps, 1),
+        "target_ratio": round(target_ratio, 3),
+        "target_bpp_at_source": round(bpp_source, 5),
+        "cpu_score": round(cpu_score, 3),
+        "qsv_likely": bool(qsv_ok),
+        "hdr": bool(is_hdr),
+        "resolution_mode": out["resolution_mode"],
+    }
+    return out, {
+        "summary": summary,
+        "decisions": decisions,
+        "warnings": warnings,
+        "profile": profile,
+    }
+
+
+def _wizard_ai_add_recommendation(rows: list[dict], label: str, detail: str, severity: str = "info") -> None:
+    if not detail:
+        return
+    rows.append(
+        {
+            "label": label,
+            "detail": detail,
+            "severity": severity if severity in {"info", "warning", "danger", "success"} else "info",
+        }
+    )
+
+
+def _wizard_ai_confidence_label(score: int) -> str:
+    if score >= 82:
+        return "high"
+    if score >= 58:
+        return "medium"
+    return "low"
+
+
+def _wizard_ai_plan_insights(
+    *,
+    options: dict,
+    ai_info: dict,
+    info: dict,
+    source_type: dict,
+    source_size_bytes: int,
+    target_mb: float,
+    total_bitrate_kbps: float,
+    video_kbps: float,
+    audio_kbps: int,
+    bpp_final: float,
+    q_code: str,
+    eta_sec: float,
+    history_prediction: dict,
+) -> dict:
+    if not options.get("ai_mode"):
+        return {
+            "enabled": False,
+            "recommendations": [],
+            "safety": {"risk_level": "manual", "flags": []},
+            "confidence": {"score": 0, "label": "manual", "reasons": []},
+        }
+
+    recommendations: list[dict] = []
+    flags: list[dict] = []
+    confidence_reasons: list[str] = []
+    confidence = 94
+
+    source_size_mb = max(0.0, float(source_size_bytes or 0) / (1024.0 * 1024.0))
+    target_mb_f = max(0.0, float(target_mb or 0.0))
+    target_ratio = (target_mb_f / source_size_mb) if source_size_mb > 0 else 0.0
+    source_kind = source_type.get("kind") or "movie"
+    is_hdr = bool(info.get("is_hdr"))
+    duration_sec = float(info.get("duration_sec") or 0.0)
+    src_h = int(info.get("height") or 0)
+    src_w = int(info.get("width") or 0)
+    is_4k = src_h >= 1800 or src_w >= 3200
+
+    if duration_sec <= 0 or src_w <= 0 or src_h <= 0:
+        confidence -= 35
+        confidence_reasons.append("missing probe detail")
+    else:
+        confidence_reasons.append("source duration and resolution known")
+
+    history_available = bool(history_prediction.get("available"))
+    if history_available:
+        confidence_reasons.append(f"{history_prediction.get('sample_count', 0)} matching history samples")
+        predicted_mb = float(history_prediction.get("predicted_out_mb") or 0.0)
+        if predicted_mb > 0 and target_mb_f > 0:
+            if predicted_mb > target_mb_f * 1.25:
+                _wizard_ai_add_recommendation(
+                    recommendations,
+                    "History check",
+                    "Past jobs suggest this may finish larger than the target; use a smaller-file goal or a lower cap if size matters most.",
+                    "warning",
+                )
+            elif predicted_mb < target_mb_f * 0.70:
+                _wizard_ai_add_recommendation(
+                    recommendations,
+                    "History check",
+                    "Past jobs suggest there is room to raise quality while still staying near the target.",
+                    "success",
+                )
+    else:
+        confidence -= 10
+        confidence_reasons.append("no matching history yet")
+
+    if target_ratio and target_ratio < 0.12:
+        confidence -= 18
+        flags.append({"label": "Very aggressive target", "detail": "The output target is below 12% of the source size.", "severity": "danger"})
+    elif target_ratio and target_ratio < 0.25:
+        confidence -= 8
+        flags.append({"label": "Aggressive target", "detail": "The output target is less than 25% of the source size.", "severity": "warning"})
+
+    if q_code == "risky":
+        flags.append({"label": "Quality risk", "detail": "The video bitrate per pixel is low for this resolution.", "severity": "danger"})
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Protect quality",
+            "Raise the target size or let AI cap the resolution so the encode does not starve the video bitrate.",
+            "warning",
+        )
+    elif q_code == "ok":
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Streaming fit",
+            "This plan should be a reasonable streaming-sized encode, with some quality tradeoff.",
+            "info",
+        )
+    else:
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Quality fit",
+            "The bitrate budget looks healthy for the selected output resolution.",
+            "success",
+        )
+
+    if is_hdr and (options.get("video_codec") != "h265" or options.get("bit_depth") != "10"):
+        flags.append({"label": "HDR protection", "detail": "HDR sources should use HEVC 10-bit to avoid bad color/detail choices.", "severity": "danger"})
+    elif is_hdr:
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "HDR protected",
+            "AI kept HEVC 10-bit because the source looks HDR or 10-bit.",
+            "success",
+        )
+
+    if is_4k and options.get("resolution_mode") == "keep" and q_code != "good":
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "4K bitrate",
+            "Keeping full 4K at this target may be tight; auto or 1440p can look cleaner at the same size.",
+            "warning",
+        )
+
+    if options.get("audio_mode") == "copy" and options.get("audio_tracks") == "all" and total_bitrate_kbps < 2500:
+        flags.append({"label": "Audio budget", "detail": "Copying all audio on a tight target can leave less bitrate for video.", "severity": "warning"})
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Audio choice",
+            "For very small targets, keep selected languages instead of every audio track.",
+            "info",
+        )
+    elif options.get("audio_mode") == "copy":
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Audio safe",
+            "Audio will be copied, so the selected tracks keep original quality.",
+            "success",
+        )
+
+    if options.get("subtitle_mode") == "none":
+        flags.append({"label": "Subtitles removed", "detail": "This plan will not keep subtitle tracks.", "severity": "warning"})
+    elif options.get("subtitle_mode") == "all" and not options.get("subtitle_languages"):
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Subtitle scope",
+            "All subtitle languages are allowed; choose languages if you want less clutter.",
+            "info",
+        )
+
+    if options.get("encoder_family") == "qsv":
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Fast worker",
+            "QSV should keep CPU use lower and finish faster when the worker has Intel media hardware exposed.",
+            "info",
+        )
+    elif options.get("two_pass"):
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Target accuracy",
+            "Two-pass is enabled to help hit a tight size target more accurately.",
+            "info",
+        )
+
+    if source_kind == "show" and target_mb_f >= 1200 and src_h <= 1080:
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Episode target",
+            "This is generous for a 1080p episode; smaller-file mode may save more space.",
+            "info",
+        )
+    elif source_kind == "movie" and target_mb_f <= 2500 and duration_sec >= 90 * 60:
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Movie target",
+            "This is a tight movie target; quality depends heavily on resolution cap and source grain.",
+            "warning",
+        )
+
+    warning_count = len([f for f in flags if f.get("severity") == "warning"])
+    danger_count = len([f for f in flags if f.get("severity") == "danger"])
+    if danger_count:
+        risk_level = "high"
+    elif warning_count or q_code == "ok":
+        risk_level = "medium"
+    else:
+        risk_level = "low"
+
+    confidence -= danger_count * 16
+    confidence -= warning_count * 6
+    confidence = int(max(20, min(99, confidence)))
+
+    if not recommendations:
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Plan ready",
+            "The AI plan looks balanced for the selected source and target.",
+            "success",
+        )
+
+    quality_expectation = {
+        "code": q_code,
+        "label": {
+            "good": "Good",
+            "ok": "Streaming",
+            "risky": "Risky",
+        }.get(q_code, q_code),
+        "bpp": round(float(bpp_final or 0.0), 5),
+        "summary": {
+            "good": "Healthy bitrate for this output resolution.",
+            "ok": "Usable streaming quality with visible tradeoffs on hard scenes.",
+            "risky": "Likely artifacts unless the source is easy to compress or resolution is capped.",
+        }.get(q_code, ""),
+    }
+
+    return {
+        "enabled": True,
+        "summary": ai_info.get("summary") or "",
+        "recommendations": recommendations[:6],
+        "safety": {
+            "risk_level": risk_level,
+            "flags": flags[:6],
+        },
+        "confidence": {
+            "score": confidence,
+            "label": _wizard_ai_confidence_label(confidence),
+            "reasons": confidence_reasons[:4],
+        },
+        "quality_expectation": quality_expectation,
+        "target_analysis": {
+            "source_size_mb": round(source_size_mb, 1),
+            "target_mb": round(target_mb_f, 1),
+            "target_ratio": round(target_ratio, 3),
+            "total_bitrate_kbps": round(float(total_bitrate_kbps or 0.0), 1),
+            "video_bitrate_kbps": round(float(video_kbps or 0.0), 1),
+            "audio_bitrate_kbps": int(audio_kbps or 0),
+            "eta_seconds": int(round(float(eta_sec or 0.0))),
+        },
+    }
 
 
 def _wizard_normalize_options(data: dict) -> dict:
@@ -1280,6 +1701,8 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
         effective_preset = guess_preset_from_filename(base)
 
     info = dict(probe_func(src) or {})
+    info["path"] = src
+    info["source_name"] = base
     source_size_bytes = int(os.path.getsize(src))
     info["source_size_bytes"] = source_size_bytes
     info["source_size_mb"] = round(source_size_bytes / (1024.0 * 1024.0), 2)
@@ -1309,7 +1732,16 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
     if cpu_override_f <= 0:
         cpu_override_f = 1.0
 
-    options, ai_notes = _wizard_ai_choices(options, cpu, cpu_override_f, src_w, src_h, duration_sec)
+    pre_ai_target_mb = _size_to_mb(options["target_size_value"], options["target_size_unit"])
+    options, ai_info = _wizard_ai_choices(
+        options,
+        cpu,
+        cpu_override_f,
+        info,
+        source_type,
+        source_size_bytes,
+        pre_ai_target_mb,
+    )
     target_mb = _size_to_mb(options["target_size_value"], options["target_size_unit"])
     target_bytes = target_mb * 1024.0 * 1024.0
     total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
@@ -1331,6 +1763,27 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
     est_fps = max(1.0, min(base_est_fps * float(cpu.speed_index) * cpu_override_f, 500.0))
     eta_sec = (duration_sec * fps) / est_fps if est_fps > 0 else 0.0
     history_prediction = _history_prediction_for(source_size_bytes, effective_preset, bool(info.get("is_hdr")))
+    ai_insights = _wizard_ai_plan_insights(
+        options=options,
+        ai_info=ai_info,
+        info=info,
+        source_type=source_type,
+        source_size_bytes=source_size_bytes,
+        target_mb=target_mb,
+        total_bitrate_kbps=total_bitrate_kbps,
+        video_kbps=video_kbps,
+        audio_kbps=audio_kbps,
+        bpp_final=bpp_final,
+        q_code=q_code,
+        eta_sec=eta_sec,
+        history_prediction=history_prediction,
+    )
+    ai_warnings = list(ai_info.get("warnings") or [])
+    for flag in (ai_insights.get("safety") or {}).get("flags") or []:
+        if flag.get("severity") in {"danger", "warning"}:
+            detail = str(flag.get("detail") or "").strip()
+            if detail and detail not in ai_warnings:
+                ai_warnings.append(detail)
 
     return {
         "src": src,
@@ -1353,8 +1806,15 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
             "encoder_label": _wizard_encoder_label(encoder_name),
             "encoder_preset": encoder_preset,
             "ai_mode": bool(options.get("ai_mode")),
-            "ai_summary": "; ".join(ai_notes),
-            "ai_decisions": ai_notes,
+            "ai_summary": ai_info.get("summary") or "",
+            "ai_decisions": ai_info.get("decisions") or [],
+            "ai_warnings": ai_warnings,
+            "ai_profile": ai_info.get("profile") or {},
+            "ai_recommendations": ai_insights.get("recommendations") or [],
+            "ai_safety": ai_insights.get("safety") or {},
+            "ai_confidence": ai_insights.get("confidence") or {},
+            "ai_quality_expectation": ai_insights.get("quality_expectation") or {},
+            "ai_target_analysis": ai_insights.get("target_analysis") or {},
             "source_type": source_type,
             "target_size_auto": bool(options.get("target_size_auto")),
             "eta_seconds": int(round(eta_sec)),

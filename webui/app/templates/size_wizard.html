@@ -34,6 +34,216 @@
       font-size: 13px;
     }
 
+    .wizard-mode-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .wizard-mode-copy {
+      display: grid;
+      gap: 4px;
+    }
+
+    .wizard-mode-copy strong {
+      color: #fff;
+      font-size: 18px;
+    }
+
+    .wizard-mode-toggle {
+      display: inline-grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 4px;
+      padding: 4px;
+      border: 1px solid rgba(22, 199, 214, 0.22);
+      border-radius: 10px;
+      background: rgba(0, 0, 0, 0.2);
+    }
+
+    .wizard-mode-toggle button {
+      min-height: 40px;
+      border-radius: 8px;
+      padding: 8px 14px;
+      background: transparent;
+      color: rgba(229, 229, 229, 0.74);
+      border: 0;
+      cursor: pointer;
+      font-weight: 750;
+    }
+
+    .wizard-mode-toggle button.is-active {
+      color: #fff;
+      background: rgba(22, 199, 214, 0.18);
+      box-shadow: inset 0 0 0 1px rgba(22, 199, 214, 0.42);
+    }
+
+    body.wizard-simple-mode .advanced-only,
+    body.wizard-advanced-mode .simple-only {
+      display: none !important;
+    }
+
+    .simple-wizard-card {
+      display: grid;
+      gap: 16px;
+    }
+
+    .simple-section {
+      display: grid;
+      gap: 10px;
+      padding: 14px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.025);
+    }
+
+    .simple-section h2,
+    .simple-section h3 {
+      margin: 0;
+    }
+
+    .simple-file-name {
+      color: #fff;
+      font-weight: 800;
+      font-size: clamp(18px, 2.4vw, 24px);
+      overflow-wrap: anywhere;
+    }
+
+    .simple-file-path {
+      color: rgba(229, 229, 229, 0.58);
+      overflow-wrap: anywhere;
+    }
+
+    .simple-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 12px;
+    }
+
+    .simple-custom-size {
+      display: grid;
+      grid-template-columns: minmax(110px, 1fr) 88px;
+      gap: 8px;
+    }
+
+    .simple-risk-warning,
+    .plan-warning {
+      display: none;
+      padding: 10px 12px;
+      border-radius: 8px;
+      border: 1px solid rgba(245, 158, 11, 0.34);
+      background: rgba(245, 158, 11, 0.12);
+      color: #ffd89a;
+      line-height: 1.4;
+    }
+
+    .simple-risk-warning.has-warning,
+    .plan-warning.has-warning {
+      display: block;
+    }
+
+    .big-queue-btn {
+      width: 100%;
+      min-height: 52px;
+      border-radius: 10px;
+      font-size: 16px;
+    }
+
+    .advanced-section {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.02);
+      padding: 0;
+      margin-top: 12px;
+      overflow: hidden;
+    }
+
+    .advanced-section > summary {
+      position: relative;
+      list-style: none;
+      cursor: pointer;
+      padding: 14px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      color: #fff;
+      font-weight: 800;
+    }
+
+    .advanced-section > summary::-webkit-details-marker {
+      display: none;
+    }
+
+    .advanced-section > summary::after {
+      content: "+";
+      color: #7ee7ef;
+      font-size: 20px;
+      line-height: 1;
+    }
+
+    .advanced-section[open] > summary::after {
+      content: "-";
+    }
+
+    .advanced-section-body {
+      padding: 0 14px 14px;
+    }
+
+    .advanced-summary-copy {
+      display: grid;
+      gap: 2px;
+    }
+
+    .advanced-summary-copy span {
+      color: rgba(229, 229, 229, 0.58);
+      font-size: 12px;
+      font-weight: 500;
+    }
+
+    .help-text {
+      color: rgba(229, 229, 229, 0.56);
+      font-size: 12px;
+      line-height: 1.35;
+    }
+
+    .ai-brain-panel {
+      display: grid;
+      gap: 12px;
+      margin-bottom: 12px;
+      padding: 12px;
+      border-radius: 10px;
+      border: 1px solid rgba(22, 199, 214, 0.22);
+      background: linear-gradient(135deg, rgba(22, 199, 214, 0.11), rgba(88, 166, 255, 0.06));
+    }
+
+    .ai-brain-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 8px;
+    }
+
+    .ai-brain-chip {
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 8px;
+      padding: 10px;
+      background: rgba(0,0,0,0.16);
+    }
+
+    .ai-brain-chip strong {
+      display: block;
+      color: #fff;
+      margin-bottom: 3px;
+    }
+
+    .technical-details > summary {
+      cursor: pointer;
+      color: #baf7fb;
+      font-weight: 750;
+      margin-bottom: 8px;
+    }
+
     .recipe-grid,
     .wizard-form-grid {
       display: grid;
@@ -149,6 +359,11 @@
       border-radius: 6px;
       padding: 12px;
       background: rgba(0,188,212,0.06);
+    }
+
+    details.ai-mode-band {
+      padding: 0;
+      border-radius: 10px;
     }
 
     .primary-btn {
@@ -318,7 +533,33 @@
     }
 
     @media (max-width: 860px) {
+      .wizard-mode-card {
+        grid-template-columns: 1fr;
+      }
+
+      .wizard-mode-toggle {
+        width: 100%;
+      }
+
+      .wizard-mode-toggle button,
+      .source-actions button,
+      .source-actions .nav-link,
+      .wizard-actions button,
+      .preview-actions button {
+        min-height: 44px;
+      }
+
       .wizard-layout {
+        grid-template-columns: 1fr;
+      }
+
+      .simple-section {
+        padding: 12px;
+      }
+
+      .simple-grid,
+      .simple-custom-size,
+      .size-pair {
         grid-template-columns: 1fr;
       }
 
@@ -326,11 +567,29 @@
         grid-template-columns: 1fr;
         gap: 3px;
       }
+
+      .advanced-section > summary {
+        align-items: flex-start;
+        flex-direction: column;
+      }
+
+      .advanced-section > summary::after {
+        position: absolute;
+        right: 14px;
+      }
+
+      .preview-actions {
+        width: 100%;
+      }
+
+      .preview-actions button {
+        flex: 1 1 160px;
+      }
     }
   </style>
 </head>
 
-<body class="size-wizard-page">
+<body class="size-wizard-page wizard-simple-mode">
   <nav class="top-nav app-nav">
     <a href="/" class="app-brand">
       <span class="brand-mark">TSD</span>
@@ -354,13 +613,28 @@
       <div id="fileNameChip" class="file-chip">No file selected</div>
     </div>
 
-    <section class="section-card">
-      <div class="section-title-row">
-        <h2>Saved Wizard Presets</h2>
-        <span id="recipeStatus" class="small status-text"></span>
+    <section class="section-card wizard-mode-card">
+      <div class="wizard-mode-copy">
+        <strong>Choose how much control you want</strong>
+        <span class="small">Simple Mode keeps the smart choices up front. Advanced Mode exposes every HandBrake option.</span>
       </div>
+      <div class="wizard-mode-toggle" role="group" aria-label="Wizard mode">
+        <button id="simpleModeBtn" type="button" data-mode="simple" class="is-active">Simple Mode</button>
+        <button id="advancedModeBtn" type="button" data-mode="advanced">Advanced Mode</button>
+      </div>
+    </section>
 
-      <div class="recipe-grid">
+    <section class="section-card advanced-only">
+      <details class="advanced-section" open>
+        <summary>
+          <span class="advanced-summary-copy">
+            <strong>Presets</strong>
+            <span>Load, save, or delete saved Size Wizard profiles.</span>
+          </span>
+          <span id="recipeStatus" class="small status-text"></span>
+        </summary>
+
+      <div class="advanced-section-body recipe-grid">
         <div class="wizard-field">
           <label for="savedPresetSelect">Preset</label>
           <select id="savedPresetSelect">
@@ -380,10 +654,111 @@
           <button id="deletePresetBtn" type="button" class="danger">Delete</button>
         </div>
       </div>
+      </details>
     </section>
 
     <div class="wizard-layout">
-      <section class="section-card">
+      <section class="section-card simple-wizard-card simple-only">
+        <div class="simple-section">
+          <h2>Selected File</h2>
+          <div id="simpleFileName" class="simple-file-name">No file selected</div>
+          <div id="simpleFilePath" class="simple-file-path small">Pick a file from Jobs or use the last file opened here.</div>
+          <div class="source-actions">
+            <a href="/" class="nav-link">Pick From Jobs</a>
+            <button id="simpleUseLastFileBtn" type="button" class="ghost-btn">Use Last File</button>
+            <span id="simpleSourceStatus" class="small status-text"></span>
+          </div>
+        </div>
+
+        <div class="simple-section">
+          <h2>Goal</h2>
+          <div class="simple-grid">
+            <div class="wizard-field">
+              <label for="simpleGoal">What matters most?</label>
+              <select id="simpleGoal">
+                <option value="smaller">Smaller file</option>
+                <option value="balanced" selected>Balanced</option>
+                <option value="quality">Best quality</option>
+                <option value="custom">Custom size</option>
+              </select>
+              <div class="help-text">Balanced is the safest default for most movies and shows.</div>
+            </div>
+
+            <div id="simpleCustomSizeRow" class="wizard-field">
+              <label>Target size</label>
+              <div class="simple-custom-size">
+                <input id="simpleSizeValue" type="number" min="1" step="0.1" value="5">
+                <select id="simpleSizeUnit">
+                  <option value="GB" selected>GB</option>
+                  <option value="MB">MB</option>
+                </select>
+              </div>
+              <div class="help-text">Use this only when you need a specific file size.</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="simple-section">
+          <h2>Device / Speed</h2>
+          <div class="wizard-field">
+            <label for="simpleDevice">Encoding style</label>
+            <select id="simpleDevice">
+              <option value="auto" selected>Auto recommended</option>
+              <option value="fast">Faster encode</option>
+              <option value="small">Smaller file</option>
+              <option value="compat">Best compatibility</option>
+            </select>
+            <div class="help-text">Auto uses the current CPU profile and picks a good default. Compatibility favors H.264 8-bit.</div>
+          </div>
+        </div>
+
+        <div class="simple-section">
+          <h2>Audio</h2>
+          <div class="simple-grid">
+            <label class="toggle-line">
+              <input id="simpleKeepAllAudio" type="checkbox" checked>
+              Keep all audio tracks
+            </label>
+            <div class="wizard-field">
+              <label for="simpleAudioLanguages">Languages to keep</label>
+              <select id="simpleAudioLanguages">
+                <option value="eng, spa" selected>English + Spanish</option>
+                <option value="eng">English</option>
+                <option value="spa">Spanish</option>
+                <option value="">All languages</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div class="simple-section">
+          <h2>Subtitles</h2>
+          <div class="simple-grid">
+            <label class="toggle-line">
+              <input id="simpleKeepSubtitles" type="checkbox" checked>
+              Keep subtitles
+            </label>
+            <div class="wizard-field">
+              <label for="simpleSubtitleLanguages">Subtitle languages</label>
+              <select id="simpleSubtitleLanguages">
+                <option value="eng, spa" selected>English + Spanish</option>
+                <option value="eng">English</option>
+                <option value="spa">Spanish</option>
+                <option value="">All languages</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        <div id="simpleRiskWarning" class="simple-risk-warning small"></div>
+
+        <div>
+          <button id="simpleQueueBtn" type="button" class="primary-btn big-queue-btn">Queue Encode</button>
+          <div id="simpleQueueStatus" class="small status-text"></div>
+        </div>
+      </section>
+
+      <section class="section-card advanced-only">
         <div class="section-title-row">
           <h2>Encode Recipe</h2>
           <div class="wizard-actions">
@@ -402,8 +777,26 @@
           </div>
         </div>
 
-        <div class="wizard-group ai-mode-band">
-          <h3>AI Mode</h3>
+        <details class="advanced-section ai-mode-band" open>
+          <summary>
+            <span class="advanced-summary-copy">
+              <strong>AI Mode</strong>
+              <span>Smart profile builder using goal, hardware, CPU profile, languages, and source details.</span>
+            </span>
+          </summary>
+          <div class="advanced-section-body">
+            <div class="ai-brain-panel">
+              <div>
+                <strong>AI profile brain</strong>
+                <div class="help-text">This still uses the local planner for now. Later this section can become the place where an API-based profile builder plugs in.</div>
+              </div>
+              <div class="ai-brain-grid">
+                <div class="ai-brain-chip"><strong>Goal aware</strong><span class="help-text">Balances speed, size, quality, and archive behavior.</span></div>
+                <div class="ai-brain-chip"><strong>CPU aware</strong><span class="help-text">Uses your Settings CPU profile for ETA and encoder choices.</span></div>
+                <div class="ai-brain-chip"><strong>Media aware</strong><span class="help-text">Looks at resolution, HDR hints, source type, and target size.</span></div>
+                <div class="ai-brain-chip"><strong>Track aware</strong><span class="help-text">Keeps the languages and audio/subtitle behavior you choose here.</span></div>
+              </div>
+            </div>
           <div class="wizard-form-grid">
             <label class="toggle-line">
               <input id="aiMode" type="checkbox">
@@ -419,6 +812,7 @@
                 <option value="small">Smallest file</option>
                 <option value="archive">Archive</option>
               </select>
+              <div class="help-text">Quality protects detail, speed finishes faster, small pushes storage savings harder.</div>
             </div>
 
             <div class="wizard-field">
@@ -428,6 +822,7 @@
                 <option value="software">CPU only</option>
                 <option value="qsv">Intel QSV</option>
               </select>
+              <div class="help-text">QSV can be much faster when the worker/container has Intel media hardware available.</div>
             </div>
 
             <label class="toggle-line">
@@ -446,6 +841,7 @@
             <div class="wizard-field">
               <label for="audioLanguages">Audio languages</label>
               <input id="audioLanguages" type="text" value="eng, spa" placeholder="eng, spa, jpn">
+              <div class="help-text">Use ISO-style language codes like eng, spa, jpn, fre.</div>
             </div>
 
             <div class="wizard-field">
@@ -460,12 +856,20 @@
             <div class="wizard-field">
               <label for="subtitleLanguages">Subtitle languages</label>
               <input id="subtitleLanguages" type="text" value="eng, spa" placeholder="eng, spa, jpn">
+              <div class="help-text">Leave blank to avoid language filtering.</div>
             </div>
           </div>
-        </div>
+          </div>
+        </details>
 
-        <div class="wizard-group">
-          <h3>Target</h3>
+        <details class="advanced-section" open>
+          <summary>
+            <span class="advanced-summary-copy">
+              <strong>Target</strong>
+              <span>Preset, output size, quality target, and resolution behavior.</span>
+            </span>
+          </summary>
+          <div class="advanced-section-body">
           <div class="wizard-form-grid">
             <div class="wizard-field">
               <label for="preset">Base preset</label>
@@ -474,6 +878,7 @@
                 <option value="1080">1080p preset</option>
                 <option value="4k">4K preset</option>
               </select>
+              <div class="help-text">Auto chooses 4K or 1080p from filename hints.</div>
             </div>
 
             <div class="wizard-field">
@@ -499,6 +904,7 @@
                 <option value="balanced" selected>Balanced</option>
                 <option value="small">Small file</option>
               </select>
+              <div class="help-text">This changes how aggressively the planner spends bitrate.</div>
             </div>
 
             <div class="wizard-field">
@@ -511,12 +917,20 @@
                 <option value="1080">Cap at 1080p</option>
                 <option value="720">Cap at 720p</option>
               </select>
+              <div class="help-text">Auto may downscale high-resolution sources when the target size is too tight.</div>
             </div>
           </div>
-        </div>
+          </div>
+        </details>
 
-        <div class="wizard-group">
-          <h3>Video</h3>
+        <details class="advanced-section" open>
+          <summary>
+            <span class="advanced-summary-copy">
+              <strong>Video</strong>
+              <span>Codec, encoder, bit depth, encoder speed, and frame-rate handling.</span>
+            </span>
+          </summary>
+          <div class="advanced-section-body">
           <div class="wizard-form-grid">
             <div class="wizard-field">
               <label for="videoCodec">Codec</label>
@@ -524,6 +938,7 @@
                 <option value="h265" selected>H.265 / HEVC</option>
                 <option value="h264">H.264 / AVC</option>
               </select>
+              <div class="help-text">H.265 saves more space. H.264 is usually more compatible.</div>
             </div>
 
             <div class="wizard-field">
@@ -532,6 +947,7 @@
                 <option value="software" selected>CPU software</option>
                 <option value="qsv">Intel QSV</option>
               </select>
+              <div class="help-text">CPU usually gives better compression. QSV usually finishes faster.</div>
             </div>
 
             <div class="wizard-field">
@@ -540,6 +956,7 @@
                 <option value="10" selected>10-bit</option>
                 <option value="8">8-bit</option>
               </select>
+              <div class="help-text">10-bit is recommended for HDR and modern HEVC encodes.</div>
             </div>
 
             <div class="wizard-field">
@@ -550,6 +967,7 @@
                 <option value="medium">Medium</option>
                 <option value="slow">Slow</option>
               </select>
+              <div class="help-text">Slower can save space at the same visual quality, but takes longer.</div>
             </div>
 
             <div class="wizard-field">
@@ -559,6 +977,7 @@
                 <option value="pfr">Peak frame rate</option>
                 <option value="cfr">Constant frame rate</option>
               </select>
+              <div class="help-text">Same as source is safest. CFR is useful for strict device compatibility.</div>
             </div>
 
             <div class="wizard-field">
@@ -573,12 +992,20 @@
                 <option value="59.94">59.94</option>
                 <option value="60">60</option>
               </select>
+              <div class="help-text">Only used when Peak or Constant frame rate is selected.</div>
             </div>
           </div>
-        </div>
+          </div>
+        </details>
 
-        <div class="wizard-group">
-          <h3>Audio, Subtitles, Filters</h3>
+        <details class="advanced-section" open>
+          <summary>
+            <span class="advanced-summary-copy">
+              <strong>Audio</strong>
+              <span>Choose whether audio is copied, converted, and how many tracks are kept.</span>
+            </span>
+          </summary>
+          <div class="advanced-section-body">
           <div class="wizard-form-grid">
             <div class="wizard-field">
               <label for="audioMode">Audio</label>
@@ -587,6 +1014,7 @@
                 <option value="aac">AAC custom bitrate</option>
                 <option value="copy" selected>Copy source audio</option>
               </select>
+              <div class="help-text">Copy preserves the original audio format and is safest for quality.</div>
             </div>
 
             <div class="wizard-field">
@@ -598,6 +1026,7 @@
                 <option value="256">256 kbps</option>
                 <option value="320">320 kbps</option>
               </select>
+              <div class="help-text">Only used when audio is converted to AAC.</div>
             </div>
 
             <div class="wizard-field">
@@ -606,8 +1035,21 @@
                 <option value="first">First track</option>
                 <option value="all" selected>All tracks</option>
               </select>
+              <div class="help-text">All tracks keeps commentary and alternate language tracks that match your language filter.</div>
             </div>
+          </div>
+          </div>
+        </details>
 
+        <details class="advanced-section" open>
+          <summary>
+            <span class="advanced-summary-copy">
+              <strong>Subtitles</strong>
+              <span>Keep none, first, or all subtitle tracks, with optional language filtering.</span>
+            </span>
+          </summary>
+          <div class="advanced-section-body">
+          <div class="wizard-form-grid">
             <div class="wizard-field">
               <label for="subtitleMode">Subtitles</label>
               <select id="subtitleMode">
@@ -615,8 +1057,21 @@
                 <option value="first">First track</option>
                 <option value="all" selected>All tracks</option>
               </select>
+              <div class="help-text">None removes subtitles. All preserves matching tracks and disables burn-in.</div>
             </div>
+          </div>
+          </div>
+        </details>
 
+        <details class="advanced-section" open>
+          <summary>
+            <span class="advanced-summary-copy">
+              <strong>Filters</strong>
+              <span>Deinterlace, crop behavior, and two-pass encoding.</span>
+            </span>
+          </summary>
+          <div class="advanced-section-body">
+          <div class="wizard-form-grid">
             <div class="wizard-field">
               <label for="deinterlace">Deinterlace</label>
               <select id="deinterlace">
@@ -624,6 +1079,7 @@
                 <option value="decomb">Decomb</option>
                 <option value="yadif">Yadif</option>
               </select>
+              <div class="help-text">Use only for interlaced sources. Leave off for most modern files.</div>
             </div>
 
             <div class="wizard-field">
@@ -632,14 +1088,17 @@
                 <option value="auto" selected>Auto</option>
                 <option value="none">None</option>
               </select>
+              <div class="help-text">Auto lets HandBrake remove black borders. None keeps the exact frame.</div>
             </div>
 
             <label class="toggle-line">
               <input id="twoPass" type="checkbox">
               Two-pass video
+              <span class="help-text">Improves bitrate targeting for CPU encodes, but takes longer.</span>
             </label>
           </div>
-        </div>
+          </div>
+        </details>
       </section>
 
       <aside class="section-card">
@@ -654,6 +1113,10 @@
           <div class="metric-row">
             <span>Current size</span>
             <strong id="metricSourceSize">-</strong>
+          </div>
+          <div class="metric-row">
+            <span>Estimated new size</span>
+            <strong id="metricEstimatedSize">-</strong>
           </div>
           <div class="metric-row">
             <span>Detected type</span>
@@ -695,25 +1158,40 @@
             <span>History estimate</span>
             <strong id="metricHistory">-</strong>
           </div>
+          <div class="metric-row">
+            <span>Audio summary</span>
+            <strong id="metricAudioSummary">-</strong>
+          </div>
+          <div class="metric-row">
+            <span>Subtitle summary</span>
+            <strong id="metricSubtitleSummary">-</strong>
+          </div>
         </div>
 
+        <div id="planWarning" class="plan-warning small"></div>
         <div id="decisionNote" class="small plan-note"></div>
 
-        <div class="wizard-group">
-          <label class="field-label" for="argsPreview">Extra args</label>
+        <details id="technicalDetails" class="wizard-group technical-details">
+          <summary>Extra Arguments / Technical Details</summary>
+          <label class="field-label" for="argsPreview">Generated extra args</label>
           <pre id="argsPreview" class="args-preview">-</pre>
-        </div>
+        </details>
       </aside>
     </div>
 
-    <section class="section-card">
-      <div class="section-title-row">
-        <h2>Visual Compare</h2>
-        <div class="preview-actions">
-          <button id="genFastBtn" type="button" class="ghost-btn">Fast Preview</button>
-          <button id="genAccurateBtn" type="button" class="ghost-btn">Accurate Preview</button>
-        </div>
-      </div>
+    <section class="section-card advanced-only">
+      <details class="advanced-section" open>
+        <summary>
+          <span class="advanced-summary-copy">
+            <strong>Preview</strong>
+            <span>Generate side-by-side preview frames or a short accurate clip.</span>
+          </span>
+          <span class="preview-actions">
+            <button id="genFastBtn" type="button" class="ghost-btn">Fast Preview</button>
+            <button id="genAccurateBtn" type="button" class="ghost-btn">Accurate Preview</button>
+          </span>
+        </summary>
+        <div class="advanced-section-body">
 
       <div id="compareWrap" class="compare-wrap" style="display:none;">
         <img id="imgNew" class="compare-img" alt="Wizard frame">
@@ -730,6 +1208,8 @@
         <video id="accurateVideo" controls playsinline></video>
         <div id="accurateVideoHint" class="small status-text"></div>
       </div>
+        </div>
+      </details>
     </section>
   </main>
 
@@ -795,6 +1275,17 @@
     ];
 
     const PREVIEW_ID_KEY = "hbwiz_preview_id";
+    const WIZARD_MODE_KEY = "hbwiz_mode";
+    const simpleControlIds = [
+      "simpleGoal",
+      "simpleSizeValue",
+      "simpleSizeUnit",
+      "simpleDevice",
+      "simpleKeepAllAudio",
+      "simpleAudioLanguages",
+      "simpleKeepSubtitles",
+      "simpleSubtitleLanguages"
+    ];
     let previewTimer = null;
     let previewSeq = 0;
     let wizardPresets = [];
@@ -856,6 +1347,31 @@
         return null;
       }
     })();
+
+    function getWizardMode() {
+      const saved = safeGetStorage(wizardLocalStorage, WIZARD_MODE_KEY);
+      return saved === "advanced" ? "advanced" : "simple";
+    }
+
+    function setWizardMode(mode, { persist = true } = {}) {
+      const next = mode === "advanced" ? "advanced" : "simple";
+      document.body.classList.toggle("wizard-simple-mode", next === "simple");
+      document.body.classList.toggle("wizard-advanced-mode", next === "advanced");
+      el("simpleModeBtn")?.classList.toggle("is-active", next === "simple");
+      el("advancedModeBtn")?.classList.toggle("is-active", next === "advanced");
+      el("simpleModeBtn")?.setAttribute("aria-pressed", next === "simple" ? "true" : "false");
+      el("advancedModeBtn")?.setAttribute("aria-pressed", next === "advanced" ? "true" : "false");
+      const tech = el("technicalDetails");
+      if (tech) tech.open = next === "advanced";
+      if (persist) safeSetStorage(wizardLocalStorage, WIZARD_MODE_KEY, next);
+      if (next === "simple") {
+        syncSimpleFromAdvanced();
+        applySimpleControlsToAdvanced({ schedule: false });
+      }
+      updateSelectedFileLabel();
+      updateControlStates();
+      updateSimpleUi();
+    }
 
     function readWizardHandoff() {
       const raw = safeGetStorage(wizardSessionStorage, "hbwiz_handoff")
@@ -927,6 +1443,12 @@
       node.textContent = text || "";
       node.classList.toggle("error", kind === "error");
       node.classList.toggle("ok", kind === "ok");
+      if (id === "sourceStatus" && el("simpleSourceStatus")) {
+        const mirror = el("simpleSourceStatus");
+        mirror.textContent = text || "";
+        mirror.classList.toggle("error", kind === "error");
+        mirror.classList.toggle("ok", kind === "ok");
+      }
     }
 
     function setValue(id, value) {
@@ -1077,6 +1599,95 @@
       return `${text}${bpp}`;
     }
 
+    function setQueueStatus(text, kind = "") {
+      setStatus("queueStatus", text, kind);
+      setStatus("simpleQueueStatus", text, kind);
+    }
+
+    function languageText(value) {
+      const raw = Array.isArray(value) ? value.join(", ") : String(value || "").trim();
+      if (!raw) return "all languages";
+      return raw
+        .split(",")
+        .map((part) => part.trim())
+        .filter(Boolean)
+        .map((code) => {
+          const lower = code.toLowerCase();
+          if (lower === "eng") return "English";
+          if (lower === "spa") return "Spanish";
+          return code;
+        })
+        .join(", ");
+    }
+
+    function audioSummaryText(payload) {
+      const tracks = payload.ai_mode ? payload.ai_audio_scope : payload.audio_tracks;
+      const mode = payload.audio_mode === "copy" || payload.ai_copy_audio ? "copy audio" : "convert to AAC";
+      const trackText = tracks === "all" ? "all matching tracks" : "first matching track";
+      return `${mode}, ${trackText}, ${languageText(payload.audio_languages)}`;
+    }
+
+    function subtitleSummaryText(payload) {
+      const mode = payload.ai_mode ? payload.ai_subtitle_scope : payload.subtitle_mode;
+      if (mode === "none") return "no subtitles";
+      const trackText = mode === "all" ? "all matching subtitles" : "first matching subtitle";
+      return `${trackText}, ${languageText(payload.subtitle_languages)}`;
+    }
+
+    function estimateOutputText(estimates, inputs) {
+      const prediction = estimates?.history_prediction;
+      if (prediction && prediction.available && prediction.estimated_out_bytes) {
+        return `${fmtBytes(prediction.estimated_out_bytes)} history estimate`;
+      }
+      if (inputs?.target_mb) return `${fmtMb(inputs.target_mb)} target`;
+      return "-";
+    }
+
+    function warningMessages(payload, planData = null) {
+      const warnings = [];
+      const estimates = planData?.estimates || {};
+      const probe = planData?.probe || {};
+      const subtitleScope = payload.ai_mode ? payload.ai_subtitle_scope : payload.subtitle_mode;
+      const audioScope = payload.ai_mode ? payload.ai_audio_scope : payload.audio_tracks;
+
+      if (payload.audio_mode !== "copy" && !payload.ai_copy_audio) {
+        warnings.push("Audio may be converted instead of copied.");
+      }
+      if (audioScope === "first") {
+        warnings.push("Only the first matching audio track will be kept.");
+      }
+      if (subtitleScope === "none") {
+        warnings.push("Subtitles will be removed.");
+      } else if (subtitleScope === "first") {
+        warnings.push("Only the first matching subtitle track will be kept.");
+      }
+      if (payload.resolution_mode && payload.resolution_mode !== "auto" && payload.resolution_mode !== "keep") {
+        warnings.push(`Resolution may be capped at ${payload.resolution_mode}p.`);
+      }
+      if (probe.is_hdr && (payload.video_codec === "h264" || payload.bit_depth === "8")) {
+        warnings.push("HDR/10-bit sources may lose HDR-friendly encoding choices.");
+      }
+      if (estimates.quality_code === "risky") {
+        warnings.push("The requested size may cause visible quality loss.");
+      }
+      (estimates.ai_warnings || []).forEach((warning) => {
+        if (warning) warnings.push(String(warning));
+      });
+      return warnings;
+    }
+
+    function updateRiskWarnings(planData = null, payload = null) {
+      const p = payload || currentPayload();
+      const warnings = warningMessages(p, planData);
+      const text = warnings.length ? warnings.join(" ") : "";
+      ["simpleRiskWarning", "planWarning"].forEach((id) => {
+        const node = el(id);
+        if (!node) return;
+        node.textContent = text;
+        node.classList.toggle("has-warning", warnings.length > 0);
+      });
+    }
+
     function buildRecipeName(payload) {
       if (payload.ai_mode) {
         const goal = String(payload.ai_goal || "balanced").replace(/^\w/, (c) => c.toUpperCase());
@@ -1087,7 +1698,104 @@
       return `${codec} ${encoder} ${payload.target_size_value}${payload.target_size_unit}`;
     }
 
+    function updateSimpleUi() {
+      const custom = el("simpleGoal")?.value === "custom";
+      const customRow = el("simpleCustomSizeRow");
+      if (customRow) customRow.style.display = custom ? "" : "none";
+      const keepSubs = !!el("simpleKeepSubtitles")?.checked;
+      if (el("simpleSubtitleLanguages")) el("simpleSubtitleLanguages").disabled = !keepSubs;
+    }
+
+    function syncSimpleFromAdvanced() {
+      const quality = el("quality")?.value || "balanced";
+      const autoTarget = !!el("targetSizeAuto")?.checked;
+      if (!autoTarget) setValue("simpleGoal", "custom");
+      else if (quality === "small") setValue("simpleGoal", "smaller");
+      else if (quality === "high") setValue("simpleGoal", "quality");
+      else setValue("simpleGoal", "balanced");
+
+      setValue("simpleSizeValue", el("sizeValue")?.value || defaultOptions.target_size_value);
+      setValue("simpleSizeUnit", el("sizeUnit")?.value || defaultOptions.target_size_unit);
+
+      if (el("videoCodec")?.value === "h264") setValue("simpleDevice", "compat");
+      else if (el("aiGoal")?.value === "speed" || el("aiHardware")?.value === "qsv") setValue("simpleDevice", "fast");
+      else if (el("aiGoal")?.value === "small") setValue("simpleDevice", "small");
+      else setValue("simpleDevice", "auto");
+
+      setChecked("simpleKeepAllAudio", (el("audioTracks")?.value || "all") === "all");
+      setValue("simpleAudioLanguages", languagesForInput(el("audioLanguages")?.value || "eng, spa"));
+      setChecked("simpleKeepSubtitles", (el("subtitleMode")?.value || "all") !== "none");
+      setValue("simpleSubtitleLanguages", languagesForInput(el("subtitleLanguages")?.value || "eng, spa"));
+      updateSimpleUi();
+    }
+
+    function applySimpleControlsToAdvanced({ schedule = true } = {}) {
+      if (getWizardMode() !== "simple") return;
+
+      const goal = el("simpleGoal")?.value || "balanced";
+      const device = el("simpleDevice")?.value || "auto";
+      const goalToAi = {
+        smaller: "small",
+        balanced: "balanced",
+        quality: "quality",
+        custom: "balanced"
+      };
+      const goalToQuality = {
+        smaller: "small",
+        balanced: "balanced",
+        quality: "high",
+        custom: "balanced"
+      };
+
+      setChecked("targetSizeAuto", goal !== "custom");
+      if (goal === "custom") {
+        setValue("sizeValue", el("simpleSizeValue")?.value || defaultOptions.target_size_value);
+        setValue("sizeUnit", el("simpleSizeUnit")?.value || defaultOptions.target_size_unit);
+      } else {
+        applyAutoTargetForSource(el("src").value);
+      }
+
+      setValue("quality", goalToQuality[goal] || "balanced");
+      setChecked("aiMode", device !== "compat");
+      setValue("aiGoal", device === "fast" ? "speed" : (device === "small" ? "small" : (goalToAi[goal] || "balanced")));
+      setValue("aiHardware", device === "fast" ? "qsv" : (device === "compat" ? "software" : "auto"));
+
+      if (device === "compat") {
+        setValue("videoCodec", "h264");
+        setValue("bitDepth", "8");
+        setValue("encoderFamily", "software");
+        setValue("encoderSpeed", "medium");
+        setValue("resolutionMode", "auto");
+      } else {
+        setValue("videoCodec", "h265");
+        setValue("bitDepth", "10");
+        setValue("encoderFamily", device === "fast" ? "qsv" : "software");
+        setValue("encoderSpeed", device === "small" ? "slow" : "auto");
+        setValue("resolutionMode", "auto");
+      }
+
+      const keepAllAudio = !!el("simpleKeepAllAudio")?.checked;
+      setChecked("aiCopyAudio", true);
+      setValue("aiAudioScope", keepAllAudio ? "all" : "first");
+      setValue("audioMode", "copy");
+      setValue("audioTracks", keepAllAudio ? "all" : "first");
+      setValue("audioLanguages", el("simpleAudioLanguages")?.value || "");
+
+      const keepSubs = !!el("simpleKeepSubtitles")?.checked;
+      setValue("aiSubtitleScope", keepSubs ? "all" : "none");
+      setValue("subtitleMode", keepSubs ? "all" : "none");
+      setValue("subtitleLanguages", keepSubs ? (el("simpleSubtitleLanguages")?.value || "") : "");
+
+      setValue("framerateMode", "same");
+      setValue("deinterlace", "off");
+      setValue("cropMode", "auto");
+      setChecked("twoPass", false);
+      updateSimpleUi();
+      if (schedule) schedulePreview();
+    }
+
     function currentPayload() {
+      applySimpleControlsToAdvanced({ schedule: false });
       const aiEnabled = el("aiMode").checked;
       return {
         src: el("src").value,
@@ -1162,6 +1870,7 @@
       } else {
         updateTargetSizeHint();
       }
+      syncSimpleFromAdvanced();
       updateControlStates();
       schedulePreview();
     }
@@ -1170,6 +1879,9 @@
       const path = el("src").value;
       el("fileNameChip").textContent = path ? basename(path) : "No file selected";
       el("useLastFileBtn").disabled = !readWizardHandoff();
+      if (el("simpleFileName")) el("simpleFileName").textContent = path ? basename(path) : "No file selected";
+      if (el("simpleFilePath")) el("simpleFilePath").textContent = path || "Pick a file from Jobs or use the last file opened here.";
+      if (el("simpleUseLastFileBtn")) el("simpleUseLastFileBtn").disabled = !readWizardHandoff();
     }
 
     function updateControlStates() {
@@ -1337,6 +2049,7 @@
     function resetPlan(message) {
       el("previewBox").textContent = message || "Waiting for a selected file.";
       el("metricSourceSize").textContent = "-";
+      el("metricEstimatedSize").textContent = "-";
       el("metricSourceType").textContent = "-";
       el("metricTarget").textContent = "-";
       el("metricVideoBitrate").textContent = "-";
@@ -1347,8 +2060,11 @@
       el("metricAi").textContent = "-";
       el("metricEta").textContent = "-";
       el("metricHistory").textContent = "-";
+      el("metricAudioSummary").textContent = "-";
+      el("metricSubtitleSummary").textContent = "-";
       el("decisionNote").textContent = "";
       el("argsPreview").textContent = "-";
+      updateRiskWarnings(null, currentPayload());
       updateTargetSizeHint();
     }
 
@@ -1379,6 +2095,7 @@
 
       el("previewBox").textContent = sourceLine;
       el("metricSourceSize").textContent = sourceSize;
+      el("metricEstimatedSize").textContent = estimateOutputText(e, inputs);
       el("metricSourceType").textContent = `${sourceProfileText(sourceProfile)} / ${p.is_hdr ? "HDR" : "SDR"}`;
       el("metricTarget").textContent = fmtMb(inputs.target_mb);
       el("metricVideoBitrate").textContent = fmtKbps(e.video_bitrate_kbps);
@@ -1389,8 +2106,15 @@
       el("metricAi").textContent = e.ai_mode ? (e.ai_summary || "AI mode active") : "Manual";
       el("metricEta").textContent = `${e.eta_human || "-"}${e.est_fps ? ` at about ${e.est_fps} fps` : ""}`;
       el("metricHistory").textContent = historyPredictionText(e.history_prediction);
-      el("decisionNote").textContent = [e.decision_note, e.ai_summary].filter(Boolean).join(" ");
+      el("metricAudioSummary").textContent = audioSummaryText(inputs);
+      el("metricSubtitleSummary").textContent = subtitleSummaryText(inputs);
+      const aiAdvice = (e.ai_recommendations || [])
+        .slice(0, 2)
+        .map((item) => `${item.label}: ${item.detail}`)
+        .join(" ");
+      el("decisionNote").textContent = [e.decision_note, e.ai_summary, aiAdvice].filter(Boolean).join(" ");
       el("argsPreview").textContent = args.length ? args.join(" ") : "-";
+      updateRiskWarnings(data, inputs);
     }
 
     async function refreshPreviewText() {
@@ -1614,7 +2338,7 @@
         return;
       }
 
-      setStatus("queueStatus", "Queuing...");
+      setQueueStatus("Queuing...");
       if (window.setAppStatus) setAppStatus("Encoding", "encoding");
 
       try {
@@ -1625,12 +2349,12 @@
         }, 15000);
         const data = await readJson(res);
         if (!res.ok) throw new Error(data.error || "Queue failed");
-        setStatus("queueStatus", `Queued ${data.job_id || ""}`, "ok");
+        setQueueStatus(`Queued ${data.job_id || ""}`, "ok");
         if (window.appToast) appToast("Wizard encode queued.", "success");
         if (window.setAppStatus) setAppStatus("Idle", "idle");
-        setTimeout(() => setStatus("queueStatus", ""), 3500);
+        setTimeout(() => setQueueStatus(""), 3500);
       } catch (e) {
-        setStatus("queueStatus", "Error", "error");
+        setQueueStatus("Error", "error");
         if (window.setAppStatus) setAppStatus("Error", "error");
         if (window.appToast) appToast(e.message || "Queue failed.", "error");
       }
@@ -1641,6 +2365,29 @@
         const node = el(id);
         node.addEventListener("change", schedulePreview);
         node.addEventListener("input", schedulePreview);
+      });
+
+      simpleControlIds.forEach((id) => {
+        const node = el(id);
+        if (!node) return;
+        const handler = () => {
+          applySimpleControlsToAdvanced({ schedule: false });
+          updateControlStates();
+          updateSimpleUi();
+          updateRiskWarnings(null, currentPayload());
+          schedulePreview();
+        };
+        node.addEventListener("change", handler);
+        node.addEventListener("input", handler);
+      });
+
+      el("simpleModeBtn").addEventListener("click", () => {
+        setWizardMode("simple");
+        schedulePreview();
+      });
+      el("advancedModeBtn").addEventListener("click", () => {
+        setWizardMode("advanced");
+        schedulePreview();
       });
 
       el("videoCodec").addEventListener("change", updateControlStates);
@@ -1659,11 +2406,21 @@
       el("loadPresetBtn").addEventListener("click", loadSelectedWizardPreset);
       el("newPresetBtn").addEventListener("click", newWizardPresetDraft);
       el("useLastFileBtn").addEventListener("click", useLastWizardFile);
+      el("simpleUseLastFileBtn").addEventListener("click", useLastWizardFile);
       el("savePresetBtn").addEventListener("click", saveWizardPreset);
       el("deletePresetBtn").addEventListener("click", deleteWizardPreset);
       el("queueBtn").addEventListener("click", queueWizard);
-      el("genFastBtn").addEventListener("click", refreshPreviewImages);
-      el("genAccurateBtn").addEventListener("click", refreshAccuratePreview);
+      el("simpleQueueBtn").addEventListener("click", queueWizard);
+      el("genFastBtn").addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        refreshPreviewImages();
+      });
+      el("genAccurateBtn").addEventListener("click", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        refreshAccuratePreview();
+      });
 
       const wrap = el("compareWrap");
       wrap.addEventListener("pointerdown", startDrag);
@@ -1709,9 +2466,15 @@
     }
 
     function startWizardPage() {
+      setWizardMode(getWizardMode(), { persist: false });
       wireEvents();
       initFromQuery();
+      if (getWizardMode() === "simple") {
+        syncSimpleFromAdvanced();
+        applySimpleControlsToAdvanced({ schedule: false });
+      }
       updateControlStates();
+      updateSimpleUi();
       loadWizardPresets();
       schedulePreview();
     }
