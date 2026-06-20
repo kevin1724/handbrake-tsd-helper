@@ -846,12 +846,14 @@ WIZARD_AI_HARDWARE = {"auto", "software", "qsv"}
 WIZARD_AI_CODEC_PREFS = {"auto", "h264", "h265", "av1"}
 WIZARD_AI_TRACK_SCOPES = {"first", "all"}
 WIZARD_AI_SUBTITLE_SCOPES = {"none", "first", "all"}
+WIZARD_AI_RISK_LEVELS = {"safe", "smart", "explorer", "bold"}
 
 WIZARD_DEFAULT_OPTIONS = {
     "ai_mode": False,
     "ai_goal": "balanced",
     "ai_hardware": "auto",
     "ai_codec_preference": "auto",
+    "ai_risk": "smart",
     "ai_copy_audio": True,
     "ai_audio_scope": "all",
     "ai_subtitle_scope": "all",
@@ -1185,6 +1187,8 @@ def _wizard_ai_choices(
     goal = out["ai_goal"]
     hw = out["ai_hardware"]
     codec_pref = out.get("ai_codec_preference") or "auto"
+    risk = out.get("ai_risk") or "smart"
+    risk_score = {"safe": 0, "smart": 1, "explorer": 2, "bold": 3}.get(risk, 1)
     cpu_score = max(0.1, float(getattr(cpu, "speed_index", 1.0)) * float(cpu_override or 1.0))
     cpu_qsv_capable = _wizard_likely_qsv(getattr(cpu, "label", ""))
     qsv_ok = bool(qsv_device_available) and (hw == "qsv" or (hw == "auto" and cpu_qsv_capable))
@@ -1208,6 +1212,17 @@ def _wizard_ai_choices(
     bpp_source = _bpp(rough_video_kbps, src_w, src_h, fps)
     decisions: list[str] = []
     warnings: list[str] = []
+    explored: list[dict] = []
+
+    risk_label = {
+        "safe": "Safe",
+        "smart": "Smart",
+        "explorer": "Explorer",
+        "bold": "Bold",
+    }.get(risk, "Smart")
+    decisions.append(f"AI risk mode: {risk_label}.")
+    if risk_score >= 2:
+        warnings.append("Explorer AI may choose slower or more aggressive settings when the source and target suggest a better result.")
 
     if is_hdr:
         decisions.append("Detected HDR/10-bit hints, so AI protects 10-bit encoder choices.")
@@ -1291,7 +1306,7 @@ def _wizard_ai_choices(
             )
             if pred.get("available"):
                 src_gb = max(source_size_bytes_i / float(1024**3), 0.01)
-                history_candidates.append({
+                candidate = {
                     "method": method,
                     "codec": codec,
                     "family": family,
@@ -1300,9 +1315,23 @@ def _wizard_ai_choices(
                     "seconds_per_gb": (float(pred.get("estimated_runtime_seconds") or 0.0) / src_gb) if pred.get("estimated_runtime_seconds") else None,
                     "sample_count": int(pred.get("sample_count") or 0),
                     "runtime_weight": runtime_weight,
+                }
+                history_candidates.append(candidate)
+                explored.append({
+                    "method": method,
+                    "codec": codec,
+                    "encoder_family": family,
+                    "sample_count": candidate["sample_count"],
+                    "estimated_ratio": round(candidate["out_ratio"], 4),
+                    "seconds_per_gb": round(candidate["seconds_per_gb"], 1) if candidate["seconds_per_gb"] else None,
                 })
     except Exception:
         history_candidates = []
+
+    if history_candidates:
+        decisions.append(f"AI explored {len(history_candidates)} learned encoder path{'' if len(history_candidates) == 1 else 's'} from job history.")
+    elif risk_score >= 2:
+        decisions.append("AI did not find enough matching history, so Explorer mode falls back to source/target heuristics.")
 
     def apply_history_candidate(candidate: dict, reason: str) -> None:
         nonlocal history_choice
@@ -1352,26 +1381,36 @@ def _wizard_ai_choices(
                 current = next((c for c in efficient_candidates if c["method"] == current_method), None)
                 improvement = (current["out_ratio"] - best["out_ratio"]) if current else 0.0
                 av1_reasonable = best["codec"] != "av1" or (
-                    cpu_score >= 1.0
+                    cpu_score >= (0.85 if risk_score >= 3 else 1.0)
                     and duration_sec <= 4 * 60 * 60
-                    and (target_ratio < 0.35 or goal in {"quality", "archive", "small"})
+                    and (target_ratio < (0.45 if risk_score >= 2 else 0.35) or goal in {"quality", "archive", "small"})
                 )
-                if av1_reasonable and ((best["codec"] == "av1" and (improvement >= 0.06 or target_ratio < 0.22)) or (best["sample_count"] >= 3 and improvement >= 0.08)):
+                improvement_needed = 0.035 if risk_score >= 3 else (0.05 if risk_score >= 2 else 0.08)
+                if av1_reasonable and ((best["codec"] == "av1" and (improvement >= improvement_needed or target_ratio < (0.30 if risk_score >= 2 else 0.22))) or (best["sample_count"] >= 3 and improvement >= improvement_needed)):
                     apply_history_candidate(best, "it has produced better size efficiency for similar source and preset history")
 
     if codec_pref == "auto" and out["video_codec"] != "av1":
-        if goal in {"quality", "archive"} and target_ratio < 0.22 and strong_cpu and duration_sec <= 3 * 60 * 60:
+        av1_quality_ratio = 0.34 if risk_score >= 3 else (0.28 if risk_score >= 2 else 0.22)
+        av1_balanced_ratio = 0.22 if risk_score >= 3 else (0.18 if risk_score >= 2 else 0.16)
+        av1_cpu_ok = cpu_score >= (0.85 if risk_score >= 3 else (1.0 if risk_score >= 2 else 1.35))
+        if goal in {"quality", "archive"} and target_ratio < av1_quality_ratio and av1_cpu_ok and duration_sec <= (4 * 60 * 60 if risk_score >= 2 else 3 * 60 * 60):
             out["video_codec"] = "av1"
             out["encoder_family"] = "software"
             out["bit_depth"] = "10"
             out["encoder_speed"] = "medium" if goal == "quality" else "slow"
             decisions.append("Target is tight and CPU profile is strong, so AI selected AV1 for better compression efficiency.")
-        elif goal == "balanced" and target_ratio < 0.16 and strong_cpu and duration_sec <= 2.5 * 60 * 60:
+        elif goal == "balanced" and target_ratio < av1_balanced_ratio and av1_cpu_ok and duration_sec <= (3.5 * 60 * 60 if risk_score >= 2 else 2.5 * 60 * 60):
             out["video_codec"] = "av1"
             out["encoder_family"] = "software"
             out["bit_depth"] = "10"
             out["encoder_speed"] = "medium"
             warnings.append("Balanced target is very aggressive; AI selected AV1, which may be much slower but can preserve quality at smaller sizes.")
+        elif risk_score >= 3 and goal == "small" and target_ratio < 0.42 and cpu_score >= 0.85:
+            out["video_codec"] = "av1"
+            out["encoder_family"] = "software"
+            out["bit_depth"] = "10"
+            out["encoder_speed"] = "medium"
+            warnings.append("Bold AI chose AV1 for small-file exploration. It may be slow, but it can win on difficult size targets.")
 
     resolution_mode, resolution_notes, resolution_warnings = _wizard_ai_resolution_mode(
         goal=goal,
@@ -1384,6 +1423,13 @@ def _wizard_ai_choices(
     out["resolution_mode"] = resolution_mode
     decisions.extend(resolution_notes)
     warnings.extend(resolution_warnings)
+
+    if risk_score >= 2 and goal in {"small", "balanced"} and is_4k and target_ratio < 0.48 and out["resolution_mode"] in {"auto", "keep"}:
+        out["resolution_mode"] = "1440" if target_ratio >= 0.26 and risk_score < 3 else "1080"
+        warnings.append(f"Explorer AI capped 4K at {out['resolution_mode']}p to spend bitrate on cleaner pixels instead of sheer resolution.")
+    elif risk_score >= 3 and source_kind == "show" and src_h >= 900 and target_mb <= 700 and out["resolution_mode"] in {"auto", "keep"}:
+        out["resolution_mode"] = "720"
+        warnings.append("Bold AI capped this episode at 720p because the target is very small.")
 
     if is_hdr:
         if out["video_codec"] == "h264":
@@ -1409,10 +1455,10 @@ def _wizard_ai_choices(
 
     out["two_pass"] = (
         out["encoder_family"] == "software"
-        and goal in {"small", "archive"}
-        and cpu_score >= 1.0
-        and duration_sec <= 4 * 60 * 60
-        and bpp_source < 0.07
+        and goal in {"small", "archive", "balanced", "quality"}
+        and cpu_score >= (0.85 if risk_score >= 2 else 1.0)
+        and duration_sec <= (5 * 60 * 60 if risk_score >= 2 else 4 * 60 * 60)
+        and bpp_source < (0.085 if risk_score >= 2 else 0.07)
     )
     if out["two_pass"]:
         decisions.append("Enabled two-pass because the target is tight and CPU mode can benefit from it.")
@@ -1476,6 +1522,8 @@ def _wizard_ai_choices(
         "qsv_device_available": bool(qsv_device_available),
         "codec_preference": codec_pref,
         "history_choice": history_choice,
+        "explored": explored[:6],
+        "risk": risk,
         "hdr": bool(is_hdr),
         "resolution_mode": out["resolution_mode"],
     }
@@ -1576,6 +1624,16 @@ def _wizard_ai_plan_insights(
         confidence_reasons.append("no matching history yet")
 
     ai_profile = ai_info.get("profile") if isinstance(ai_info.get("profile"), dict) else {}
+    explored = ai_profile.get("explored") if isinstance(ai_profile.get("explored"), list) else []
+    if explored:
+        methods = ", ".join(str(row.get("method") or row.get("codec") or "").strip() for row in explored[:4] if row)
+        if methods:
+            _wizard_ai_add_recommendation(
+                recommendations,
+                "Explored options",
+                f"AI compared learned paths for {methods} before choosing the current plan.",
+                "info",
+            )
     history_choice = ai_profile.get("history_choice") if isinstance(ai_profile.get("history_choice"), dict) else {}
     if history_choice:
         _wizard_ai_add_recommendation(
@@ -1775,6 +1833,7 @@ def _wizard_normalize_options(data: dict) -> dict:
             "ai_goal": _choice(data.get("ai_goal"), WIZARD_AI_GOALS, options["ai_goal"]),
             "ai_hardware": _choice(data.get("ai_hardware"), WIZARD_AI_HARDWARE, options["ai_hardware"]),
             "ai_codec_preference": _choice(data.get("ai_codec_preference"), WIZARD_AI_CODEC_PREFS, options["ai_codec_preference"]),
+            "ai_risk": _choice(data.get("ai_risk"), WIZARD_AI_RISK_LEVELS, options["ai_risk"]),
             "ai_copy_audio": _truthy(data.get("ai_copy_audio"), options["ai_copy_audio"]),
             "ai_audio_scope": _choice(data.get("ai_audio_scope"), WIZARD_AI_TRACK_SCOPES, options["ai_audio_scope"]),
             "ai_subtitle_scope": _choice(data.get("ai_subtitle_scope"), WIZARD_AI_SUBTITLE_SCOPES, options["ai_subtitle_scope"]),

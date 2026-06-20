@@ -8,7 +8,10 @@
 # so the container exposes qsv_h264/qsv_h265/qsv_h265_10bit when /dev/dri and
 # the Intel media runtime are available.
 
-ARG PYTHON_IMAGE=python:3.11-slim
+# Pin Bookworm so older Intel Media SDK/libmfx packages remain available for
+# legacy QSV nodes such as UHD 630. The floating python:3.11-slim tag can move
+# to newer Debian releases where those packages are removed.
+ARG PYTHON_IMAGE=python:3.11-slim-bookworm
 ARG HANDBRAKE_VERSION=1.9.2
 
 FROM ${PYTHON_IMAGE} AS handbrake-builder
@@ -23,11 +26,11 @@ RUN set -eux; \
     fi; \
     apt-get update; \
     qsv_build_deps=""; \
-    for pkg in libvpl-dev libmfx-gen-dev; do \
+    for pkg in libvpl-dev libmfx-gen-dev libmfx-dev intel-mediasdk; do \
       if apt-cache show "$pkg" >/dev/null 2>&1; then qsv_build_deps="$qsv_build_deps $pkg"; fi; \
     done; \
     if [ -z "$qsv_build_deps" ]; then \
-      echo "ERROR: No Intel QSV development package found (expected libvpl-dev or libmfx-gen-dev)."; \
+      echo "ERROR: No Intel QSV development package found (expected libvpl-dev, libmfx-gen-dev, libmfx-dev, or intel-mediasdk)."; \
       exit 1; \
     fi; \
     apt-get install -y --no-install-recommends \
@@ -103,7 +106,23 @@ RUN set -eux; \
     fi; \
     apt-get update; \
     qsv_runtime_deps=""; \
-    for pkg in libmfx-gen1.2 libvpl2 libigfxcmrt7; do \
+    if apt-cache show intel-media-va-driver-non-free >/dev/null 2>&1; then \
+      qsv_runtime_deps="$qsv_runtime_deps intel-media-va-driver-non-free"; \
+    elif apt-cache show intel-media-va-driver >/dev/null 2>&1; then \
+      qsv_runtime_deps="$qsv_runtime_deps intel-media-va-driver"; \
+    fi; \
+    if apt-cache show i965-va-driver-shaders >/dev/null 2>&1; then \
+      qsv_runtime_deps="$qsv_runtime_deps i965-va-driver-shaders"; \
+    elif apt-cache show i965-va-driver >/dev/null 2>&1; then \
+      qsv_runtime_deps="$qsv_runtime_deps i965-va-driver"; \
+    fi; \
+    for pkg in \
+      libmfx1 \
+      intel-mediasdk \
+      libmfx-gen1.2 \
+      libvpl2 \
+      libvpl-tools \
+      libigfxcmrt7; do \
       if apt-cache show "$pkg" >/dev/null 2>&1; then qsv_runtime_deps="$qsv_runtime_deps $pkg"; fi; \
     done; \
     if apt-cache show libvpx9 >/dev/null 2>&1; then \
@@ -121,7 +140,6 @@ RUN set -eux; \
       ca-certificates \
       ffmpeg \
       intel-gpu-tools \
-      intel-media-va-driver-non-free \
       libass9 \
       libbz2-1.0 \
       libdrm2 \
@@ -184,8 +202,17 @@ RUN set -eux; \
       'echo "=== /dev/dri ==="' \
       'ls -l /dev/dri 2>/dev/null || echo "/dev/dri is not mounted into this container"' \
       'echo' \
+      'echo "=== Intel media packages ==="' \
+      'dpkg -l | grep -Ei "intel-media|intel-mediasdk|libmfx|libvpl|i965|igfx" || true' \
+      'echo' \
+      'echo "=== VA drivers ==="' \
+      'find /usr/lib -path "*/dri/*_drv_video.so" -print 2>/dev/null | sort || true' \
+      'echo' \
       'echo "=== VAAPI ==="' \
       'vainfo --display drm --device /dev/dri/renderD128 2>&1 || true' \
+      'echo' \
+      'echo "=== VAAPI with i965 fallback ==="' \
+      'LIBVA_DRIVER_NAME=i965 vainfo --display drm --device /dev/dri/renderD128 2>&1 || true' \
       'echo' \
       'echo "=== HandBrake encoders ==="' \
       'HandBrakeCLI --help 2>&1 | sed -n "/Select video encoder/,/Select audio encoder/p" | grep -i "qsv\\|265\\|264" || true' \

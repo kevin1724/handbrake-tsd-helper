@@ -995,6 +995,17 @@
               <div class="help-text">Auto can use past jobs to pick a better encoder for the selected size and goal.</div>
             </div>
 
+            <div class="wizard-field">
+              <label for="aiRisk">AI risk style</label>
+              <select id="aiRisk">
+                <option value="safe">Safe choices</option>
+                <option value="smart" selected>Smart balanced</option>
+                <option value="explorer">Explorer</option>
+                <option value="bold">Bold experiments</option>
+              </select>
+              <div class="help-text">Explorer and Bold can try slower or more aggressive plans when they may save more space or protect quality.</div>
+            </div>
+
             <label class="toggle-line">
               <input id="aiCopyAudio" type="checkbox" checked>
               Copy audio
@@ -1342,6 +1353,11 @@
         <div id="planWarning" class="plan-warning small"></div>
         <div id="decisionNote" class="small plan-note"></div>
 
+        <div class="wizard-actions ai-plan-actions">
+          <button id="saveAiPlanBtn" type="button" class="ghost-btn" disabled>Save AI Preset</button>
+          <span id="aiPlanStatus" class="small status-text"></span>
+        </div>
+
         <details id="technicalDetails" class="wizard-group technical-details">
           <summary>Extra Arguments / Technical Details</summary>
           <label class="field-label" for="argsPreview">Generated extra args</label>
@@ -1416,6 +1432,7 @@
       ai_goal: "balanced",
       ai_hardware: "auto",
       ai_codec_preference: "auto",
+      ai_risk: "smart",
       ai_copy_audio: true,
       ai_audio_scope: "all",
       ai_subtitle_scope: "all",
@@ -1447,6 +1464,7 @@
       "aiGoal",
       "aiHardware",
       "aiCodecPreference",
+      "aiRisk",
       "aiCopyAudio",
       "aiAudioScope",
       "audioLanguages",
@@ -1492,6 +1510,8 @@
     let previewSeq = 0;
     let wizardPresets = [];
     let activePresetId = "";
+    let lastPlanData = null;
+    let lastPlanPayload = null;
     let imgFetchController = null;
     let accuratePreviewPollTimer = null;
     let isDragging = false;
@@ -2069,6 +2089,7 @@
         ai_goal: el("aiGoal").value,
         ai_hardware: el("aiHardware").value,
         ai_codec_preference: el("aiCodecPreference").value,
+        ai_risk: el("aiRisk").value,
         ai_copy_audio: el("aiCopyAudio").checked,
         ai_audio_scope: el("aiAudioScope").value,
         ai_subtitle_scope: el("aiSubtitleScope").value,
@@ -2111,6 +2132,7 @@
       setValue("aiGoal", o.ai_goal);
       setValue("aiHardware", o.ai_hardware);
       setValue("aiCodecPreference", o.ai_codec_preference);
+      setValue("aiRisk", o.ai_risk);
       setChecked("aiCopyAudio", o.ai_copy_audio);
       setValue("aiAudioScope", o.ai_audio_scope);
       setValue("aiSubtitleScope", o.ai_subtitle_scope);
@@ -2296,6 +2318,55 @@
       }
     }
 
+    async function saveAiGeneratedPreset() {
+      const data = lastPlanData || {};
+      const estimates = data.estimates || {};
+      const inputs = data.inputs || {};
+      if (!estimates.ai_mode || !inputs || !Object.keys(inputs).length) {
+        setStatus("aiPlanStatus", "Run an AI plan first.", "error");
+        return;
+      }
+
+      const options = recipeOptions({
+        ...inputs,
+        src: "",
+        ai_mode: false,
+        target_size_auto: false,
+        ai_goal: inputs.ai_goal || "balanced",
+        ai_hardware: inputs.ai_hardware || "auto",
+        ai_codec_preference: inputs.ai_codec_preference || "auto",
+        ai_risk: inputs.ai_risk || "smart"
+      });
+      delete options.target_mb;
+
+      const encoder = estimates.encoder_label || estimates.encoder || "AI";
+      const target = inputs.target_mb ? fmtMb(inputs.target_mb) : `${inputs.target_size_value || ""}${inputs.target_size_unit || ""}`;
+      const sourceKind = data.probe?.source_type_label || data.probe?.source_type || "Media";
+      const name = `AI ${sourceKind} ${target} ${encoder}`.replace(/\s+/g, " ").trim();
+      setStatus("aiPlanStatus", "Saving AI preset...");
+
+      try {
+        const res = await fetchWithTimeout("/api/wizard_presets", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name,
+            options
+          })
+        }, 12000);
+        const saved = await readJson(res);
+        if (!res.ok) throw new Error(saved.error || "Save failed");
+        wizardPresets = Array.isArray(saved.presets) ? saved.presets : [];
+        activePresetId = saved.preset && saved.preset.id ? saved.preset.id : "";
+        el("presetName").value = name;
+        renderWizardPresets();
+        setStatus("recipeStatus", "AI preset saved", "ok");
+        setStatus("aiPlanStatus", "Saved as a reusable preset.", "ok");
+      } catch (e) {
+        setStatus("aiPlanStatus", e.message || "Save failed", "error");
+      }
+    }
+
     async function deleteWizardPreset() {
       const id = el("savedPresetSelect").value;
       if (!id) return;
@@ -2320,6 +2391,8 @@
     }
 
     function resetPlan(message) {
+      lastPlanData = null;
+      lastPlanPayload = null;
       el("previewBox").textContent = message || "Waiting for a selected file.";
       el("metricSourceSize").textContent = "-";
       el("metricEstimatedSize").textContent = "-";
@@ -2337,6 +2410,8 @@
       el("metricSubtitleSummary").textContent = "-";
       el("decisionNote").textContent = "";
       el("argsPreview").textContent = "-";
+      el("saveAiPlanBtn").disabled = true;
+      setStatus("aiPlanStatus", "");
       updateRiskWarnings(null, currentPayload());
       updateTargetSizeHint();
     }
@@ -2352,6 +2427,8 @@
     }
 
     function renderPlan(data, payload) {
+      lastPlanData = data;
+      lastPlanPayload = payload;
       const p = data.probe || {};
       const e = data.estimates || {};
       const output = e.output_resolution || {};
@@ -2388,6 +2465,8 @@
         .join(" ");
       el("decisionNote").textContent = [e.decision_note, e.ai_summary, aiAdvice].filter(Boolean).join(" ");
       el("argsPreview").textContent = args.length ? args.join(" ") : "-";
+      el("saveAiPlanBtn").disabled = !e.ai_mode;
+      setStatus("aiPlanStatus", e.ai_mode ? "AI plan can be saved as a preset." : "");
       updateRiskWarnings(data, inputs);
       updateSimpleRecommendation(data);
     }
@@ -2785,6 +2864,7 @@
       el("useLastFileBtn").addEventListener("click", useLastWizardFile);
       el("simpleUseLastFileBtn").addEventListener("click", useLastWizardFile);
       el("savePresetBtn").addEventListener("click", saveWizardPreset);
+      el("saveAiPlanBtn").addEventListener("click", saveAiGeneratedPreset);
       el("deletePresetBtn").addEventListener("click", deleteWizardPreset);
       el("queueBtn").addEventListener("click", queueWizard);
       el("simpleQueueBtn").addEventListener("click", queueWizard);
