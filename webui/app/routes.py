@@ -154,6 +154,12 @@ def _run_cmd(cmd):
         return (False, "", str(e))
 
 PREVIEW_PID_DIR = "/tmp"
+PREVIEW_CLIPS: dict[str, tuple[str, float]] = {}
+PREVIEW_CLIPS_LOCK = threading.Lock()
+PREVIEW_TASKS: dict[str, dict] = {}
+PREVIEW_TASK_LOCK = threading.Lock()
+PREVIEW_PROGRESS_RE = re.compile(r"Encoding:\s+task\s+\d+\s+of\s+\d+,\s*([\d.]+)\s*%", re.IGNORECASE)
+PREVIEW_QSV_CHECK = {"checked_at": 0.0, "available": False, "reason": "not checked"}
 
 def _preview_pidfile(preview_id: str) -> str:
     safe = re.sub(r"[^a-zA-Z0-9_-]", "", (preview_id or ""))
@@ -192,6 +198,77 @@ def _kill_preview_by_id(preview_id: str) -> bool:
             os.remove(path)
         except Exception:
             pass
+
+
+def _preview_set_task(preview_id: str, **updates) -> dict:
+    preview_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(preview_id or "")) or uuid.uuid4().hex
+    with PREVIEW_TASK_LOCK:
+        row = PREVIEW_TASKS.get(preview_id)
+        if not isinstance(row, dict):
+            row = {
+                "preview_id": preview_id,
+                "state": "queued",
+                "progress": 0.0,
+                "message": "Queued accurate preview.",
+                "created_at": time.time(),
+                "updated_at": time.time(),
+            }
+        row.update(updates)
+        row["updated_at"] = time.time()
+        PREVIEW_TASKS[preview_id] = row
+        return row.copy()
+
+
+def _preview_get_task(preview_id: str) -> dict | None:
+    with PREVIEW_TASK_LOCK:
+        row = PREVIEW_TASKS.get(str(preview_id or ""))
+        return row.copy() if isinstance(row, dict) else None
+
+
+def _preview_cleanup_tasks() -> None:
+    cutoff = time.time() - 60 * 30
+    with PREVIEW_TASK_LOCK:
+        for key, row in list(PREVIEW_TASKS.items()):
+            try:
+                ts = float(row.get("updated_at") or row.get("created_at") or 0)
+            except Exception:
+                ts = 0
+            if ts < cutoff:
+                PREVIEW_TASKS.pop(key, None)
+
+
+def _qsv_preview_available(force: bool = False) -> tuple[bool, str]:
+    now = time.time()
+    if not force and now - float(PREVIEW_QSV_CHECK.get("checked_at") or 0) < 60:
+        return bool(PREVIEW_QSV_CHECK.get("available")), str(PREVIEW_QSV_CHECK.get("reason") or "")
+
+    reason = ""
+    available = False
+    render = "/dev/dri/renderD128"
+    if not os.path.exists(render):
+        reason = "/dev/dri/renderD128 is not mounted"
+    else:
+        ok, out, err = _run_cmd(["vainfo", "--display", "drm", "--device", render])
+        text = f"{out}\n{err}".lower()
+        available = bool(ok and ("vainfo:" in text or "driver version" in text or "vainfo" in text))
+        reason = "VAAPI render device is available" if available else (err or out or "vainfo failed").strip()[:180]
+
+    PREVIEW_QSV_CHECK.update({"checked_at": now, "available": available, "reason": reason})
+    return available, reason
+
+
+def _software_preview_payload(data: dict) -> dict:
+    out = dict(data or {})
+    out["encoder_family"] = "software"
+    out["ai_hardware"] = "software"
+    codec = str(out.get("video_codec") or "").lower()
+    if codec not in {"h264", "h265", "av1"} or codec == "av1":
+        out["video_codec"] = "h265"
+    if not out.get("bit_depth"):
+        out["bit_depth"] = "10" if out.get("video_codec") == "h265" else "8"
+    if str(out.get("encoder_speed") or "").lower() in {"", "auto", "slower", "veryslow"}:
+        out["encoder_speed"] = "fast"
+    return out
 
 
 def _extract_all_json_values(text: str):
@@ -4043,6 +4120,29 @@ def _ffmpeg_extract_jpg(input_path: str, t_sec: float, out_path: str) -> None:
     if not ok or not os.path.isfile(out_path):
         raise RuntimeError(f"ffmpeg frame extract failed: {(err or out or '').strip()[:400]}")
 
+
+def _ffmpeg_extract_jpg_precise(input_path: str, t_sec: float, out_path: str) -> None:
+    # Hybrid seek: jump near the point, then decode a tiny offset for better frame alignment.
+    target = max(0.0, float(t_sec or 0))
+    coarse = max(0.0, target - 2.0)
+    fine = target - coarse
+    cmd = [
+        "ffmpeg",
+        "-hide_banner",
+        "-loglevel", "error",
+        "-y",
+        "-ss", f"{coarse:.3f}",
+        "-i", input_path,
+        "-ss", f"{fine:.3f}",
+        "-frames:v", "1",
+        "-q:v", "2",
+        out_path,
+    ]
+    ok, out, err = _run_cmd(cmd)
+    if not ok or not os.path.isfile(out_path):
+        raise RuntimeError(f"ffmpeg precise frame extract failed: {(err or out or '').strip()[:400]}")
+
+
 def _collect_preset_names(obj):
     """Recursively collect all PresetName strings from a HandBrake preset JSON structure."""
     names = []
@@ -5214,6 +5314,75 @@ def register_routes(app):
             raise RuntimeError((err or out or "ffmpeg failed").strip())
 
 
+    def _choose_preview_start_second(duration_sec: float, preview_seconds: int = 1) -> int:
+        """Pick a random preview point away from intros and credits."""
+        try:
+            duration = float(duration_sec or 0)
+        except Exception:
+            duration = 0.0
+        if duration <= 0:
+            return 0
+
+        clip_room = max(1.0, float(preview_seconds or 1)) + 2.0
+        edge_guard = max(10.0, duration * 0.10)
+
+        # For normal movie/show lengths, sample the middle 80%.
+        min_start = min(edge_guard, max(0.0, duration - clip_room))
+        max_start = max(min_start, duration - edge_guard - clip_room)
+
+        # Very short clips may not have enough middle; use the safest center-ish point.
+        if max_start <= min_start:
+            center = max(0.0, (duration - clip_room) * 0.5)
+            return int(center)
+
+        span = int(max_start - min_start)
+        if span <= 0:
+            return int(min_start)
+        return int(min_start) + secrets.randbelow(span + 1)
+
+
+    def _ffmpeg_make_side_by_side_preview(src_path: str, start_sec: int, seconds: int, encoded_path: str, out_mp4: str, layout: str = "side_by_side"):
+        """Create a browser-friendly original/transcoded comparison clip."""
+        target_h = 540
+        duration = max(1, int(seconds or 1))
+        if layout == "split_frame":
+            filter_complex = (
+                f"[0:v]setpts=PTS-STARTPTS,scale=-2:{target_h}:flags=bicubic,setsar=1[left];"
+                f"[1:v]setpts=PTS-STARTPTS,scale=-2:{target_h}:flags=bicubic,setsar=1[right];"
+                "[left]crop=iw/2:ih:0:0[left_half];"
+                "[right]crop=iw/2:ih:iw/2:0[right_half];"
+                "[left_half][right_half]hstack=inputs=2,format=yuv420p[v]"
+            )
+        else:
+            filter_complex = (
+                f"[0:v]setpts=PTS-STARTPTS,scale=-2:{target_h}:flags=bicubic,setsar=1[left];"
+                f"[1:v]setpts=PTS-STARTPTS,scale=-2:{target_h}:flags=bicubic,setsar=1[right];"
+                "[left][right]hstack=inputs=2,format=yuv420p[v]"
+            )
+        cmd = [
+            "ffmpeg",
+            "-hide_banner",
+            "-loglevel", "error",
+            "-y",
+            "-ss", str(max(0, int(start_sec or 0))),
+            "-t", str(duration),
+            "-i", src_path,
+            "-i", encoded_path,
+            "-filter_complex", filter_complex,
+            "-map", "[v]",
+            "-an",
+            "-t", str(duration),
+            "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "18",
+            "-movflags", "+faststart",
+            out_mp4,
+        ]
+        ok, out, err = _run_cmd(cmd)
+        if not ok or not os.path.isfile(out_mp4):
+            raise RuntimeError((err or out or "ffmpeg side-by-side preview failed").strip()[:800])
+
+
     def _remove_preview_clip(path: str):
         try:
             os.remove(path)
@@ -5231,28 +5400,33 @@ def register_routes(app):
         # Keep a small in-memory registry so we can serve clips by token.
         # Clips are cleaned up lazily on new preview requests.
         now = time.time()
-        PREVIEW_CLIPS[token] = (path, now)
+        stale_paths: list[str] = []
+        with PREVIEW_CLIPS_LOCK:
+            PREVIEW_CLIPS[token] = (path, now)
 
-        # Lazy cleanup (keep up to 30 clips or 30 minutes)
-        try:
-            if len(PREVIEW_CLIPS) > 30:
-                # Remove oldest
-                for tok, (p, ts) in sorted(PREVIEW_CLIPS.items(), key=lambda kv: kv[1][1])[:-30]:
-                    PREVIEW_CLIPS.pop(tok, None)
-                    _remove_preview_clip(p)
-            cutoff = now - (30 * 60)
-            for tok, (p, ts) in list(PREVIEW_CLIPS.items()):
-                if ts < cutoff:
-                    PREVIEW_CLIPS.pop(tok, None)
-                    _remove_preview_clip(p)
-        except Exception:
-            pass
+            # Lazy cleanup (keep up to 30 clips or 30 minutes)
+            try:
+                if len(PREVIEW_CLIPS) > 30:
+                    # Remove oldest
+                    for tok, (p, _ts) in sorted(PREVIEW_CLIPS.items(), key=lambda kv: kv[1][1])[:-30]:
+                        PREVIEW_CLIPS.pop(tok, None)
+                        stale_paths.append(p)
+                cutoff = now - (30 * 60)
+                for tok, (p, ts) in list(PREVIEW_CLIPS.items()):
+                    if ts < cutoff:
+                        PREVIEW_CLIPS.pop(tok, None)
+                        stale_paths.append(p)
+            except Exception:
+                pass
+        for stale_path in stale_paths:
+            _remove_preview_clip(stale_path)
 
 
     @app.route("/wizard_preview_clip/<token>", methods=["GET"])
     def wizard_preview_clip(token):
         """Serve a previously generated preview MP4 clip."""
-        item = PREVIEW_CLIPS.get(token)
+        with PREVIEW_CLIPS_LOCK:
+            item = PREVIEW_CLIPS.get(token)
         if not item:
             abort(404)
         path, _ts = item
@@ -5286,12 +5460,8 @@ def register_routes(app):
         info = plan["probe"]
         duration_sec = float(info.get("duration_sec") or 0.0)
 
-        # Preview timestamp (integer seconds)
-        if duration_sec < 120:
-            t = max(2.0, min(duration_sec * 0.10, duration_sec - 2.0))
-        else:
-            t = min(60.0, duration_sec - 2.0)
-        t_int = int(max(0.0, t))
+        # Preview timestamp (integer seconds), randomized away from intro/credits.
+        t_int = _choose_preview_start_second(duration_sec)
 
         out_res = plan["estimates"]["output_resolution"]
         out_w = int(out_res.get("width") or 0)
@@ -5328,150 +5498,227 @@ def register_routes(app):
 
 
 
-    @app.route("/wizard_preview_accurate", methods=["POST"])
-    def wizard_preview_accurate():
-        """
-        Accurate preview: short HandBrake encode using the same wizard plan as queueing.
-        """
-        data = request.get_json(force=True) or {}
-
-        try:
-            plan = _wizard_plan(data, probe_func=_ffprobe_media_fast, preview=True)
-        except ValueError as e:
-            return jsonify(error=str(e)), 400
-        except Exception as e:
-            return jsonify(error=str(e)), 500
-
-        src = plan["src"]
-        base = os.path.basename(src)
-        info = plan["probe"]
-        duration_sec = float(info.get("duration_sec") or 0.0)
-        estimates = plan["estimates"]
-        out_res = estimates["output_resolution"]
-        out_w = int(out_res.get("width") or 0)
-        out_h = int(out_res.get("height") or 0)
-        decision = estimates.get("decision") or "keep"
-        video_kbps = float(estimates.get("video_bitrate_kbps") or 0)
-        encoder_preset = estimates.get("encoder_preset") or ""
-        encoder_label = estimates.get("encoder_label") or estimates.get("encoder") or ""
-
-        # Preview timestamp (integer seconds)
-        if duration_sec < 120:
-            t = max(2.0, min(duration_sec * 0.10, duration_sec - 2.0))
-        else:
-            t = min(60.0, duration_sec - 2.0)
-        t_int = int(max(0.0, t))
-
-        # Temp files
-        tmpdir = tempfile.mkdtemp(prefix="hbwiz_acc_")
-        preview_id = (data.get("preview_id") or uuid.uuid4().hex).strip() or uuid.uuid4().hex
-        token = uuid.uuid4().hex
-        out_clip = os.path.join(tmpdir, f"clip_{token}.mp4")
-        old_jpg = os.path.join(tmpdir, f"old_{token}.jpg")
-        new_jpg = os.path.join(tmpdir, f"new_{token}.jpg")
-
-        # Extract OLD frame at t_int
-        try:
-            _ffmpeg_extract_jpg(src, t_int, old_jpg)
-        except Exception as e:
-            return jsonify(error=f"failed extracting source frame: {e}"), 500
-
-        # HandBrake short-segment preview (accurate)
-        preview_seconds = int(max(6, min(10, duration_sec - t_int - 1)))
-
-        try:
-            _effective, preset_a = _hb_preset_args_for_base(plan["preset"], base)
-        except Exception as e:
-            return jsonify(error=str(e)), 500
-
-        hb_cmd = [
-            "HandBrakeCLI",
-            "-i", src,
-            "-o", out_clip,
-            "--start-at", f"duration:{t_int}",
-            "--stop-at", f"duration:{preview_seconds}",
-        ] + preset_a
-
-        hb_cmd += _flatten_args(plan["extra_args"])
-        hb_cmd += ["-a", "none"]
-
-        # Kill any previous preview for this preview_id before starting a new one
-        _kill_preview_by_id(preview_id)
-
+    def _run_accurate_preview_task(preview_id: str, data: dict) -> None:
+        tmpdir = ""
         pidfile = _preview_pidfile(preview_id)
+        proc = None
 
-        p = subprocess.Popen(
-            hb_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            start_new_session=True,
-        )
+        def fail(message: str, detail: str = "") -> None:
+            text = f"{message}: {detail}" if detail else message
+            _preview_set_task(preview_id, state="error", progress=100.0, message=text[:1200], error=text[:1200])
 
         try:
-            with open(pidfile, "w", encoding="utf-8") as f:
-                f.write(str(p.pid))
-        except Exception:
-            pass
+            _preview_cleanup_tasks()
+            _preview_set_task(preview_id, state="planning", progress=3.0, message="Planning accurate preview...")
 
-        try:
-            out, err = p.communicate(timeout=180)
-            ok = (p.returncode == 0)
-        except subprocess.TimeoutExpired:
             try:
-                os.killpg(p.pid, signal.SIGTERM)
-                time.sleep(0.25)
-                os.killpg(p.pid, signal.SIGKILL)
+                plan = _wizard_plan(data, probe_func=_ffprobe_media_fast, preview=True)
+            except Exception as e:
+                fail("Preview planning failed", str(e))
+                return
+
+            qsv_reason = ""
+            used_fallback = False
+            options = plan.get("options") if isinstance(plan.get("options"), dict) else {}
+            if options.get("encoder_family") == "qsv":
+                qsv_ok, qsv_reason = _qsv_preview_available()
+                if not qsv_ok:
+                    used_fallback = True
+                    _preview_set_task(preview_id, progress=8.0, message=f"QSV unavailable ({qsv_reason}); using software preview...")
+                    try:
+                        plan = _wizard_plan(_software_preview_payload(data), probe_func=_ffprobe_media_fast, preview=True)
+                    except Exception as e:
+                        fail("Software preview planning failed", str(e))
+                        return
+
+            src = plan["src"]
+            base = os.path.basename(src)
+            info = plan["probe"]
+            duration_sec = float(info.get("duration_sec") or 0.0)
+            estimates = plan["estimates"]
+            out_res = estimates["output_resolution"]
+            out_w = int(out_res.get("width") or 0)
+            out_h = int(out_res.get("height") or 0)
+            decision = estimates.get("decision") or "keep"
+            video_kbps = float(estimates.get("video_bitrate_kbps") or 0)
+            encoder_preset = estimates.get("encoder_preset") or ""
+            encoder_label = estimates.get("encoder_label") or estimates.get("encoder") or ""
+            preview_layout = "split_frame" if str(data.get("accurate_preview_layout") or "").strip() == "split_frame" else "side_by_side"
+
+            preview_seconds = int(max(4, min(8, duration_sec - 1)))
+            t_int = _choose_preview_start_second(duration_sec, preview_seconds)
+            preview_seconds = int(max(4, min(8, duration_sec - t_int - 1)))
+
+            tmpdir = tempfile.mkdtemp(prefix="hbwiz_acc_")
+            token = uuid.uuid4().hex
+            out_clip = os.path.join(tmpdir, f"clip_{token}.mp4")
+            compare_clip = os.path.join(tmpdir, f"compare_{token}.mp4")
+            old_jpg = os.path.join(tmpdir, f"old_{token}.jpg")
+            new_jpg = os.path.join(tmpdir, f"new_{token}.jpg")
+
+            try:
+                _effective, preset_a = _hb_preset_args_for_base(plan["preset"], base)
+            except Exception as e:
+                fail("Preset setup failed", str(e))
+                return
+
+            hb_cmd = [
+                "HandBrakeCLI",
+                "-i", src,
+                "-o", out_clip,
+                "--start-at", f"duration:{t_int}",
+                "--stop-at", f"duration:{preview_seconds}",
+            ] + preset_a + _flatten_args(plan["extra_args"]) + ["-a", "none"]
+
+            _kill_preview_by_id(preview_id)
+            _preview_set_task(
+                preview_id,
+                state="encoding",
+                progress=18.0,
+                message=f"Encoding {preview_seconds}s preview with {encoder_label or estimates.get('encoder') or 'HandBrake'}...",
+                encoder=estimates.get("encoder"),
+                encoder_label=encoder_label,
+                encoder_preset=encoder_preset,
+                fallback=used_fallback,
+                qsv_reason=qsv_reason,
+            )
+
+            proc = subprocess.Popen(
+                hb_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                start_new_session=True,
+                bufsize=1,
+            )
+            try:
+                with open(pidfile, "w", encoding="utf-8") as f:
+                    f.write(str(proc.pid))
             except Exception:
                 pass
-            ok, out, err = False, "", "HandBrake preview timed out"
+
+            lines: list[str] = []
+            started = time.time()
+            for line in proc.stdout or []:
+                lines.append(line)
+                if len(lines) > 120:
+                    lines = lines[-120:]
+                match = PREVIEW_PROGRESS_RE.search(line)
+                if match:
+                    try:
+                        hb_pct = max(0.0, min(100.0, float(match.group(1))))
+                    except Exception:
+                        hb_pct = 0.0
+                    _preview_set_task(
+                        preview_id,
+                        state="encoding",
+                        progress=18.0 + (hb_pct * 0.64),
+                        message=f"Encoding accurate preview... {hb_pct:.1f}%",
+                    )
+                elif time.time() - started > 180:
+                    raise TimeoutError("accurate preview timed out")
+
+            ret = proc.wait(timeout=10)
+            if ret != 0 or not os.path.isfile(out_clip):
+                snippet = "".join(lines).strip().replace("\r", "\n")[-1200:]
+                if options.get("encoder_family") == "qsv" and not used_fallback:
+                    _preview_set_task(preview_id, progress=82.0, message="QSV preview failed; retrying with software...")
+                    fallback_data = _software_preview_payload(data)
+                    fallback_data["preview_id"] = preview_id
+                    _run_accurate_preview_task(preview_id, fallback_data)
+                    return
+                fail("HandBrake accurate preview failed", snippet or f"exit {ret}")
+                return
+
+            _preview_set_task(preview_id, state="framing", progress=84.0, message="Extracting matched preview frames...")
+            within = min(max(1.0, preview_seconds * 0.5), max(0.5, preview_seconds - 0.5))
+            _ffmpeg_extract_jpg_precise(src, t_int + within, old_jpg)
+            _ffmpeg_extract_jpg_precise(out_clip, within, new_jpg)
+
+            _preview_set_task(preview_id, state="muxing", progress=91.0, message="Building comparison clip...")
+            _ffmpeg_make_side_by_side_preview(src, t_int, preview_seconds, out_clip, compare_clip, preview_layout)
+            try:
+                os.remove(out_clip)
+            except Exception:
+                pass
+            _register_preview_clip(token, compare_clip)
+
+            result = {
+                "ok": True,
+                "preview_id": preview_id,
+                "t_seconds": t_int,
+                "frame_seconds": t_int + within,
+                "seconds": preview_seconds,
+                "preview_seconds": preview_seconds,
+                "preset": plan["preset"],
+                "decision": decision,
+                "out_width": out_w,
+                "out_height": out_h,
+                "bitrate_kbps": int(video_kbps),
+                "encoder": estimates.get("encoder"),
+                "encoder_label": encoder_label,
+                "encoder_preset": encoder_preset,
+                "clip_url": f"/wizard_preview_clip/{token}",
+                "clip_layout": preview_layout,
+                "old_b64": _b64_jpg(old_jpg),
+                "new_b64": _b64_jpg(new_jpg),
+                "fallback": used_fallback,
+                "qsv_reason": qsv_reason,
+            }
+            _preview_set_task(preview_id, state="done", progress=100.0, message="Accurate preview ready.", result=result)
+        except Exception as e:
+            try:
+                if proc and proc.poll() is None:
+                    os.killpg(proc.pid, signal.SIGTERM)
+            except Exception:
+                pass
+            fail("Accurate preview failed", str(e))
         finally:
             try:
                 os.remove(pidfile)
             except Exception:
                 pass
+            if tmpdir:
+                for name in os.listdir(tmpdir) if os.path.isdir(tmpdir) else []:
+                    path = os.path.join(tmpdir, name)
+                    if path.endswith(".jpg"):
+                        try:
+                            os.remove(path)
+                        except Exception:
+                            pass
+                try:
+                    os.rmdir(tmpdir)
+                except Exception:
+                    pass
 
-        if not ok or (not os.path.isfile(out_clip)):
-            snippet = ((err or "") + "\n" + (out or "")).strip().replace("\r", "\n")
-            snippet = snippet[:900]
-            return jsonify(error=f"HandBrake accurate preview failed: {snippet}"), 500
+    @app.route("/wizard_preview_accurate/start", methods=["POST"])
+    def wizard_preview_accurate_start():
+        data = request.get_json(force=True) or {}
+        preview_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(data.get("preview_id") or uuid.uuid4().hex)) or uuid.uuid4().hex
+        _kill_preview_by_id(preview_id)
+        _preview_set_task(preview_id, state="queued", progress=0.0, message="Queued accurate preview.", result=None, error="")
+        thread = threading.Thread(target=_run_accurate_preview_task, args=(preview_id, data), name=f"wizard-preview-{preview_id[:8]}", daemon=True)
+        thread.start()
+        return jsonify(ok=True, preview_id=preview_id)
 
-        # Extract NEW frame from the preview clip (same timestamp within the segment)
-        try:
-            # Since clip starts at t_int, sample ~2s into the clip (or mid if very short)
-            within = 2.0 if preview_seconds >= 4 else max(0.5, preview_seconds * 0.5)
-            _ffmpeg_extract_jpg(out_clip, within, new_jpg)
-        except Exception as e:
-            return jsonify(error=f"failed extracting preview frame: {e}"), 500
+    @app.route("/wizard_preview_accurate/status/<preview_id>")
+    def wizard_preview_accurate_status(preview_id):
+        row = _preview_get_task(preview_id)
+        if not row:
+            return jsonify(error="preview not found"), 404
+        return jsonify(row)
 
-        _register_preview_clip(token, out_clip)
-
-        try:
-            return jsonify(
-                ok=True,
-                preview_id=preview_id,
-                t_seconds=t_int,
-                seconds=preview_seconds,
-                preview_seconds=preview_seconds,
-                preset=plan["preset"],
-                decision=decision,
-                out_width=out_w,
-                out_height=out_h,
-                bitrate_kbps=int(video_kbps),
-                encoder=estimates.get("encoder"),
-                encoder_label=encoder_label,
-                encoder_preset=encoder_preset,
-                clip_url=f"/wizard_preview_clip/{token}",
-                old_b64=_b64_jpg(old_jpg),
-                new_b64=_b64_jpg(new_jpg),
-            )
-        finally:
-            try:
-                os.remove(old_jpg)
-                os.remove(new_jpg)
-                os.rmdir(tmpdir)
-            except Exception:
-                pass
+    @app.route("/wizard_preview_accurate", methods=["POST"])
+    def wizard_preview_accurate():
+        data = request.get_json(force=True) or {}
+        preview_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(data.get("preview_id") or uuid.uuid4().hex)) or uuid.uuid4().hex
+        _kill_preview_by_id(preview_id)
+        _preview_set_task(preview_id, state="queued", progress=0.0, message="Queued accurate preview.", result=None, error="")
+        _run_accurate_preview_task(preview_id, data)
+        row = _preview_get_task(preview_id) or {}
+        if row.get("state") == "done" and isinstance(row.get("result"), dict):
+            return jsonify(row["result"])
+        return jsonify(error=row.get("error") or row.get("message") or "Accurate preview failed"), 500
     @app.route("/wizard_preview_images", methods=["POST"])
     def wizard_preview_images():
         return wizard_preview_accurate()

@@ -300,6 +300,21 @@
       gap: 10px;
     }
 
+    .preview-options {
+      display: grid;
+      grid-template-columns: minmax(220px, 340px) minmax(0, 1fr);
+      gap: 12px;
+      align-items: end;
+      max-width: 980px;
+      margin-bottom: 12px;
+    }
+
+    .preview-option-help {
+      color: rgba(229,229,229,0.64);
+      line-height: 1.4;
+      padding-bottom: 10px;
+    }
+
     .section-title-row {
       justify-content: space-between;
       margin-bottom: 8px;
@@ -553,9 +568,84 @@
       white-space: pre-wrap;
     }
 
+    .accurate-preview-progress {
+      display: none;
+      max-width: 980px;
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid rgba(34, 211, 238, 0.22);
+      border-radius: 8px;
+      background: rgba(8, 13, 20, 0.72);
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.03);
+    }
+
+    .accurate-preview-progress.active {
+      display: block;
+    }
+
+    .accurate-progress-head {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      align-items: center;
+      color: #fff;
+    }
+
+    .accurate-progress-head span {
+      color: #67e8f9;
+      font-weight: 800;
+      font-variant-numeric: tabular-nums;
+    }
+
+    .accurate-progress-bar {
+      height: 10px;
+      margin-top: 10px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+    }
+
+    .accurate-progress-bar div {
+      width: 0%;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #0891b2, #22d3ee);
+      transition: width 0.25s ease;
+    }
+
+    .accurate-progress-detail {
+      margin-top: 8px;
+      color: rgba(229,229,229,0.72);
+    }
+
     .accurate-video-wrap {
       margin-top: 14px;
       max-width: 980px;
+    }
+
+    .accurate-clip-labels {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      margin: 8px 0;
+      color: rgba(229,229,229,0.72);
+      font-size: 12px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0;
+    }
+
+    .accurate-clip-labels span {
+      padding: 7px 9px;
+      border-radius: 6px;
+      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .accurate-clip-labels span:last-child {
+      color: #67e8f9;
+      border-color: rgba(34, 211, 238, 0.22);
+      background: rgba(8, 145, 178, 0.12);
     }
 
     .accurate-video-wrap video {
@@ -616,6 +706,10 @@
 
       .preview-actions button {
         flex: 1 1 160px;
+      }
+
+      .preview-options {
+        grid-template-columns: 1fr;
       }
     }
   </style>
@@ -1270,6 +1364,19 @@
         </summary>
         <div class="advanced-section-body">
 
+      <div class="preview-options">
+        <label>
+          <span>Accurate clip layout</span>
+          <select id="accuratePreviewLayout">
+            <option value="side_by_side">Full side-by-side</option>
+            <option value="split_frame">Split frame overlay</option>
+          </select>
+        </label>
+        <div class="preview-option-help small">
+          Full shows both complete frames. Split keeps one normal frame width: original on the left half, transcoded on the right half.
+        </div>
+      </div>
+
       <div id="compareWrap" class="compare-wrap" style="display:none;">
         <img id="imgNew" class="compare-img" alt="Wizard frame">
         <img id="imgOld" class="compare-img" alt="Original frame">
@@ -1280,8 +1387,21 @@
 
       <div id="imgStatus" class="small img-status"></div>
 
+      <div id="accuratePreviewProgress" class="accurate-preview-progress">
+        <div class="accurate-progress-head">
+          <strong id="accuratePreviewState">Preparing accurate preview</strong>
+          <span id="accuratePreviewPct">0%</span>
+        </div>
+        <div class="accurate-progress-bar"><div id="accuratePreviewFill"></div></div>
+        <div id="accuratePreviewDetail" class="accurate-progress-detail small"></div>
+      </div>
+
       <div id="accurateVideoWrap" class="accurate-video-wrap" style="display:none;">
-        <h3>Accurate Preview Clip</h3>
+        <h3>Accurate Side-by-Side Clip</h3>
+        <div class="accurate-clip-labels" aria-hidden="true">
+          <span>Original</span>
+          <span>Transcoded</span>
+        </div>
         <video id="accurateVideo" controls playsinline></video>
         <div id="accurateVideoHint" class="small status-text"></div>
       </div>
@@ -1373,6 +1493,7 @@
     let wizardPresets = [];
     let activePresetId = "";
     let imgFetchController = null;
+    let accuratePreviewPollTimer = null;
     let isDragging = false;
     let pos01 = 0.5;
     const sourceTypeTargets = {
@@ -1971,7 +2092,8 @@
         framerate: el("framerate").value,
         deinterlace: el("deinterlace").value,
         crop_mode: el("cropMode").value,
-        two_pass: el("twoPass").checked
+        two_pass: el("twoPass").checked,
+        accurate_preview_layout: el("accuratePreviewLayout")?.value || "side_by_side"
       };
     }
 
@@ -1979,6 +2101,7 @@
       const copy = { ...payload };
       delete copy.src;
       delete copy.preview_id;
+      delete copy.accurate_preview_layout;
       return copy;
     }
 
@@ -2225,6 +2348,7 @@
       el("imgStatus").textContent = "";
       el("compareWrap").style.display = "none";
       el("accurateVideoWrap").style.display = "none";
+      hideAccurateProgress();
     }
 
     function renderPlan(data, payload) {
@@ -2307,7 +2431,68 @@
       previewTimer = setTimeout(refreshPreviewText, 350);
     }
 
+    function stopAccuratePolling() {
+      clearTimeout(accuratePreviewPollTimer);
+      accuratePreviewPollTimer = null;
+    }
+
+    function setAccurateProgress(progress, message, detail = "") {
+      const panel = el("accuratePreviewProgress");
+      const fill = el("accuratePreviewFill");
+      const pct = el("accuratePreviewPct");
+      const state = el("accuratePreviewState");
+      const detailNode = el("accuratePreviewDetail");
+      const n = Math.max(0, Math.min(100, Number(progress || 0)));
+      panel.classList.add("active");
+      fill.style.width = `${n}%`;
+      pct.textContent = `${Math.round(n)}%`;
+      state.textContent = message || "Working on accurate preview...";
+      detailNode.textContent = detail || "";
+    }
+
+    function hideAccurateProgress() {
+      stopAccuratePolling();
+      const panel = el("accuratePreviewProgress");
+      panel.classList.remove("active");
+      el("accuratePreviewFill").style.width = "0%";
+      el("accuratePreviewPct").textContent = "0%";
+      el("accuratePreviewState").textContent = "Preparing accurate preview";
+      el("accuratePreviewDetail").textContent = "";
+    }
+
+    function accurateDetailText(data) {
+      const parts = [];
+      if (data.encoder_label || data.encoder) parts.push(data.encoder_label || data.encoder);
+      if (data.fallback) parts.push("QSV fallback: software encoder");
+      if (data.qsv_reason && data.fallback) parts.push(data.qsv_reason);
+      return parts.join(" | ");
+    }
+
+    function renderAccuratePreviewResult(data) {
+      const wrap = el("compareWrap");
+      const vwrap = el("accurateVideoWrap");
+      const video = el("accurateVideo");
+      const vhint = el("accurateVideoHint");
+
+      el("imgOld").src = "data:image/jpeg;base64," + data.old_b64;
+      el("imgNew").src = "data:image/jpeg;base64," + data.new_b64;
+      wrap.style.display = "";
+      applyWipe(0.5);
+
+      if (data.clip_url) {
+        video.src = data.clip_url;
+        vwrap.style.display = "";
+        const secs = data.preview_seconds ? `${data.preview_seconds}s` : "";
+        const ts = data.frame_seconds != null ? `matched frame ${fmtSeconds(data.frame_seconds)}` : (data.t_seconds != null ? `starts ${fmtSeconds(data.t_seconds)}` : "");
+        const layout = data.clip_layout === "split_frame"
+          ? "Split frame: original left half / transcoded right half"
+          : (data.clip_layout === "side_by_side" ? "Full side-by-side: left original / right transcoded" : "Transcoded clip");
+        vhint.textContent = `${layout} | ${secs} ${ts} | ${data.encoder_label || data.encoder || "encoder"}`.trim();
+      }
+    }
+
     function cancelPreviewOnServer() {
+      stopAccuratePolling();
       try { imgFetchController?.abort(); } catch (e) {}
       imgFetchController = null;
 
@@ -2383,8 +2568,10 @@
 
       setPreviewBusy("genFastBtn", true, "Fast Preview", "Cancel Preview");
       status.textContent = "Generating fast preview...";
-      payload.preview_id = previewId;
       cancelPreviewOnServer();
+      previewId = newPreviewId();
+      safeSetStorage(wizardSessionStorage, PREVIEW_ID_KEY, previewId);
+      payload.preview_id = previewId;
       imgFetchController = new AbortController();
 
       try {
@@ -2420,10 +2607,8 @@
       const payload = currentPayload();
       const status = el("imgStatus");
       const button = el("genAccurateBtn");
-      const wrap = el("compareWrap");
       const vwrap = el("accurateVideoWrap");
       const video = el("accurateVideo");
-      const vhint = el("accurateVideoHint");
 
       if (!payload.src) {
         status.textContent = "Pick a file first.";
@@ -2437,49 +2622,85 @@
         vwrap.style.display = "none";
         video.removeAttribute("src");
         video.load();
+        hideAccurateProgress();
         return;
       }
 
-      payload.preview_id = previewId;
       setPreviewBusy("genAccurateBtn", true, "Accurate Preview", "Cancel Accurate Preview");
-      status.textContent = "Generating accurate preview...";
+      status.textContent = "Starting accurate preview...";
       vwrap.style.display = "none";
       video.removeAttribute("src");
       video.load();
+      setAccurateProgress(1, "Starting accurate preview...", "Preparing a short HandBrake encode so the result matches the real job.");
 
       cancelPreviewOnServer();
+      previewId = newPreviewId();
+      safeSetStorage(wizardSessionStorage, PREVIEW_ID_KEY, previewId);
+      payload.preview_id = previewId;
       imgFetchController = new AbortController();
+      const runPreviewId = previewId;
+
+      const finishWithError = (message) => {
+        status.textContent = message || "Accurate preview failed";
+        setAccurateProgress(100, "Accurate preview failed", message || "");
+        imgFetchController = null;
+        setPreviewBusy("genAccurateBtn", false, "Accurate Preview", "Cancel Accurate Preview");
+      };
 
       try {
-        const res = await fetchWithTimeout("/wizard_preview_accurate", {
+        const res = await fetchWithTimeout("/wizard_preview_accurate/start", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(payload),
           signal: imgFetchController.signal
-        }, 195000);
+        }, 15000);
         const data = await readJson(res);
-        if (!res.ok || data.error) throw new Error(data.error || "Accurate preview failed");
-
-        el("imgOld").src = "data:image/jpeg;base64," + data.old_b64;
-        el("imgNew").src = "data:image/jpeg;base64," + data.new_b64;
-        wrap.style.display = "";
-        applyWipe(0.5);
-
-        if (data.clip_url) {
-          video.src = data.clip_url;
-          vwrap.style.display = "";
-          const secs = data.preview_seconds ? `${data.preview_seconds}s` : "";
-          const ts = data.t_seconds != null ? `at ${fmtSeconds(data.t_seconds)}` : "";
-          vhint.textContent = `${secs} ${ts} | ${data.encoder_label || data.encoder || "encoder"}`;
-        }
-
-        status.textContent = "Accurate preview ready.";
+        if (!res.ok || data.error) throw new Error(data.error || "Accurate preview failed to start");
+        status.textContent = "Accurate preview running...";
       } catch (e) {
-        status.textContent = e.message || "Accurate preview failed";
-      } finally {
-        imgFetchController = null;
-        setPreviewBusy("genAccurateBtn", false, "Accurate Preview", "Cancel Accurate Preview");
+        finishWithError(e.message || "Accurate preview failed to start");
+        return;
       }
+
+      const poll = async () => {
+        if (button.dataset.busy !== "1" || runPreviewId !== previewId) return;
+        try {
+          const res = await fetchWithTimeout(`/wizard_preview_accurate/status/${encodeURIComponent(runPreviewId)}`, {
+            method: "GET",
+            cache: "no-store",
+            signal: imgFetchController?.signal
+          }, 12000);
+          const data = await readJson(res);
+          if (!res.ok || data.error) throw new Error(data.error || "Accurate preview status failed");
+
+          if (data.state === "done" && data.result) {
+            renderAccuratePreviewResult(data.result);
+            setAccurateProgress(100, "Accurate preview ready", accurateDetailText(data));
+            status.textContent = "Accurate preview ready.";
+            imgFetchController = null;
+            setPreviewBusy("genAccurateBtn", false, "Accurate Preview", "Cancel Accurate Preview");
+            stopAccuratePolling();
+            return;
+          }
+
+          if (data.state === "error") {
+            finishWithError(data.message || data.error || "Accurate preview failed");
+            stopAccuratePolling();
+            return;
+          }
+
+          setAccurateProgress(data.progress || 0, data.message || "Generating accurate preview...", accurateDetailText(data));
+          status.textContent = data.message || "Generating accurate preview...";
+          accuratePreviewPollTimer = setTimeout(poll, 900);
+        } catch (e) {
+          if (button.dataset.busy !== "1") return;
+          finishWithError(e.message || "Accurate preview status failed");
+          stopAccuratePolling();
+        }
+      };
+
+      stopAccuratePolling();
+      accuratePreviewPollTimer = setTimeout(poll, 500);
     }
 
     async function queueWizard() {
