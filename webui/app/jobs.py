@@ -2136,25 +2136,45 @@ def clear_error_status() -> int:
 
 def clear_queued_jobs() -> int:
     """
-    Remove all jobs that are currently queued (status == "queued").
+    Remove all jobs that are currently queued or canceled.
 
     - Does NOT touch running jobs
-    - Does NOT touch done / error / canceled jobs (those are history)
+    - Does NOT touch done / error jobs (those are history)
     - Also removes them from job_queue
     - Logs are removed if they exist (usually they won't for queued jobs)
 
     Returns:
         int: number of jobs removed
     """
-    global jobs, job_queue
+    global jobs, job_queue, dashboard_totals
 
     to_remove: list[str] = []
     for jid, j in list(jobs.items()):
-        if j.get("status") == "queued":
+        if str(j.get("status") or "").lower() in {"queued", "canceled"}:
             to_remove.append(jid)
 
+    archived = _normalize_dashboard_totals(dashboard_totals)
     removed = 0
     for jid in to_remove:
+        job = jobs.get(jid) or {}
+        status = str(job.get("status") or "").lower()
+        if status == "canceled":
+            archived["canceled"] = int(archived.get("canceled") or 0) + 1
+            try:
+                archived["canceled_runtime_seconds"] = (
+                    float(archived.get("canceled_runtime_seconds") or 0.0)
+                    + float(job.get("duration_seconds") or 0.0)
+                )
+            except Exception:
+                pass
+            try:
+                archived["runtime_seconds"] = (
+                    float(archived.get("runtime_seconds") or 0.0)
+                    + float(job.get("duration_seconds") or 0.0)
+                )
+            except Exception:
+                pass
+
         # Remove from jobs dict
         jobs.pop(jid, None)
         removed += 1
@@ -2175,5 +2195,6 @@ def clear_queued_jobs() -> int:
         except Exception as e:
             print(f"[WARN] Failed to remove log for queued job {jid}: {e}", flush=True)
 
+    dashboard_totals = archived
     save_jobs()
     return removed

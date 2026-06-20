@@ -1,16 +1,16 @@
+.git
+.github
 __pycache__/
 *.pyc
 
-# Runtime data
+# Runtime/cache data should be mounted, not baked into the image.
 data/
 logs/
 config/
 *.log
 
-# IDE/editor
+# Local editor/temp artifacts.
 .vscode/
 .idea/
-
-# Archives / misc
 *.tar
 *.zip

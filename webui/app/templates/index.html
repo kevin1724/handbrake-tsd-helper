@@ -184,7 +184,7 @@
     <div class="row jobs-action-bar" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
       <button id="pauseQueueBtn">Pause queue</button>
       <span id="queueStatusLabel" class="small"></span>
-      <button id="clearQueuedBtn">Clear queued jobs</button>
+      <button id="clearQueuedBtn">Clear queued / canceled jobs</button>
       <button id="clearFinishedBtn" style="margin-left:auto;">Clear finished jobs (done/error)</button>
     </div>
 
@@ -1362,7 +1362,7 @@ function clearFinishedJobs() {
 }
 
 function clearQueuedJobs() {
-  if (!confirm("This will remove ALL jobs that are currently in 'queued' status.\n\nRunning jobs will NOT be touched.\n\nContinue?")) {
+  if (!confirm("This will remove ALL queued and canceled jobs.\n\nRunning jobs will NOT be touched.\n\nContinue?")) {
     return;
   }
 
@@ -1374,7 +1374,7 @@ function clearQueuedJobs() {
         return;
       }
       refreshJobs();
-      if (window.appToast) appToast('Queued jobs cleared.', 'success');
+      if (window.appToast) appToast('Queued and canceled jobs cleared.', 'success');
     })
     .catch(err => {
       console.error(err);

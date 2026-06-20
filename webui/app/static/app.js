@@ -1,4 +1,6 @@
 (function () {
+  let globalStatusTimer = null;
+
   function ensureToastHost() {
     let host = document.getElementById("toastHost");
     if (!host) {
@@ -21,6 +23,41 @@
     }
   };
 
+  function chipHasState(state) {
+    const chip = document.getElementById("appStatusChip");
+    if (!chip) return false;
+    return chip.classList.contains("status-" + String(state || "").toLowerCase());
+  }
+
+  async function refreshGlobalJobStatus() {
+    const chip = document.getElementById("appStatusChip");
+    if (!chip) return;
+    try {
+      const res = await fetch("/jobs/summary", { cache: "no-store" });
+      const data = await res.json();
+      if (!res.ok || data.error) throw new Error(data.error || "status failed");
+      const summary = data.summary || {};
+      const counts = summary.counts || {};
+      if ((summary.active_error_count || 0) > 0) {
+        window.setAppStatus("Error", "error");
+      } else if ((counts.running || 0) > 0) {
+        window.setAppStatus("Encoding", "encoding");
+      } else if (!chipHasState("scanning")) {
+        window.setAppStatus("Idle", "idle");
+      }
+    } catch (err) {
+      if (!chipHasState("encoding") && !chipHasState("scanning")) {
+        window.setAppStatus("Error", "error");
+      }
+    }
+  }
+
+  function startGlobalStatusPolling() {
+    if (!document.getElementById("appStatusChip") || globalStatusTimer) return;
+    refreshGlobalJobStatus();
+    globalStatusTimer = window.setInterval(refreshGlobalJobStatus, 5000);
+  }
+
   window.appToast = function appToast(message, type) {
     const text = String(message || "").trim();
     if (!text) return;
@@ -38,6 +75,7 @@
   document.addEventListener("DOMContentLoaded", () => {
     if (document.getElementById("appStatusChip")) {
       window.setAppStatus("Idle", "idle");
+      startGlobalStatusPolling();
     }
   });
 })();

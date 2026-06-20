@@ -593,12 +593,6 @@
           </select>
         </div>
         <div class="row">
-          <input id="pairWorkerControllerUrlInput" type="text" placeholder="Controller URL for remote transfer, optional" style="width:100%;">
-        </div>
-        <div class="row">
-          <input id="pairWorkerRemoteTempInput" type="text" placeholder="Worker temp folder for remote transfer, optional" style="width:100%;">
-        </div>
-        <div class="row">
           <textarea id="pairWorkerMappingsInput" rows="3" placeholder="/media/Shows => /mnt/media/Shows&#10;/media/Movies => /storage/Movies" style="width:100%;"></textarea>
         </div>
         <div class="row button-row">
@@ -2143,19 +2137,11 @@
           if ((node.transfer_mode || "local") === value) opt.selected = true;
           modeSelect.appendChild(opt);
         });
-        const controllerInput = document.createElement("input");
-        controllerInput.type = "text";
-        controllerInput.className = "node-controller-url-input";
-        controllerInput.placeholder = "Controller URL for remote transfer";
-        controllerInput.value = node.controller_url || "";
-        const remoteTempInput = document.createElement("input");
-        remoteTempInput.type = "text";
-        remoteTempInput.className = "node-remote-temp-input";
-        remoteTempInput.placeholder = "Worker temp folder for remote transfer";
-        remoteTempInput.value = node.remote_temp_dir || "";
+        const transferInfo = document.createElement("div");
+        transferInfo.className = "node-transfer-readonly";
+        transferInfo.textContent = `Remote transfer: controller ${node.controller_url || "auto"} / worker temp ${node.remote_temp_dir || "worker default"}`;
         modeRow.appendChild(modeSelect);
-        modeRow.appendChild(controllerInput);
-        modeRow.appendChild(remoteTempInput);
+        modeRow.appendChild(transferInfo);
         main.appendChild(modeRow);
 
         const textarea = document.createElement("textarea");
@@ -2170,7 +2156,7 @@
         actions.className = "node-actions";
         [
           ["Refresh", () => refreshNode(node.id)],
-          ["Save settings", () => saveNodeSettings(node.id, textarea.value, modeSelect.value, controllerInput.value, remoteTempInput.value)],
+          ["Save settings", () => saveNodeSettings(node.id, textarea.value, modeSelect.value)],
           ["Rotate secret", () => rotateNodeSecret(node.id)],
           ["Unlink", () => unlinkNode(node.id)],
           ["Forget local record", () => forgetNode(node.id)]
@@ -2251,15 +2237,13 @@
       const code = document.getElementById("pairWorkerCodeInput")?.value || "";
       const name = document.getElementById("pairWorkerNameInput")?.value || "";
       const transferMode = document.getElementById("pairWorkerTransferModeSelect")?.value || "local";
-      const controllerUrl = document.getElementById("pairWorkerControllerUrlInput")?.value || "";
-      const remoteTempDir = document.getElementById("pairWorkerRemoteTempInput")?.value || "";
       const mappings = parsePathMappingsText(document.getElementById("pairWorkerMappingsInput")?.value || "");
       try {
         if (status) status.textContent = "Pairing...";
         const res = await fetch("/api/nodes/pair", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url, code, name, transfer_mode: transferMode, controller_url: controllerUrl, remote_temp_dir: remoteTempDir, path_mappings: mappings })
+          body: JSON.stringify({ url, code, name, transfer_mode: transferMode, path_mappings: mappings })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Pairing failed");
@@ -2296,16 +2280,14 @@
       }
     }
 
-    async function saveNodeSettings(nodeId, text, transferMode, controllerUrl, remoteTempDir) {
+    async function saveNodeSettings(nodeId, text, transferMode) {
       try {
         const res = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/path_mappings`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             path_mappings: parsePathMappingsText(text),
-            transfer_mode: transferMode || "local",
-            controller_url: controllerUrl || "",
-            remote_temp_dir: remoteTempDir || ""
+            transfer_mode: transferMode || "local"
           })
         });
         const data = await res.json();

@@ -173,6 +173,7 @@ def accept_pairing(code: str, controller: dict) -> dict:
         "worker_id": data["local_node_id"],
         "worker_name": data.get("local_node_name") or "HandBrake TSD Node",
         "token": token,
+        "controller_url": controller_url,
         "paired_at": now,
     }
 
@@ -407,6 +408,7 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
     if not token or not worker_id:
         raise RuntimeError("pairing response missing worker token")
 
+    stored_controller_url = str(data.get("controller_url") or controller_url or "").strip().rstrip("/")
     row = {
         "id": worker_id,
         "name": str(name or data.get("worker_name") or "Worker")[:80],
@@ -423,7 +425,7 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
         "last_error": "",
         "path_mappings": normalize_path_mappings(path_mappings or []),
         "transfer_mode": normalize_transfer_mode(transfer_mode),
-        "controller_url": str(controller_url or "").strip().rstrip("/"),
+        "controller_url": stored_controller_url,
         "remote_temp_dir": str(remote_temp_dir or "").strip()[:500],
     }
     delete_nodes_by_url(url, keep_id=worker_id)

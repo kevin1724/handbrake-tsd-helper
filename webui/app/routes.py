@@ -43,8 +43,9 @@ import hashlib
 import threading
 import secrets
 import shutil
+import socket
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode
+from urllib.parse import urlparse, urlencode
 from urllib.request import Request, urlopen
 
 
@@ -3632,6 +3633,18 @@ def _refresh_linked_node(row: dict) -> dict:
     try:
         data = signed_json_request(row, "/api/node/status", method="GET", timeout=12)
         summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
+        local_controller_id = str(local_node_overview().get("id") or "")
+        paired_controllers = data.get("paired_controllers") if isinstance(data.get("paired_controllers"), list) else []
+        reported_controller_url = ""
+        for controller_row in paired_controllers:
+            if not isinstance(controller_row, dict):
+                continue
+            if str(controller_row.get("id") or "") == local_controller_id:
+                reported_controller_url = str(controller_row.get("url") or "").strip().rstrip("/")
+                break
+        if not reported_controller_url and paired_controllers:
+            first_controller = next((item for item in paired_controllers if isinstance(item, dict) and item.get("url")), {})
+            reported_controller_url = str(first_controller.get("url") or "").strip().rstrip("/")
         row.update({
             "name": data.get("name") or row.get("name") or "Worker",
             "last_heartbeat": time.time(),
@@ -3641,10 +3654,13 @@ def _refresh_linked_node(row: dict) -> dict:
             "status": _node_summary_status(summary),
             "summary": summary,
             "last_error": "",
-            "paired_controllers": data.get("paired_controllers") if isinstance(data.get("paired_controllers"), list) else [],
+            "paired_controllers": paired_controllers,
             "jobs": data.get("jobs") if isinstance(data.get("jobs"), list) else [],
             "prediction_profile": data.get("prediction_profile") if isinstance(data.get("prediction_profile"), dict) else {},
+            "remote_temp_dir": str(data.get("remote_transfer_temp_dir") or row.get("remote_temp_dir") or "").strip()[:500],
         })
+        if reported_controller_url:
+            row["controller_url"] = reported_controller_url
     except Exception as e:
         now = time.time()
         misses = int(row.get("heartbeat_misses") or 0) + 1
@@ -3709,6 +3725,60 @@ def _authenticated_controller():
     return controller
 
 
+def _request_scheme() -> str:
+    value = str(request.headers.get("X-Forwarded-Proto") or request.scheme or "http").split(",")[0].strip().lower()
+    return value if value in {"http", "https"} else "http"
+
+
+def _request_port(default: int | None = None) -> int | None:
+    host = str(request.headers.get("X-Forwarded-Host") or request.host or "").strip()
+    try:
+        parsed = urlparse(f"//{host}")
+        if parsed.port:
+            return int(parsed.port)
+    except Exception:
+        pass
+    if default:
+        return int(default)
+    scheme = _request_scheme()
+    return 443 if scheme == "https" else 80
+
+
+def _is_loopback_host(hostname: str) -> bool:
+    value = str(hostname or "").strip().lower().strip("[]")
+    return value in {"localhost", "127.0.0.1", "::1", "0.0.0.0"}
+
+
+def _infer_controller_url_from_pair_request() -> str:
+    remote_host = str(request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip()
+    if not remote_host:
+        return ""
+    port = _request_port()
+    port_text = "" if port in {80, 443, None} else f":{port}"
+    return f"{_request_scheme()}://{remote_host}{port_text}"
+
+
+def _infer_controller_url_for_worker(worker_url: str = "") -> str:
+    parsed_worker = urlparse(str(worker_url or ""))
+    worker_host = parsed_worker.hostname or ""
+    if not worker_host:
+        return ""
+
+    port = _request_port(parsed_worker.port)
+    try:
+        family = socket.AF_INET6 if ":" in worker_host else socket.AF_INET
+        with socket.socket(family, socket.SOCK_DGRAM) as sock:
+            sock.settimeout(0.2)
+            sock.connect((worker_host, int(parsed_worker.port or port or 80)))
+            local_host = sock.getsockname()[0]
+    except Exception:
+        local_host = ""
+    if not local_host or _is_loopback_host(local_host):
+        return ""
+    port_text = "" if port in {80, 443, None} else f":{port}"
+    return f"{_request_scheme()}://{local_host}{port_text}"
+
+
 def _queue_local_paths(raw_paths, preset: str) -> tuple[int, list[dict]]:
     if isinstance(raw_paths, str):
         raw_paths = [raw_paths]
@@ -3743,8 +3813,18 @@ def _queue_local_paths(raw_paths, preset: str) -> tuple[int, list[dict]]:
     return int(create_jobs_batch(to_create) or 0), skipped
 
 
-def _controller_base_url(default_url: str = "") -> str:
+def _controller_base_url(default_url: str = "", worker_url: str = "") -> str:
     value = str(default_url or "").strip().rstrip("/")
+    if value:
+        try:
+            parsed = urlparse(value)
+            if parsed.scheme in {"http", "https"} and parsed.netloc and not _is_loopback_host(parsed.hostname or ""):
+                return value
+        except Exception:
+            pass
+    inferred = _infer_controller_url_for_worker(worker_url)
+    if inferred:
+        return inferred
     if value:
         return value
     try:
@@ -4452,6 +4532,8 @@ def register_routes(app):
     @app.route("/api/node/pair/accept", methods=["POST"])
     def node_pair_accept_api():
         data = request.get_json(force=True) or {}
+        if not str(data.get("controller_url") or "").strip():
+            data["controller_url"] = _infer_controller_url_from_pair_request()
         try:
             accepted = accept_pairing(data.get("code") or "", data)
         except ValueError as e:
@@ -4464,6 +4546,16 @@ def register_routes(app):
         controller = _authenticated_controller()
         if not controller:
             return jsonify(error="unauthorized"), 401
+        current_controller_url = str(controller.get("url") or "").strip()
+        try:
+            parsed_controller_url = urlparse(current_controller_url)
+            controller_url_needs_infer = (not current_controller_url) or _is_loopback_host(parsed_controller_url.hostname or "")
+        except Exception:
+            controller_url_needs_infer = True
+        if controller_url_needs_infer:
+            inferred_controller_url = _infer_controller_url_from_pair_request()
+            if inferred_controller_url:
+                update_trusted_controller(controller["id"], {"url": inferred_controller_url})
         local = local_node_overview()
         return jsonify(
             ok=True,
@@ -4472,6 +4564,7 @@ def register_routes(app):
             role=local["role"],
             role_label=local["role_label"],
             paired_controllers=local["paired_controllers"],
+            remote_transfer_temp_dir=str(load_settings().get("remote_transfer_temp_dir") or ""),
             summary=get_job_summary(),
             jobs=list_jobs_for_api(),
             prediction_profile=_history_prediction_profile(),
@@ -4672,7 +4765,7 @@ def register_routes(app):
                 path_mappings=data.get("path_mappings") or [],
                 transfer_mode=data.get("transfer_mode") or "local",
                 controller_url=data.get("controller_url") or "",
-                remote_temp_dir=data.get("remote_temp_dir") or "",
+                remote_temp_dir="",
             )
         except Exception as e:
             return jsonify(error=str(e)), 400
@@ -4717,8 +4810,7 @@ def register_routes(app):
         data = request.get_json(force=True) or {}
         row["path_mappings"] = normalize_path_mappings(data.get("path_mappings") or [])
         row["transfer_mode"] = normalize_transfer_mode(data.get("transfer_mode") or row.get("transfer_mode") or "local")
-        row["controller_url"] = str(data.get("controller_url") or row.get("controller_url") or "").strip().rstrip("/")
-        row["remote_temp_dir"] = str(data.get("remote_temp_dir") or row.get("remote_temp_dir") or "").strip()[:500]
+        row["controller_url"] = _controller_base_url(row.get("controller_url") or "", row.get("url") or "")
         save_node(row)
         return jsonify(ok=True, node=public_node(row))
 
@@ -4788,8 +4880,14 @@ def register_routes(app):
         if not selected:
             return jsonify(error="no worker node available"), 400
 
+        selected = _refresh_linked_node(selected)
         selected_mode = normalize_transfer_mode(selected.get("transfer_mode") or "local")
-        controller_url = _controller_base_url(selected.get("controller_url") or data.get("controller_url") or "")
+        controller_url = _controller_base_url(selected.get("controller_url") or data.get("controller_url") or "", selected.get("url") or "")
+        if selected_mode in {"remote", "auto"} and not controller_url:
+            return jsonify(error="controller URL could not be inferred for remote transfer"), 400
+        if controller_url and controller_url != str(selected.get("controller_url") or "").strip().rstrip("/"):
+            selected["controller_url"] = controller_url
+            save_node(selected)
         jobs_payload = []
         skipped = []
 
@@ -5592,7 +5690,7 @@ def register_routes(app):
 
     @app.route("/clear_queued_jobs", methods=["POST"])
     def clear_queued_jobs_route():
-        """Delete all jobs that are currently queued (status == 'queued')."""
+        """Delete queued and canceled jobs without touching running jobs."""
         removed = clear_queued_jobs()
         return jsonify(removed=removed)
 

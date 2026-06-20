@@ -2256,7 +2256,7 @@ body.settings-page .folder-add-choice {
 
 .node-mode-row {
   display: grid;
-  grid-template-columns: minmax(190px, 0.35fr) minmax(220px, 0.35fr) minmax(220px, 0.3fr);
+  grid-template-columns: minmax(190px, 0.35fr) minmax(260px, 0.65fr);
   gap: 10px;
 }
 
@@ -2264,6 +2264,18 @@ body.settings-page .folder-add-choice {
 .node-controller-url-input,
 .node-remote-temp-input {
   width: 100%;
+}
+
+.node-transfer-readonly {
+  align-items: center;
+  background: rgba(8, 13, 20, 0.45);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  display: flex;
+  min-height: 44px;
+  padding: 0 12px;
+  word-break: break-word;
 }
 
 .path-map-textarea {
