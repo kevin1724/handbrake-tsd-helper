@@ -5,6 +5,8 @@ import hmac
 import json
 import os
 import secrets
+import shutil
+import threading
 import time
 import uuid
 from urllib.error import HTTPError, URLError
@@ -22,6 +24,8 @@ HEARTBEAT_STALE_SECONDS = 10 * 60
 HEARTBEAT_RUNNING_GRACE_SECONDS = 2 * 60 * 60
 HEARTBEAT_MAX_MISSES = 3
 TRANSFER_TTL_SECONDS = 48 * 60 * 60
+STATE_LOCK = threading.RLock()
+TRANSFER_LOCK = threading.RLock()
 
 
 def _now() -> float:
@@ -40,17 +44,22 @@ def _empty_state() -> dict:
 
 
 def _load_state() -> dict:
-    try:
-        with open(NODE_LINK_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        data = _empty_state()
-        _save_state(data)
-        return data
-    except Exception:
-        data = _empty_state()
-        _save_state(data)
-        return data
+    with STATE_LOCK:
+        try:
+            with open(NODE_LINK_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            data = _empty_state()
+            _save_state(data)
+            return data
+        except Exception:
+            try:
+                with open(NODE_LINK_FILE + ".bak", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = _empty_state()
+                _save_state(data)
+                return data
 
     if not isinstance(data, dict):
         data = _empty_state()
@@ -65,10 +74,16 @@ def _load_state() -> dict:
 
 
 def _save_state(data: dict) -> None:
-    data["updated_at"] = _now()
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(NODE_LINK_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    with STATE_LOCK:
+        data["updated_at"] = _now()
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = NODE_LINK_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, NODE_LINK_FILE)
+        shutil.copy2(NODE_LINK_FILE, NODE_LINK_FILE + ".bak")
 
 
 def local_node_info() -> dict:
@@ -109,12 +124,12 @@ def node_has_running_work(row: dict) -> bool:
     summary = row.get("summary") if isinstance(row.get("summary"), dict) else {}
     counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
     try:
-        if int(counts.get("running") or 0) > 0:
+        if int(counts.get("running") or 0) > 0 or int(counts.get("waiting_to_upload") or 0) > 0:
             return True
     except Exception:
         pass
     jobs = row.get("jobs") if isinstance(row.get("jobs"), list) else []
-    return any(str(job.get("status") or "").lower() == "running" for job in jobs if isinstance(job, dict))
+    return any(str(job.get("status") or "").lower() in {"running", "waiting_to_upload"} for job in jobs if isinstance(job, dict))
 
 
 def heartbeat_allowed_age(row: dict) -> int:
@@ -155,11 +170,13 @@ def accept_pairing(code: str, controller: dict) -> dict:
         allowed_ips = []
 
     token = secrets.token_urlsafe(32)
+    recovery_token = secrets.token_urlsafe(40)
     trusted = data.setdefault("trusted_controllers", {})
     trusted[controller_id] = {
         "id": controller_id,
         "name": controller_name,
         "token": token,
+        "recovery_token_hash": _hash_secret(recovery_token),
         "url": controller_url,
         "paired_at": now,
         "last_seen": 0,
@@ -173,9 +190,64 @@ def accept_pairing(code: str, controller: dict) -> dict:
         "worker_id": data["local_node_id"],
         "worker_name": data.get("local_node_name") or "HandBrake TSD Node",
         "token": token,
+        "recovery_token": recovery_token,
         "controller_url": controller_url,
         "paired_at": now,
     }
+
+
+def recover_pairing(controller: dict) -> dict:
+    """Repair a paired controller session without a new pairing code."""
+    data = _load_state()
+    controller_id = str(controller.get("controller_id") or controller.get("id") or "").strip()
+    trusted = data.setdefault("trusted_controllers", {})
+    row = trusted.get(controller_id)
+    if not controller_id or not isinstance(row, dict):
+        raise ValueError("controller is not paired")
+
+    supplied_recovery = str(controller.get("recovery_token") or "").strip()
+    supplied_session = str(controller.get("session_token") or "").strip()
+    expected_recovery = str(row.get("recovery_token_hash") or "")
+    recovery_ok = bool(expected_recovery and supplied_recovery and hmac.compare_digest(expected_recovery, _hash_secret(supplied_recovery)))
+    session_ok = bool(supplied_session and hmac.compare_digest(str(row.get("token") or ""), supplied_session))
+    if not recovery_ok and not session_ok:
+        raise ValueError("pair recovery credential rejected")
+
+    new_token = secrets.token_urlsafe(32)
+    new_recovery = supplied_recovery if recovery_ok else secrets.token_urlsafe(40)
+    controller_url = str(controller.get("controller_url") or row.get("url") or "").strip().rstrip("/")[:300]
+    row.update({
+        "token": new_token,
+        "recovery_token_hash": _hash_secret(new_recovery),
+        "url": controller_url,
+        "last_seen": _now(),
+        "recovered_at": _now(),
+    })
+    trusted[controller_id] = row
+    _save_state(data)
+    return {
+        "worker_id": data.get("local_node_id"),
+        "worker_name": data.get("local_node_name") or "HandBrake TSD Node",
+        "token": new_token,
+        "recovery_token": new_recovery,
+        "controller_url": controller_url,
+        "recovered_at": row["recovered_at"],
+    }
+
+
+def enable_pair_recovery(controller_id: str) -> str:
+    with STATE_LOCK:
+        data = _load_state()
+        trusted = data.setdefault("trusted_controllers", {})
+        row = trusted.get(str(controller_id or ""))
+        if not isinstance(row, dict):
+            raise ValueError("controller is not paired")
+        recovery_token = secrets.token_urlsafe(40)
+        row["recovery_token_hash"] = _hash_secret(recovery_token)
+        row["recovery_enabled_at"] = _now()
+        trusted[str(controller_id)] = row
+        _save_state(data)
+        return recovery_token
 
 
 def public_node(row: dict) -> dict:
@@ -294,16 +366,17 @@ def get_node_private(node_id: str) -> dict | None:
 
 
 def save_node(row: dict) -> dict:
-    data = _load_state()
-    node_id = str(row.get("id") or "").strip()
-    if not node_id:
-        raise ValueError("missing node id")
-    nodes = data.setdefault("nodes", {})
-    existing = nodes.get(node_id) if isinstance(nodes.get(node_id), dict) else {}
-    merged = {**existing, **row, "id": node_id}
-    nodes[node_id] = merged
-    _save_state(data)
-    return merged
+    with STATE_LOCK:
+        data = _load_state()
+        node_id = str(row.get("id") or "").strip()
+        if not node_id:
+            raise ValueError("missing node id")
+        nodes = data.setdefault("nodes", {})
+        existing = nodes.get(node_id) if isinstance(nodes.get(node_id), dict) else {}
+        merged = {**existing, **row, "id": node_id}
+        nodes[node_id] = merged
+        _save_state(data)
+        return merged
 
 
 def delete_node(node_id: str) -> bool:
@@ -339,15 +412,28 @@ def trusted_controller(controller_id: str) -> dict | None:
     return row if isinstance(row, dict) else None
 
 
-def update_trusted_controller(controller_id: str, updates: dict) -> None:
+def trusted_controller_by_url(url: str) -> dict | None:
+    wanted = str(url or "").strip().rstrip("/")
+    if not wanted:
+        return None
     data = _load_state()
-    trusted = data.setdefault("trusted_controllers", {})
-    row = trusted.get(str(controller_id or ""))
-    if not isinstance(row, dict):
-        return
-    row.update(updates)
-    trusted[str(controller_id)] = row
-    _save_state(data)
+    controllers = data.get("trusted_controllers") if isinstance(data.get("trusted_controllers"), dict) else {}
+    for row in controllers.values():
+        if isinstance(row, dict) and str(row.get("url") or "").strip().rstrip("/") == wanted:
+            return row
+    return None
+
+
+def update_trusted_controller(controller_id: str, updates: dict) -> None:
+    with STATE_LOCK:
+        data = _load_state()
+        trusted = data.setdefault("trusted_controllers", {})
+        row = trusted.get(str(controller_id or ""))
+        if not isinstance(row, dict):
+            return
+        row.update(updates)
+        trusted[str(controller_id)] = row
+        _save_state(data)
 
 
 def delete_trusted_controller(controller_id: str) -> None:
@@ -404,6 +490,7 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
     }
     data = _request_json(f"{url}/api/node/pair/accept", method="POST", body=payload, timeout=10)
     token = str(data.get("token") or "")
+    recovery_token = str(data.get("recovery_token") or "")
     worker_id = str(data.get("worker_id") or data.get("id") or "").strip()
     if not token or not worker_id:
         raise RuntimeError("pairing response missing worker token")
@@ -415,6 +502,7 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
         "url": url,
         "role": "worker",
         "token": token,
+        "recovery_token": recovery_token,
         "paired_at": _now(),
         "last_heartbeat": 0,
         "heartbeat_misses": 0,
@@ -431,6 +519,34 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
     delete_nodes_by_url(url, keep_id=worker_id)
     save_node(row)
     return public_node(row)
+
+
+def recover_worker_session(row: dict, *, controller_url: str = "") -> dict:
+    worker_url = normalize_url(row.get("url") or "")
+    local = local_node_info()
+    payload = {
+        "controller_id": local["id"],
+        "controller_name": local["name"],
+        "controller_url": str(controller_url or row.get("controller_url") or "").strip().rstrip("/"),
+        "recovery_token": str(row.get("recovery_token") or ""),
+        "session_token": str(row.get("token") or ""),
+    }
+    data = _request_json(f"{worker_url}/api/node/pair/recover", method="POST", body=payload, timeout=12)
+    token = str(data.get("token") or "").strip()
+    recovery_token = str(data.get("recovery_token") or row.get("recovery_token") or "").strip()
+    if not token or not recovery_token:
+        raise RuntimeError("pair recovery response was incomplete")
+    updated = {
+        **row,
+        "token": token,
+        "recovery_token": recovery_token,
+        "controller_url": str(data.get("controller_url") or payload["controller_url"] or "").strip().rstrip("/"),
+        "last_error": "",
+        "heartbeat_misses": 0,
+        "recovered_at": _now(),
+        "status": "reconnecting",
+    }
+    return save_node(updated)
 
 
 def normalize_path_mappings(rows) -> list[dict]:
@@ -477,17 +593,22 @@ def _empty_transfers() -> dict:
 
 
 def _load_transfers() -> dict:
-    try:
-        with open(NODE_TRANSFER_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        data = _empty_transfers()
-        _save_transfers(data)
-        return data
-    except Exception:
-        data = _empty_transfers()
-        _save_transfers(data)
-        return data
+    with TRANSFER_LOCK:
+        try:
+            with open(NODE_TRANSFER_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            data = _empty_transfers()
+            _save_transfers(data)
+            return data
+        except Exception:
+            try:
+                with open(NODE_TRANSFER_FILE + ".bak", "r", encoding="utf-8") as f:
+                    data = json.load(f)
+            except Exception:
+                data = _empty_transfers()
+                _save_transfers(data)
+                return data
     if not isinstance(data, dict):
         data = _empty_transfers()
     data.setdefault("transfers", {})
@@ -496,10 +617,16 @@ def _load_transfers() -> dict:
 
 
 def _save_transfers(data: dict) -> None:
-    data["updated_at"] = _now()
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(NODE_TRANSFER_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    with TRANSFER_LOCK:
+        data["updated_at"] = _now()
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = NODE_TRANSFER_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, NODE_TRANSFER_FILE)
+        shutil.copy2(NODE_TRANSFER_FILE, NODE_TRANSFER_FILE + ".bak")
 
 
 def create_transfer_grant(src: str, worker_node_id: str, *, source_size: int = 0, ttl_seconds: int = TRANSFER_TTL_SECONDS) -> dict:
@@ -542,16 +669,51 @@ def get_transfer(transfer_id: str) -> dict | None:
 
 
 def save_transfer(row: dict) -> dict:
-    data = _load_transfers()
-    transfer_id = str(row.get("id") or "").strip()
-    if not transfer_id:
-        raise ValueError("missing transfer id")
-    transfers = data.setdefault("transfers", {})
-    existing = transfers.get(transfer_id) if isinstance(transfers.get(transfer_id), dict) else {}
-    merged = {**existing, **row, "id": transfer_id}
-    transfers[transfer_id] = merged
-    _save_transfers(data)
-    return merged
+    with TRANSFER_LOCK:
+        data = _load_transfers()
+        transfer_id = str(row.get("id") or "").strip()
+        if not transfer_id:
+            raise ValueError("missing transfer id")
+        transfers = data.setdefault("transfers", {})
+        existing = transfers.get(transfer_id) if isinstance(transfers.get(transfer_id), dict) else {}
+        merged = {**existing, **row, "id": transfer_id}
+        transfers[transfer_id] = merged
+        _save_transfers(data)
+        return merged
+
+
+def renew_transfer_upload_grant(transfer_id: str, worker_node_id: str, *, ttl_seconds: int = TRANSFER_TTL_SECONDS) -> dict:
+    with TRANSFER_LOCK:
+        data = _load_transfers()
+        transfers = data.setdefault("transfers", {})
+        row = transfers.get(str(transfer_id or ""))
+        if not isinstance(row, dict):
+            raise ValueError("transfer not found")
+        if str(row.get("worker_node_id") or "") != str(worker_node_id or ""):
+            raise ValueError("transfer belongs to a different worker")
+        if row.get("completed_at") or row.get("status") == "complete":
+            return {
+                "id": row.get("id"),
+                "complete": True,
+                "out_path": row.get("out_path") or "",
+                "out_bytes": int(row.get("out_bytes") or 0),
+                "saved_bytes": int(row.get("saved_bytes") or 0),
+                "source_deleted": bool(row.get("source_deleted")),
+            }
+
+        token = secrets.token_urlsafe(32)
+        now = _now()
+        row.update({
+            "upload_token_hash": _hash_secret(token),
+            "upload_used_at": 0,
+            "expires_at": now + max(300, min(72 * 60 * 60, int(ttl_seconds or TRANSFER_TTL_SECONDS))),
+            "status": "waiting_for_upload",
+            "error": "",
+            "renewed_at": now,
+        })
+        transfers[str(transfer_id)] = row
+        _save_transfers(data)
+        return {**row, "upload_token": token, "complete": False}
 
 
 def transfer_token_matches(row: dict, kind: str, token: str, *, require_unused: bool = True) -> bool:

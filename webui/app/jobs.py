@@ -70,10 +70,14 @@ jobs: dict[str, dict] = {}
 job_queue: list[str] = []
 queue_paused: bool = False
 dispatcher_started: bool = False
+transfer_retry_started: bool = False
 dashboard_totals: dict[str, float | int] = {}
+JOBS_SAVE_LOCK = threading.RLock()
 TRANSFER_WORK_DIR = os.path.join(DATA_DIR, "node_transfer_work")
 PRESET_WORK_DIR = os.path.join(DATA_DIR, "node_job_presets")
 OUTPUT_ESTIMATE_CHECKPOINTS = (2, 10, 25, 60, 90)
+TRANSFER_RETRY_MIN_SECONDS = 15
+TRANSFER_RETRY_MAX_SECONDS = 30 * 60
 
 
 def _now_ts() -> float:
@@ -564,9 +568,118 @@ def _remote_transfer_public(transfer: dict | None) -> dict:
         "source_basename": transfer.get("source_basename") or "",
         "source_size": transfer.get("source_size") or 0,
         "status": transfer.get("status") or "",
+        "retry_count": int(transfer.get("retry_count") or 0),
+        "next_retry_at": float(transfer.get("next_retry_at") or 0),
+        "last_error": transfer.get("last_error") or transfer.get("error") or "",
         "remote_temp_dir": transfer.get("remote_temp_dir") or "",
         "progress": transfer.get("progress") if isinstance(transfer.get("progress"), dict) else {},
     }
+
+
+def _transfer_retry_delay(retry_count: int) -> int:
+    count = max(1, int(retry_count or 1))
+    return min(TRANSFER_RETRY_MAX_SECONDS, TRANSFER_RETRY_MIN_SECONDS * (2 ** min(count - 1, 7)))
+
+
+def _renew_transfer_upload_grant(job_id: str, transfer: dict) -> dict:
+    controller_id = str(transfer.get("controller_id") or "").strip()
+    transfer_id = str(transfer.get("id") or "").strip()
+    if not transfer_id:
+        raise RuntimeError("transfer is missing its durable transfer identity")
+    from .node_linking import signed_json_request, trusted_controller, trusted_controller_by_url
+
+    controller = trusted_controller(controller_id) if controller_id else trusted_controller_by_url(transfer.get("controller_url") or "")
+    if not controller:
+        raise RuntimeError("paired controller record is unavailable")
+    if not controller_id:
+        controller_id = str(controller.get("id") or "")
+        transfer["controller_id"] = controller_id
+    api_path = f"/api/node/transfers/{transfer_id}/renew-upload"
+    result = signed_json_request(
+        controller,
+        api_path,
+        method="POST",
+        body={"job_id": job_id},
+        timeout=15,
+    )
+    if result.get("complete"):
+        return result
+    token = str(result.get("upload_token") or "").strip()
+    if not token:
+        raise RuntimeError("controller did not return a renewed upload token")
+    transfer["upload_token"] = token
+    transfer["upload_url"] = str(result.get("upload_url") or transfer.get("upload_url") or "").strip()
+    transfer["expires_at"] = float(result.get("expires_at") or transfer.get("expires_at") or 0)
+    return result
+
+
+def _mark_transfer_waiting(job_id: str, job: dict, error: Exception | str) -> None:
+    transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else {}
+    retry_count = int(transfer.get("retry_count") or 0) + 1
+    delay = _transfer_retry_delay(retry_count)
+    message = str(error or "controller unavailable")[:300]
+    transfer.update({
+        "status": "waiting_to_upload",
+        "retry_count": retry_count,
+        "next_retry_at": _now_ts() + delay,
+        "last_attempt_at": _now_ts(),
+        "last_error": message,
+        "error": "",
+        "progress": {
+            "phase": "waiting_to_upload",
+            "percent": 100.0,
+            "bytes": int(job.get("out_bytes") or 0),
+            "total_bytes": int(job.get("out_bytes") or 0),
+            "remaining_bytes": 0,
+            "speed_label": "",
+            "updated_at": _now_ts(),
+        },
+    })
+    job["status"] = "waiting_to_upload"
+    job["transfer"] = transfer
+    job["log"] = (str(job.get("log") or "") + f"\nController unavailable; completed output is safe locally. Retrying upload in {delay}s.\n")[-4000:]
+    save_jobs()
+    log_event(
+        "node_transfer_waiting",
+        f"Encode complete; waiting to return output to controller: {os.path.basename(job.get('src') or job_id)}",
+        level="warn",
+        job_id=job_id,
+        src=job.get("src"),
+        extra={"retry_in_seconds": delay, "error": message},
+    )
+
+
+def _apply_remote_upload_success(job_id: str, job: dict, result: dict, out_path: str) -> None:
+    transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else {}
+    local_bytes = int(os.path.getsize(out_path)) if out_path and os.path.isfile(out_path) else int(job.get("out_bytes") or 0)
+    controller_out = result.get("out_path") or job.get("out_path") or out_path
+    controller_out_bytes = int(result.get("out_bytes") or local_bytes)
+    controller_saved = int(result.get("saved_bytes") or job.get("saved_bytes") or 0)
+    job.update({
+        "status": "done",
+        "progress": 100.0,
+        "out_path": controller_out,
+        "out_bytes": controller_out_bytes,
+        "saved_bytes": controller_saved,
+        "estimated_out_bytes": controller_out_bytes,
+    })
+    transfer.update({
+        "status": "complete",
+        "controller_out_path": controller_out,
+        "source_deleted": bool(result.get("source_deleted")),
+        "next_retry_at": 0,
+        "last_error": "",
+        "completed_at": _now_ts(),
+    })
+    transfer["progress"] = _transfer_progress_payload("complete", controller_out_bytes, controller_out_bytes, _now_ts())
+    job["transfer"] = transfer
+    log_event(
+        "node_transfer_finished",
+        f"Remote transfer finished: {os.path.basename(job.get('src') or job_id)} - saved {round(controller_saved/(1024**3), 3)} GB",
+        job_id=job_id,
+        src=job.get("src"),
+        extra={"saved_bytes": controller_saved, "out_path": controller_out, "source_deleted": bool(result.get("source_deleted"))},
+    )
 
 
 def _encoder_method_from_encoder(encoder: str, preset: str = "") -> dict:
@@ -715,8 +828,14 @@ def save_jobs():
         }
 
         os.makedirs(DATA_DIR, exist_ok=True)
-        with open(JOBS_FILE, "w") as f:
-            json.dump(state, f)
+        with JOBS_SAVE_LOCK:
+            tmp = JOBS_FILE + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(state, f)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, JOBS_FILE)
+            shutil.copy2(JOBS_FILE, JOBS_FILE + ".bak")
     except Exception as e:
         print(f"[WARN] Failed to save jobs.json: {e}", flush=True)
 
@@ -739,8 +858,12 @@ def load_jobs():
         return
 
     try:
-        with open(JOBS_FILE, "r") as f:
-            state = json.load(f)
+        try:
+            with open(JOBS_FILE, "r", encoding="utf-8") as f:
+                state = json.load(f)
+        except Exception:
+            with open(JOBS_FILE + ".bak", "r", encoding="utf-8") as f:
+                state = json.load(f)
 
         data = state.get("jobs") or {}
         q = state.get("queue") or []
@@ -831,7 +954,7 @@ def _find_existing_active_job_for_src(src: str) -> str | None:
         job_id (str) if found, otherwise None.
     """
     for jid, j in jobs.items():
-        if j.get("src") == src and j.get("status") in ("queued", "running"):
+        if j.get("src") == src and j.get("status") in ("queued", "running", "waiting_to_upload"):
             return jid
     return None
 
@@ -1011,6 +1134,7 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
     job_id = str(uuid.uuid4())
     clean_transfer = {
         "id": str(transfer.get("id") or transfer.get("transfer_id") or "").strip(),
+        "controller_id": str(transfer.get("controller_id") or "").strip(),
         "controller_url": str(transfer.get("controller_url") or "").strip().rstrip("/"),
         "source_url": str(transfer.get("source_url") or "").strip(),
         "upload_url": str(transfer.get("upload_url") or "").strip(),
@@ -1023,6 +1147,9 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "remote_temp_dir": str(transfer.get("remote_temp_dir") or "").strip()[:500],
         "encode_metadata": transfer.get("encode_metadata") if isinstance(transfer.get("encode_metadata"), dict) else {},
         "status": "queued",
+        "retry_count": 0,
+        "next_retry_at": 0,
+        "last_error": "",
     }
     method = _encode_metadata_from_extra_args(extra_args, preset, encode_metadata or transfer.get("encode_metadata"))
     jobs[job_id] = {
@@ -1446,41 +1573,26 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                         duration_seconds_for_stats = None
 
                 if remote_transfer:
+                    transfer["local_out"] = out_path
+                    transfer["work_dir"] = transfer_work_dir
+                    job["local_out_path"] = out_path
+                    job["duration_seconds"] = duration_seconds_for_stats
                     transfer["status"] = "uploading"
                     job["transfer"] = transfer
                     save_jobs()
-                    upload_result = _upload_transfer_output(
-                        transfer.get("upload_url") or "",
-                        transfer.get("upload_token") or "",
-                        transfer.get("worker_node_id") or "",
-                        out_path,
-                        job_id=job_id,
-                        duration_seconds=duration_seconds_for_stats,
-                        progress_callback=update_transfer_progress,
-                    )
-                    controller_out = upload_result.get("out_path") or out_path
-                    controller_out_bytes = int(upload_result.get("out_bytes") or out_bytes)
-                    controller_saved = int(upload_result.get("saved_bytes") or saved_bytes)
-                    job["out_path"] = controller_out
-                    job["out_bytes"] = controller_out_bytes
-                    job["saved_bytes"] = controller_saved
-                    job["estimated_out_bytes"] = controller_out_bytes
-                    transfer["status"] = "complete"
-                    update_transfer_progress("complete", controller_out_bytes, controller_out_bytes, force=True)
-                    transfer["controller_out_path"] = controller_out
-                    transfer["source_deleted"] = bool(upload_result.get("source_deleted"))
-                    job["transfer"] = transfer
-                    log_event(
-                        "node_transfer_finished",
-                        f"Remote transfer finished: {os.path.basename(display_src_path)} - saved {round(controller_saved/(1024**3), 3)} GB",
-                        job_id=job_id,
-                        src=display_src_path,
-                        extra={
-                            "saved_bytes": controller_saved,
-                            "out_path": controller_out,
-                            "source_deleted": bool(upload_result.get("source_deleted")),
-                        },
-                    )
+                    try:
+                        upload_result = _upload_transfer_output(
+                            transfer.get("upload_url") or "",
+                            transfer.get("upload_token") or "",
+                            transfer.get("worker_node_id") or "",
+                            out_path,
+                            job_id=job_id,
+                            duration_seconds=duration_seconds_for_stats,
+                            progress_callback=update_transfer_progress,
+                        )
+                        _apply_remote_upload_success(job_id, job, upload_result, out_path)
+                    except Exception as upload_error:
+                        _mark_transfer_waiting(job_id, job, upload_error)
                 else:
                     try:
                         from .node_linking import local_node_info
@@ -1629,12 +1741,19 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job["pid"] = None
     if remote_transfer:
         transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else transfer
-        transfer.pop("download_token", None)
-        transfer.pop("upload_token", None)
-        transfer.pop("local_src", None)
-        transfer.pop("work_dir", None)
-        job["transfer"] = transfer
-        _cleanup_transfer_work_dir(transfer_work_dir, transfer)
+        if job.get("status") != "waiting_to_upload":
+            transfer.pop("download_token", None)
+            transfer.pop("upload_token", None)
+            transfer.pop("local_src", None)
+            transfer.pop("local_out", None)
+            transfer.pop("work_dir", None)
+            job["local_out_path"] = None
+            job["transfer"] = transfer
+            _cleanup_transfer_work_dir(transfer_work_dir, transfer)
+        else:
+            # Keep the validated output and transfer credentials durable until
+            # the paired controller comes back and accepts the upload.
+            job["transfer"] = transfer
     _cleanup_job_preset_dir(preset_work_dir)
     save_jobs()
 
@@ -1692,6 +1811,58 @@ def dispatcher_loop():
         save_jobs()
 
 
+def transfer_retry_loop():
+    """Retry completed remote outputs without re-running the encode."""
+    print("[TRANSFER-RETRY] started", flush=True)
+    while True:
+        now = _now_ts()
+        for job_id, job in list(jobs.items()):
+            if job.get("mode") != "remote_transfer" or job.get("status") != "waiting_to_upload":
+                continue
+            transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else {}
+            if float(transfer.get("next_retry_at") or 0) > now:
+                continue
+            out_path = str(transfer.get("local_out") or job.get("local_out_path") or "").strip()
+            if not out_path or not os.path.isfile(out_path):
+                job["status"] = "error"
+                transfer["status"] = "error"
+                transfer["last_error"] = "completed worker output is missing"
+                job["transfer"] = transfer
+                save_jobs()
+                continue
+
+            transfer["status"] = "retrying_upload"
+            transfer["last_attempt_at"] = now
+            job["transfer"] = transfer
+            save_jobs()
+            try:
+                # Renewing is cheap and also proves the paired controller is back.
+                renewal = _renew_transfer_upload_grant(job_id, transfer)
+                duration_seconds = job.get("duration_seconds")
+                result = renewal if renewal.get("complete") else _upload_transfer_output(
+                    transfer.get("upload_url") or "",
+                    transfer.get("upload_token") or "",
+                    transfer.get("worker_node_id") or "",
+                    out_path,
+                    job_id=job_id,
+                    duration_seconds=duration_seconds,
+                )
+                _apply_remote_upload_success(job_id, job, result, out_path)
+                work_dir = str(transfer.get("work_dir") or "").strip()
+                transfer.pop("download_token", None)
+                transfer.pop("upload_token", None)
+                transfer.pop("local_src", None)
+                transfer.pop("local_out", None)
+                transfer.pop("work_dir", None)
+                job["local_out_path"] = None
+                job["transfer"] = transfer
+                _cleanup_transfer_work_dir(work_dir, transfer)
+                save_jobs()
+            except Exception as e:
+                _mark_transfer_waiting(job_id, job, e)
+        time.sleep(10.0)
+
+
 def ensure_dispatcher():
     """
     Ensure that the dispatcher thread is running (start it once).
@@ -1699,13 +1870,18 @@ def ensure_dispatcher():
     You can safely call this multiple times; only the first call starts
     the background thread.
     """
-    global dispatcher_started
+    global dispatcher_started, transfer_retry_started
     if dispatcher_started:
+        if not transfer_retry_started:
+            threading.Thread(target=transfer_retry_loop, daemon=True, name="transfer-retry").start()
+            transfer_retry_started = True
         return
 
     t = threading.Thread(target=dispatcher_loop, daemon=True)
     t.start()
     dispatcher_started = True
+    threading.Thread(target=transfer_retry_loop, daemon=True, name="transfer-retry").start()
+    transfer_retry_started = True
 
 
 # -------------------------------------------------------------------
@@ -1916,6 +2092,7 @@ def get_job_summary() -> dict:
     status_counts = {
         "queued": 0,
         "running": 0,
+        "waiting_to_upload": 0,
         "done": int(archived.get("done") or 0),
         "error": int(archived.get("error") or 0),
         "canceled": int(archived.get("canceled") or 0),

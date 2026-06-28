@@ -775,6 +775,8 @@ function getVisibleTransferProgress(transfer) {
   const labels = {
     downloading: 'Downloading source',
     uploading: 'Sending finished file back',
+    retrying_upload: 'Retrying finished-file return',
+    waiting_to_upload: 'Encode complete; waiting for controller',
     uploaded: 'Finished file uploaded',
     complete: 'Finished file returned'
   };
@@ -800,8 +802,11 @@ function appendTransferProgress(parent, transfer) {
   transferLine.className = 'transfer-progress-line small';
   const remaining = formatBytesForDisplay(visible.progress.remaining_bytes);
   const speed = visible.progress.speed_label || '';
-  const showLiveStats = visible.phase === 'downloading' || visible.phase === 'uploading';
-  transferLine.textContent = `${visible.label} ${transferPct.toFixed(1)}%${showLiveStats && speed ? ` / ${speed}` : ''}${showLiveStats && remaining ? ` / ${remaining} left` : ''}`;
+  const showLiveStats = visible.phase === 'downloading' || visible.phase === 'uploading' || visible.phase === 'retrying_upload';
+  const retryAt = Number(transfer?.next_retry_at || 0);
+  const retrySeconds = retryAt > 0 ? Math.max(0, Math.ceil(retryAt - (Date.now() / 1000))) : 0;
+  const retryText = visible.phase === 'waiting_to_upload' && retrySeconds ? ` / retry in ${formatEta(retrySeconds)}` : '';
+  transferLine.textContent = `${visible.label} ${transferPct.toFixed(1)}%${showLiveStats && speed ? ` / ${speed}` : ''}${showLiveStats && remaining ? ` / ${remaining} left` : ''}${retryText}`;
   parent.appendChild(transferLine);
 }
 

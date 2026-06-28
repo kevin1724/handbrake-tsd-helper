@@ -110,6 +110,7 @@ from .node_linking import (
     create_pairing_code,
     delete_node,
     delete_trusted_controller,
+    enable_pair_recovery,
     get_node_private,
     heartbeat_allowed_age,
     hmac_headers,
@@ -121,6 +122,9 @@ from .node_linking import (
     node_has_running_work,
     pair_worker,
     public_node,
+    recover_pairing,
+    recover_worker_session,
+    renew_transfer_upload_grant,
     save_node,
     get_transfer,
     save_transfer,
@@ -3759,15 +3763,26 @@ def _node_summary_status(summary: dict) -> str:
     counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
     if int(counts.get("running") or 0) > 0:
         return "running"
+    if int(counts.get("waiting_to_upload") or 0) > 0:
+        return "waiting_upload"
     if int(counts.get("queued") or 0) > 0:
         return "queued"
     return "idle"
 
 
-def _refresh_linked_node(row: dict) -> dict:
+def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
     row = row.copy()
     try:
         data = signed_json_request(row, "/api/node/status", method="GET", timeout=12)
+        if not str(row.get("recovery_token") or "").strip():
+            try:
+                recovery = signed_json_request(row, "/api/node/pair/enable-recovery", method="POST", body={}, timeout=8)
+                if recovery.get("recovery_token"):
+                    row["recovery_token"] = str(recovery.get("recovery_token"))
+            except Exception:
+                # Older workers can continue with their durable session token;
+                # recovery is enabled automatically after both sides upgrade.
+                pass
         summary = data.get("summary") if isinstance(data.get("summary"), dict) else {}
         local_controller_id = str(local_node_overview().get("id") or "")
         paired_controllers = data.get("paired_controllers") if isinstance(data.get("paired_controllers"), list) else []
@@ -3790,6 +3805,7 @@ def _refresh_linked_node(row: dict) -> dict:
             "status": _node_summary_status(summary),
             "summary": summary,
             "last_error": "",
+            "next_heartbeat_at": time.time() + 30,
             "paired_controllers": paired_controllers,
             "jobs": data.get("jobs") if isinstance(data.get("jobs"), list) else [],
             "prediction_profile": data.get("prediction_profile") if isinstance(data.get("prediction_profile"), dict) else {},
@@ -3798,11 +3814,22 @@ def _refresh_linked_node(row: dict) -> dict:
         if reported_controller_url:
             row["controller_url"] = reported_controller_url
     except Exception as e:
+        error_text = str(e)
+        if allow_recovery and "unauthorized" in error_text.lower():
+            try:
+                controller_url = _controller_base_url(row.get("controller_url") or "", row.get("url") or "")
+                recovered = recover_worker_session(row, controller_url=controller_url)
+                log_event("node_reconnected", f"Recovered paired worker session: {recovered.get('name') or recovered.get('id')}", level="info")
+                return _refresh_linked_node(recovered, allow_recovery=False)
+            except Exception as recovery_error:
+                error_text = f"{error_text}; automatic recovery failed: {recovery_error}"
         now = time.time()
         misses = int(row.get("heartbeat_misses") or 0) + 1
         row["heartbeat_misses"] = misses
         row["last_failed_at"] = now
-        row["last_error"] = str(e)[:180]
+        row["last_error"] = error_text[:180]
+        retry_delay = min(5 * 60, 10 * (2 ** min(max(0, misses - 1), 5)))
+        row["next_heartbeat_at"] = now + retry_delay
         last_heartbeat = float(row.get("last_heartbeat") or 0.0)
         age = now - last_heartbeat if last_heartbeat else None
         still_in_grace = bool(last_heartbeat and age is not None and age <= heartbeat_allowed_age(row))
@@ -3818,9 +3845,12 @@ def _refresh_linked_node(row: dict) -> dict:
 
 def _node_heartbeat_loop() -> None:
     while not NODE_HEARTBEAT_STOP.is_set():
+        now = time.time()
         for row in list_nodes_private():
+            if float(row.get("next_heartbeat_at") or 0) > now:
+                continue
             _refresh_linked_node(row)
-        NODE_HEARTBEAT_STOP.wait(timeout=45)
+        NODE_HEARTBEAT_STOP.wait(timeout=10)
 
 
 def _start_node_heartbeat_thread() -> None:
@@ -3859,6 +3889,35 @@ def _authenticated_controller():
         return None
     update_trusted_controller(node_id, {"last_seen": time.time()})
     return controller
+
+
+def _authenticated_worker():
+    node_id = request.headers.get("X-Node-Id") or ""
+    timestamp = request.headers.get("X-Node-Timestamp") or ""
+    signature = request.headers.get("X-Node-Signature") or ""
+    worker = get_node_private(node_id)
+    if not worker:
+        return None
+    body_bytes = request.get_data(cache=True) or b""
+    if not verify_hmac(
+        request.method,
+        request.path,
+        body_bytes,
+        node_id=node_id,
+        token=str(worker.get("token") or ""),
+        timestamp=timestamp,
+        signature=signature,
+    ):
+        return None
+    worker.update({
+        "last_heartbeat": time.time(),
+        "heartbeat_misses": 0,
+        "online": True,
+        "status": worker.get("status") if worker.get("status") in {"running", "queued"} else "idle",
+        "last_error": "",
+    })
+    save_node(worker)
+    return worker
 
 
 def _request_scheme() -> str:
@@ -4700,6 +4759,29 @@ def register_routes(app):
         log_event("node_paired", "Controller paired with this worker.", level="info")
         return jsonify(ok=True, **accepted)
 
+    @app.route("/api/node/pair/recover", methods=["POST"])
+    def node_pair_recover_api():
+        data = request.get_json(force=True) or {}
+        if not str(data.get("controller_url") or "").strip():
+            data["controller_url"] = _infer_controller_url_from_pair_request()
+        try:
+            recovered = recover_pairing(data)
+        except ValueError as e:
+            return jsonify(error=str(e)), 401
+        log_event("node_reconnected", "Paired controller session recovered automatically.", level="info")
+        return jsonify(ok=True, **recovered)
+
+    @app.route("/api/node/pair/enable-recovery", methods=["POST"])
+    def node_pair_enable_recovery_api():
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        try:
+            recovery_token = enable_pair_recovery(str(controller.get("id") or ""))
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        return jsonify(ok=True, recovery_token=recovery_token)
+
     @app.route("/api/node/status")
     def node_status_api():
         controller = _authenticated_controller()
@@ -4789,6 +4871,26 @@ def register_routes(app):
                     os.rmdir(transfer_dir)
             except Exception:
                 pass
+
+    @app.route("/api/node/transfers/<transfer_id>/renew-upload", methods=["POST"])
+    def node_transfer_renew_upload_api(transfer_id):
+        worker = _authenticated_worker()
+        if not worker:
+            return jsonify(error="unauthorized worker"), 401
+        try:
+            grant = renew_transfer_upload_grant(transfer_id, str(worker.get("id") or ""))
+        except ValueError as e:
+            return jsonify(error=str(e)), 404
+        if grant.get("complete"):
+            return jsonify(ok=True, **grant)
+        controller_url = _controller_base_url(str(grant.get("controller_url") or ""), str(worker.get("url") or ""))
+        return jsonify(
+            ok=True,
+            complete=False,
+            upload_token=grant.get("upload_token"),
+            upload_url=f"{controller_url}/api/node/transfers/{transfer_id}/output" if controller_url else "",
+            expires_at=grant.get("expires_at"),
+        )
 
     @app.route("/api/node/jobs", methods=["POST"])
     def node_receive_jobs_api():
@@ -5069,6 +5171,7 @@ def register_routes(app):
                 save_transfer(transfer_row)
                 transfer_payload = {
                     "id": grant["id"],
+                    "controller_id": str(local_node_overview().get("id") or ""),
                     "controller_url": controller_url,
                     "source_url": f"{controller_url}/api/node/transfers/{grant['id']}/source",
                     "upload_url": f"{controller_url}/api/node/transfers/{grant['id']}/output",

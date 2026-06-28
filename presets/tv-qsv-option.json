@@ -1,0 +1,60 @@
+{
+  "PresetList": [
+    {
+      "PresetName": "tv qsv option",
+      "PresetDescription": "TV preset copied from the logged encode: H.265/HEVC 10-bit Intel QSV, balanced preset, 2318 kbps average bitrate, CFR, MKV, Plex-friendly audio/subtitle passthrough.",
+      "Type": 1,
+      "Default": false,
+      "FileFormat": "av_mkv",
+      "Optimize": false,
+      "ChapterMarkers": false,
+      "MetadataPassthru": true,
+      "AudioCopyMask": [
+        "copy:aac",
+        "copy:ac3",
+        "copy:eac3",
+        "copy:truehd",
+        "copy:dts",
+        "copy:dtshd",
+        "copy:mp2",
+        "copy:mp3",
+        "copy:flac"
+      ],
+      "AudioEncoderFallback": "av_aac",
+      "AudioTrackSelectionBehavior": "all",
+      "AudioLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "AudioList": [
+        {
+          "AudioEncoder": "copy"
+        }
+      ],
+      "VideoEncoder": "qsv_h265_10bit",
+      "VideoProfile": "main10",
+      "VideoLevel": "auto",
+      "VideoPreset": "balanced",
+      "VideoTune": "",
+      "VideoQualityType": 1,
+      "VideoMultiPass": false,
+      "VideoFramerateMode": "cfr",
+      "VideoFramerate": "auto",
+      "PictureWidth": 0,
+      "PictureHeight": 0,
+      "PictureKeepRatio": true,
+      "PictureAllowUpscaling": false,
+      "SubtitleTrackSelectionBehavior": "selected",
+      "SubtitleLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "VideoAvgBitrate": 2318,
+      "VideoTurboMultiPass": false,
+      "VideoPasshtruHDRDynamicMetadata": "all"
+    }
+  ],
+  "VersionMajor": 59,
+  "VersionMinor": 0,
+  "VersionMicro": 0
+}

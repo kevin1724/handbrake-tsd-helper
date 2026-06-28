@@ -1,0 +1,51 @@
+{
+  "PresetList": [
+    {
+      "PresetName": "Plex-HEVC-QSV-4K-ICQ28-Smaller-EAC3-Surround-ENG-SPA",
+      "PresetDescription": "Intel Quick Sync H.265/HEVC 10-bit preset for Plex with better compression. Uses QSV ICQ 28 and VFR for smaller video. Keeps ENG/SPA audio/subtitle language selection, but transcodes audio to E-AC3 5.1 at 640 kbps to preserve surround while avoiding huge TrueHD/DTS-HD/FLAC audio tracks.",
+      "Type": 1,
+      "Default": false,
+      "FileFormat": "av_mkv",
+      "Optimize": false,
+      "ChapterMarkers": true,
+      "MetadataPassthru": true,
+      "AudioCopyMask": [],
+      "AudioEncoderFallback": "eac3",
+      "AudioTrackSelectionBehavior": "all",
+      "AudioLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "AudioList": [
+        {
+          "AudioEncoder": "eac3",
+          "AudioBitrate": 640,
+          "AudioMixdown": "5point1",
+          "AudioSamplerate": "auto",
+          "AudioTrackQualityEnable": false
+        }
+      ],
+      "VideoEncoder": "qsv_h265_10bit",
+      "VideoProfile": "main10",
+      "VideoLevel": "auto",
+      "VideoPreset": "quality",
+      "VideoQualityType": 2,
+      "VideoQualitySlider": 28,
+      "VideoMultiPass": false,
+      "VideoFramerateMode": "vfr",
+      "VideoFramerate": "auto",
+      "PictureWidth": 0,
+      "PictureHeight": 0,
+      "PictureKeepRatio": true,
+      "PictureAllowUpscaling": false,
+      "SubtitleTrackSelectionBehavior": "selected",
+      "SubtitleLanguageList": [
+        "eng",
+        "spa"
+      ]
+    }
+  ],
+  "VersionMajor": 59,
+  "VersionMinor": 0,
+  "VersionMicro": 0
+}

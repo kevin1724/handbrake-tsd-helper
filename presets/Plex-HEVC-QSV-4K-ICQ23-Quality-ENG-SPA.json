@@ -1,8 +1,8 @@
 {
   "PresetList": [
     {
-      "PresetName": "Plex-x265-4K-Source-Dimensions-CFR-RF24-ENG-SPA",
-      "PresetDescription": "H.265 (x265) 10-bit 4K preset, VERY SLOW for best compression, keeps source resolution, CFR \u2014 Plex-friendly",
+      "PresetName": "Plex-HEVC-QSV-4K-ICQ23-Quality-ENG-SPA",
+      "PresetDescription": "Intel Quick Sync H.265/HEVC 10-bit preset for Plex. Uses QSV Quality preset with ICQ 23 for small file sizes while keeping good quality. Keeps original resolution, CFR, metadata, chapters, and ENG/SPA audio/subtitles.",
       "Type": 1,
       "Default": false,
       "FileFormat": "av_mkv",
@@ -31,28 +31,24 @@
           "AudioEncoder": "copy"
         }
       ],
-      "VideoEncoder": "x265_10bit",
+      "VideoEncoder": "qsv_h265_10bit",
       "VideoProfile": "main10",
       "VideoLevel": "auto",
-      "VideoPreset": "veryslow",
+      "VideoPreset": "quality",
       "VideoQualityType": 2,
-      "VideoQualitySlider": 24,
+      "VideoQualitySlider": 23,
+      "VideoMultiPass": false,
       "VideoFramerateMode": "cfr",
       "VideoFramerate": "auto",
-      "VideoGrayScale": false,
       "PictureWidth": 0,
       "PictureHeight": 0,
       "PictureKeepRatio": true,
-      "PictureUseMaximumSize": false,
       "PictureAllowUpscaling": false,
       "SubtitleTrackSelectionBehavior": "selected",
       "SubtitleLanguageList": [
         "eng",
         "spa"
-      ],
-      "SubtitleAddCC": false,
-      "SubtitleAddForeignAudioSearch": false,
-      "PresetDisabled": false
+      ]
     }
   ],
   "VersionMajor": 59,
