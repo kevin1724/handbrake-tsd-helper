@@ -101,6 +101,7 @@ from .cpu_profiles import (
     list_cpu_profiles,
     get_cpu_profile,
 )
+from .wizard_llm import run_wizard_llm, wizard_llm_status
 
 from .events import load_events, clear_events, log_event
 from .storage_stats import get_summary as get_storage_summary, list_encodes as list_storage_encodes, clear_stats as clear_storage_stats, record_encode
@@ -2150,6 +2151,8 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
 def _wizard_ai_chat_updates(question: str) -> dict:
     """Translate a narrow conversational request into validated wizard options."""
     text = " ".join(str(question or "").lower().split())
+    if re.match(r"^(why|how|what|when|where|will|would|does|do|is|are|can you explain)\b", text):
+        return {}
     change_words = ("use ", "switch ", "change ", "set ", "make ", "keep ", "preserve ", "prioritize ", "prefer ")
     if not text or not any(word in text for word in change_words):
         return {}
@@ -2203,6 +2206,43 @@ def _wizard_ai_chat_updates(question: str) -> dict:
         updates["ai_subtitle_scope"] = "none"
 
     return updates if len(updates) > 1 else {}
+
+
+def _wizard_ai_sanitize_model_updates(value) -> dict:
+    """Keep local-model proposals inside the wizard's supported option surface."""
+    value = value if isinstance(value, dict) else {}
+    choices = {
+        "ai_goal": WIZARD_AI_GOALS,
+        "ai_hardware": WIZARD_AI_HARDWARE,
+        "ai_codec_preference": WIZARD_AI_CODEC_PREFS,
+        "ai_risk": WIZARD_AI_RISK_LEVELS,
+        "resolution_mode": WIZARD_RESOLUTION_MODES,
+        "target_size_unit": {"MB", "GB"},
+        "ai_audio_scope": WIZARD_AI_TRACK_SCOPES,
+        "ai_subtitle_scope": WIZARD_AI_SUBTITLE_SCOPES,
+    }
+    clean: dict = {}
+    for key, valid in choices.items():
+        raw = str(value.get(key) or "").strip()
+        normalized = raw.upper() if key == "target_size_unit" else raw.lower()
+        if normalized in valid:
+            clean[key] = normalized
+
+    for key in ("target_size_auto", "ai_copy_audio"):
+        if key in value and isinstance(value[key], bool):
+            clean[key] = value[key]
+    if "target_size_value" in value:
+        try:
+            size = float(value["target_size_value"])
+            if 0.05 <= size <= 200000:
+                clean["target_size_value"] = size
+                clean.setdefault("target_size_auto", False)
+        except (TypeError, ValueError):
+            pass
+
+    if clean:
+        clean["ai_mode"] = True
+    return clean
 
 
 def _wizard_ai_chat_answer(plan: dict, question: str, changed: bool = False) -> dict:
@@ -6027,23 +6067,45 @@ def register_routes(app):
         if not question:
             return jsonify(error="Ask the wizard AI a question first."), 400
 
-        updates = _wizard_ai_chat_updates(question)
-        candidate = {**data, **updates}
         try:
-            plan = _wizard_plan(candidate, probe_func=_probe_media, preview=False)
+            initial_plan = _wizard_plan(data, probe_func=_probe_media, preview=False)
         except ValueError as e:
             return jsonify(error=str(e)), 400
         except Exception as e:
             return jsonify(error=str(e)), 500
 
+        model_result = run_wizard_llm(question, initial_plan)
+        rule_updates = _wizard_ai_chat_updates(question)
+        model_updates = _wizard_ai_sanitize_model_updates(model_result.get("updates")) if model_result.get("ok") and rule_updates else {}
+        updates = {**model_updates, **rule_updates}
+        plan = initial_plan
+        if updates:
+            try:
+                plan = _wizard_plan({**data, **updates}, probe_func=_probe_media, preview=False)
+            except Exception:
+                updates = rule_updates
+                plan = _wizard_plan({**data, **updates}, probe_func=_probe_media, preview=False) if updates else initial_plan
+
         reply = _wizard_ai_chat_answer(plan, question, changed=bool(updates))
+        if model_result.get("ok"):
+            model_answer = str(model_result.get("answer") or "").strip()
+            if updates:
+                model_answer += " " + reply["answer"].split(".", 1)[0] + "."
+            reply["answer"] = model_answer
         return jsonify(
             ok=True,
             option_updates=updates,
             inputs=plan["inputs"],
             estimates=plan["estimates"],
+            model_used=bool(model_result.get("ok")),
+            model_status=model_result.get("status") or wizard_llm_status(),
+            model_fallback_reason="" if model_result.get("ok") else str(model_result.get("error") or "model unavailable"),
             **reply,
         )
+
+    @app.route("/wizard_ai_status")
+    def wizard_ai_status_api():
+        return jsonify(wizard_llm_status())
 
 
 

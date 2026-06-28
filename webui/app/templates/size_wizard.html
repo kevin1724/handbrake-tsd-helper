@@ -1463,7 +1463,7 @@
               <strong id="aiAssistantHeading">Plan Assistant</strong>
               <span>Grounded in this file, your hardware, and encode history</span>
             </div>
-            <span class="ai-model-chip">Plan aware</span>
+            <span id="aiModelChip" class="ai-model-chip" title="The local model loads only while answering">Checking model</span>
           </div>
           <div id="aiChatLog" class="ai-chat-log" aria-live="polite">
             <div class="ai-chat-message assistant">Select a file and I will explain the plan, compare tradeoffs, or safely change wizard settings.</div>
@@ -2587,6 +2587,27 @@
       );
     }
 
+    function setAiModelState(status = {}, used = null) {
+      const chip = el("aiModelChip");
+      if (!chip) return;
+      if (used === true) chip.textContent = "Local 0.5B used";
+      else if (status.ready) chip.textContent = "Local 0.5B ready";
+      else chip.textContent = "Planner fallback";
+      chip.title = status.ready
+        ? "Qwen2.5 0.5B loads into memory only while answering, then exits."
+        : "The local model is unavailable; the validated planner explanation is still active.";
+    }
+
+    async function loadAiModelStatus() {
+      try {
+        const res = await fetchWithTimeout("/wizard_ai_status", {}, 5000);
+        const data = await readJson(res);
+        setAiModelState(res.ok ? data : {}, null);
+      } catch (e) {
+        setAiModelState({}, null);
+      }
+    }
+
     async function askWizardAi(questionOverride = "") {
       const input = el("aiChatInput");
       const question = String(questionOverride || input?.value || "").trim();
@@ -2600,6 +2621,7 @@
       aiChatBusy = true;
       aiChatHasConversation = true;
       el("aiChatSend").disabled = true;
+      el("aiModelChip").textContent = "Model thinking";
       if (input) input.value = "";
       appendAiChatMessage("user", question);
       appendAiChatMessage("assistant", "Re-evaluating the current plan...");
@@ -2613,6 +2635,7 @@
         }, 25000);
         const data = await readJson(res);
         if (!res.ok) throw new Error(data.error || "AI assistant failed");
+        setAiModelState(data.model_status || {}, data.model_used === true);
         if (pending) pending.remove();
         appendAiChatMessage("assistant", data.answer || "I updated the plan.");
         renderAiChatPrompts(data.suggestions || []);
@@ -2621,6 +2644,7 @@
           applyWizardOptions({ ...recipeOptions(payload), ...updates });
         }
       } catch (e) {
+        setAiModelState({}, false);
         if (pending) pending.remove();
         appendAiChatMessage("assistant", e.message || "I could not evaluate that request.");
       } finally {
@@ -3158,6 +3182,7 @@
       updateControlStates();
       updateSimpleUi();
       loadWizardPresets();
+      loadAiModelStatus();
       schedulePreview();
     }
 
