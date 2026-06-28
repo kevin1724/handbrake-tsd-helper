@@ -1692,12 +1692,12 @@ body.beta-page .beta-poster {
 }
 
 body.beta-page .beta-show-card {
-  grid-template-columns: 118px minmax(0, 1fr);
+  grid-template-columns: 104px minmax(0, 1fr);
 }
 
 body.beta-page .beta-show-card .beta-poster {
-  width: 98px;
-  height: 148px;
+  width: 84px;
+  height: 132px;
 }
 
 body.beta-page .beta-card-body {

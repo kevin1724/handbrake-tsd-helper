@@ -1039,7 +1039,14 @@ function refreshJobs() {
           else if (status === 'error') statusClass = 'badge-status-error';
           else if (status === 'running') statusClass = 'badge-status-running';
           else if (status === 'canceled') statusClass = 'badge-status-canceled';
-          tdStatus.appendChild(createBadge(job.status || '', statusClass));
+          const statusLabel = job.auto_stop_triggered ? 'auto stopped' : (job.status || '');
+          tdStatus.appendChild(createBadge(statusLabel, statusClass));
+          if (job.auto_stop_triggered && job.auto_stop_details) {
+            const stopNote = document.createElement('div');
+            stopNote.className = 'small';
+            stopNote.textContent = `${Number(job.auto_stop_details.ratio_percent || 0).toFixed(1)}% projected / ${Number(job.auto_stop_details.threshold_percent || 0).toFixed(1)}% limit`;
+            tdStatus.appendChild(stopNote);
+          }
           tr.appendChild(tdStatus);
 
           const tdRc = document.createElement('td');

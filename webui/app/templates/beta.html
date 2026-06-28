@@ -231,14 +231,14 @@
 
     .beta-show-card {
       display: grid;
-      grid-template-columns: 92px minmax(0, 1fr);
-      min-height: 138px;
+      grid-template-columns: 104px minmax(0, 1fr);
+      min-height: 156px;
       align-items: start;
     }
 
     .beta-show-card .beta-poster {
-      height: 138px;
-      min-height: 138px;
+      height: 156px;
+      min-height: 156px;
       aspect-ratio: auto;
     }
 
@@ -249,15 +249,78 @@
     .beta-show-top {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
+      gap: 12px;
+      align-items: center;
+    }
+
+    .show-identity {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
       gap: 10px;
       align-items: start;
     }
 
+    .show-select-checkbox,
+    .season-select input,
+    .episode-select input {
+      width: 18px;
+      height: 18px;
+      margin: 1px 0 0;
+      accent-color: #16c7d6;
+    }
+
     .beta-show-controls {
       display: flex;
-      flex-wrap: wrap;
       gap: 6px;
       justify-content: flex-end;
+    }
+
+    .show-summary-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 7px;
+      margin-top: 10px;
+    }
+
+    .show-summary-item {
+      min-width: 0;
+      padding: 7px 8px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 6px;
+      background: rgba(0,0,0,0.14);
+    }
+
+    .show-summary-item span,
+    .show-summary-item strong {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+
+    .show-summary-item span {
+      color: rgba(229,229,229,0.58);
+      font-size: 10px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .show-summary-item strong {
+      margin-top: 2px;
+      color: #fff;
+      font-size: 12px;
+    }
+
+    .show-action-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 7px;
+      margin-top: 10px;
+      padding-top: 9px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+    }
+
+    .show-action-bar .show-browse-button {
+      flex: 1 1 180px;
+      text-align: left;
     }
 
     .beta-track-button {
@@ -278,11 +341,25 @@
 
     .show-detail-panel {
       grid-column: 1 / -1;
-      margin-top: 10px;
-      padding-top: 10px;
+      margin-top: 12px;
+      padding: 12px;
       border-top: 1px solid rgba(255,255,255,0.08);
+      border-radius: 7px;
+      background: rgba(0,0,0,0.14);
       display: grid;
       gap: 8px;
+    }
+
+    .show-detail-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 2px;
+    }
+
+    .show-detail-header strong {
+      color: #fff;
     }
 
     .season-row {
@@ -293,7 +370,29 @@
       padding: 8px;
       border: 1px solid rgba(255,255,255,0.08);
       border-radius: 8px;
-      background: rgba(0,0,0,0.16);
+      background: rgba(255,255,255,0.025);
+    }
+
+    .season-row.is-open {
+      border-color: rgba(22,199,214,0.34);
+      background: rgba(22,199,214,0.045);
+    }
+
+    .season-toggle {
+      display: inline-flex;
+      align-items: center;
+      gap: 7px;
+      padding: 0;
+      border: 0;
+      background: transparent;
+      color: #fff;
+      font-weight: 750;
+      text-align: left;
+    }
+
+    .season-toggle:hover {
+      background: transparent;
+      color: #67e8f9;
     }
 
     .season-poster {
@@ -353,12 +452,18 @@
 
     .episode-row {
       display: grid;
-      grid-template-columns: auto minmax(0, 1fr) auto;
+      grid-template-columns: auto 72px minmax(0, 1fr) auto;
       gap: 8px;
       align-items: center;
       padding: 7px 8px;
       border-radius: 6px;
       background: rgba(255,255,255,0.045);
+    }
+
+    .episode-code {
+      color: #a5f3fc;
+      font-size: 12px;
+      font-weight: 800;
     }
 
     .episode-title {
@@ -417,6 +522,10 @@
         grid-template-columns: 46px minmax(0, 1fr);
       }
 
+      .show-summary-grid {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+      }
+
       .season-actions {
         grid-column: 1 / -1;
         justify-content: flex-start;
@@ -427,7 +536,7 @@
       }
 
       .episode-row {
-        grid-template-columns: auto minmax(0, 1fr);
+        grid-template-columns: auto 64px minmax(0, 1fr);
       }
 
       .episode-actions {
@@ -1264,20 +1373,26 @@
       select.className = "beta-select-line episode-select";
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
+      checkbox.setAttribute("aria-label", `Select ${episodeLabel(ep)}`);
       checkbox.checked = pathsAreSelected([ep.path]);
       checkbox.addEventListener("change", () => setPathsSelected([ep.path], checkbox.checked));
       select.appendChild(checkbox);
-      select.appendChild(document.createTextNode(episodeLabel(ep)));
       row.appendChild(select);
+
+      const code = document.createElement("div");
+      code.className = "episode-code";
+      code.textContent = episodeLabel(ep);
+      row.appendChild(code);
 
       const main = document.createElement("div");
       const title = document.createElement("div");
       title.className = "episode-title";
-      title.textContent = ep.filename || `${show.title} ${episodeLabel(ep)}`;
+      title.textContent = ep.title || ep.filename || `${show.title} ${episodeLabel(ep)}`;
       main.appendChild(title);
       const meta = document.createElement("div");
       meta.className = "episode-meta";
-      meta.textContent = `${fmtBytes(ep.size_bytes)} source / ${ep.is_hdr ? "HDR" : "SDR"} / ${predictionText(ep.prediction)}`;
+      const predicted = ep.prediction?.available ? `${fmtBytes(ep.prediction.estimated_out_bytes)} predicted` : "Prediction learning";
+      meta.textContent = `${fmtBytes(ep.size_bytes)} source / ${ep.is_hdr ? "HDR" : "SDR"} / ${predicted}`;
       main.appendChild(meta);
       row.appendChild(main);
 
@@ -1285,12 +1400,12 @@
       actions.className = "episode-actions";
       const wizard = document.createElement("button");
       wizard.type = "button";
-      wizard.textContent = "Wizard";
+      wizard.textContent = "Open Wizard";
       wizard.onclick = () => openInWizard(ep.path);
       actions.appendChild(wizard);
       const queue = document.createElement("button");
       queue.type = "button";
-      queue.textContent = "Queue";
+      queue.textContent = "Queue Episode";
       queue.onclick = () => queuePaths([ep.path], ep.filename || "episode");
       actions.appendChild(queue);
       row.appendChild(actions);
@@ -1304,18 +1419,27 @@
       const expanded = expandedSeasons.has(key);
       const row = document.createElement("div");
       row.className = "season-row";
+      if (expanded) row.classList.add("is-open");
 
       row.appendChild(makeSeasonPoster(seasonPoster(item, group.season), label, item.title));
 
       const summary = document.createElement("div");
-      const title = document.createElement("div");
-      title.className = "season-title";
-      title.textContent = label;
+      const title = document.createElement("button");
+      title.type = "button";
+      title.className = "season-toggle";
+      title.setAttribute("aria-expanded", expanded ? "true" : "false");
+      title.textContent = `${expanded ? "▾" : "›"} ${label}`;
+      title.onclick = () => {
+        if (expanded) expandedSeasons.delete(key);
+        else expandedSeasons.add(key);
+        renderLibrary();
+      };
       summary.appendChild(title);
       const meta = document.createElement("div");
       meta.className = "season-meta";
       const hdrCount = group.episodes.filter((ep) => ep.is_hdr).length;
-      meta.textContent = `${group.episodes.length} episode${group.episodes.length === 1 ? "" : "s"} / ${fmtBytes(group.totalBytes)} / ${hdrCount ? `${hdrCount} HDR` : "SDR"}`;
+      const predictedSaved = group.episodes.reduce((sum, ep) => sum + predictedSavedBytes(ep), 0);
+      meta.textContent = `${group.episodes.length} episode${group.episodes.length === 1 ? "" : "s"} / ${fmtBytes(group.totalBytes)}${predictedSaved ? ` / ${fmtBytes(predictedSaved)} predicted saved` : ""}${hdrCount ? ` / ${hdrCount} HDR` : ""}`;
       summary.appendChild(meta);
       row.appendChild(summary);
 
@@ -1325,21 +1449,12 @@
       select.className = "beta-select-line season-select";
       const checkbox = document.createElement("input");
       checkbox.type = "checkbox";
+      checkbox.setAttribute("aria-label", `Select all episodes in ${label}`);
       checkbox.checked = pathsAreSelected(group.paths);
       checkbox.addEventListener("change", () => setPathsSelected(group.paths, checkbox.checked));
       select.appendChild(checkbox);
-      select.appendChild(document.createTextNode("Select"));
+      select.appendChild(document.createTextNode("Select season"));
       actions.appendChild(select);
-
-      const open = document.createElement("button");
-      open.type = "button";
-      open.textContent = expanded ? "Hide" : "Episodes";
-      open.onclick = () => {
-        if (expanded) expandedSeasons.delete(key);
-        else expandedSeasons.add(key);
-        renderLibrary();
-      };
-      actions.appendChild(open);
 
       const queue = document.createElement("button");
       queue.type = "button";
@@ -1358,6 +1473,18 @@
       return row;
     }
 
+    function addShowSummaryItem(parent, label, value) {
+      const item = document.createElement("div");
+      item.className = "show-summary-item";
+      const name = document.createElement("span");
+      name.textContent = label;
+      const strong = document.createElement("strong");
+      strong.textContent = value;
+      item.appendChild(name);
+      item.appendChild(strong);
+      parent.appendChild(item);
+    }
+
     function makeShowCard(item) {
       const key = showKey(item);
       const expanded = expandedShows.has(key);
@@ -1372,8 +1499,20 @@
 
       const top = document.createElement("div");
       top.className = "beta-show-top";
+      const identity = document.createElement("div");
+      identity.className = "show-identity";
+      const showSelect = document.createElement("input");
+      showSelect.type = "checkbox";
+      showSelect.className = "show-select-checkbox";
+      showSelect.checked = itemIsSelected(item);
+      showSelect.setAttribute("aria-label", `Select every episode of ${item.title}`);
+      showSelect.addEventListener("change", () => {
+        setItemSelected(item, showSelect.checked);
+        renderLibrary();
+      });
+      identity.appendChild(showSelect);
+
       const titleWrap = document.createElement("div");
-      addSelectLine(titleWrap, item, "Select show");
       const title = document.createElement("div");
       title.className = "beta-card-title";
       title.textContent = `${item.title}${item.year ? ` (${item.year})` : ""}`;
@@ -1385,36 +1524,28 @@
         mediaBadge(sourceCodec(item)),
         mediaBadge(`${targetCodec()} target`)
       ]);
-      top.appendChild(titleWrap);
+      identity.appendChild(titleWrap);
+      top.appendChild(identity);
 
       const controls = document.createElement("div");
       controls.className = "beta-show-controls";
       const track = document.createElement("button");
       track.type = "button";
       track.className = `beta-track-button${item.tracked ? " is-tracked" : ""}`;
-      track.textContent = item.tracked ? "Tracking" : "Track";
+      track.textContent = item.tracked ? "Tracked" : "Track new episodes";
       track.onclick = () => setShowTracking(item, !item.tracked, track);
       controls.appendChild(track);
-
-      const details = document.createElement("button");
-      details.type = "button";
-      details.textContent = expanded ? "Hide" : "Details";
-      details.onclick = () => {
-        if (expanded) expandedShows.delete(key);
-        else expandedShows.add(key);
-        renderLibrary();
-      };
-      controls.appendChild(details);
       top.appendChild(controls);
       body.appendChild(top);
 
       const seasonText = item.season_count === 1 ? "1 season" : `${item.season_count || 0} seasons`;
-      const meta = document.createElement("div");
-      meta.className = "beta-card-meta";
-      appendMetaLine(meta, `${item.episode_count || 0} episodes / ${seasonText}`);
-      appendMetaLine(meta, `${fmtBytes(item.total_size_bytes)} source total`);
-      appendMetaLine(meta, `Episode target: ${item.target?.target_size_value || 800}${item.target?.target_size_unit || "MB"}`);
-      body.appendChild(meta);
+      const summary = document.createElement("div");
+      summary.className = "show-summary-grid";
+      addShowSummaryItem(summary, "Episodes", String(item.episode_count || 0));
+      addShowSummaryItem(summary, "Seasons", String(item.season_count || 0));
+      addShowSummaryItem(summary, "Source", fmtBytes(item.total_size_bytes));
+      addShowSummaryItem(summary, "Predicted saved", predictedSavedBytes(item) ? fmtBytes(predictedSavedBytes(item)) : "Learning");
+      body.appendChild(summary);
       body.appendChild(makeSavingsBar(item));
 
       if (item.tracked) {
@@ -1423,20 +1554,33 @@
         const newCount = Number(item.tracking?.new_episode_count || 0);
         note.textContent = newCount > 0
           ? `${newCount} new episode${newCount === 1 ? "" : "s"} detected for queueing.`
-          : "Tracking new episodes.";
+          : "New episodes will be detected and queued according to your auto-scan settings.";
         body.appendChild(note);
       }
 
-      const first = showEpisodes(item)[0] || null;
       const actions = document.createElement("div");
-      actions.className = "beta-card-actions";
-      if (first) {
-        const wizard = document.createElement("button");
-        wizard.type = "button";
-        wizard.textContent = "First Episode";
-        wizard.onclick = () => openInWizard(first.path);
-        actions.appendChild(wizard);
-      }
+      actions.className = "show-action-bar";
+      const details = document.createElement("button");
+      details.type = "button";
+      details.className = "show-browse-button";
+      details.setAttribute("aria-expanded", expanded ? "true" : "false");
+      details.textContent = expanded ? `Hide season library (${seasonText})` : `Browse season library (${seasonText})`;
+      details.onclick = () => {
+        if (expanded) expandedShows.delete(key);
+        else expandedShows.add(key);
+        renderLibrary();
+      };
+      actions.appendChild(details);
+
+      const selectAll = document.createElement("button");
+      selectAll.type = "button";
+      selectAll.textContent = itemIsSelected(item) ? "Clear selection" : "Select all episodes";
+      selectAll.onclick = () => {
+        setItemSelected(item, !itemIsSelected(item));
+        renderLibrary();
+      };
+      actions.appendChild(selectAll);
+
       const queue = document.createElement("button");
       queue.type = "button";
       queue.textContent = "Queue Show";
@@ -1448,6 +1592,16 @@
         const panel = document.createElement("div");
         panel.className = "show-detail-panel";
         const groups = seasonGroups(item);
+        const panelHeader = document.createElement("div");
+        panelHeader.className = "show-detail-header";
+        const panelTitle = document.createElement("strong");
+        panelTitle.textContent = "Season library";
+        const panelMeta = document.createElement("span");
+        panelMeta.className = "small";
+        panelMeta.textContent = `${groups.length} season${groups.length === 1 ? "" : "s"} / ${item.episode_count || 0} episodes`;
+        panelHeader.appendChild(panelTitle);
+        panelHeader.appendChild(panelMeta);
+        panel.appendChild(panelHeader);
         if (groups.length) {
           groups.forEach((group) => panel.appendChild(makeSeasonRow(item, group)));
         } else {

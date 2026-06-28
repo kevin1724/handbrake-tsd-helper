@@ -28,6 +28,11 @@ DEFAULT_SETTINGS = {
     "cpu_speed_override": 1.0,       # multiplier (1.0 = no adjustment)
     "qsv_device_available": False,   # True only when /dev/dri is mounted into the container.
 
+    # Stop a running encode when checkpoint-based projected output size is at
+    # or above this percentage of the original source. Disabled by default.
+    "auto_stop_large_output_enabled": False,
+    "auto_stop_large_output_percent": 90,
+
     # Queue UI behavior on the Jobs page
     # buttons = classic button controls
     # drag_drop = grab rows and reorder visually
@@ -208,6 +213,23 @@ def save_settings(new_values: dict) -> dict:
     base["qsv_device_available"] = bool(
         new_values.get("qsv_device_available", base.get("qsv_device_available", False))
     )
+
+    base["auto_stop_large_output_enabled"] = bool(
+        new_values.get(
+            "auto_stop_large_output_enabled",
+            base.get("auto_stop_large_output_enabled", False),
+        )
+    )
+    try:
+        stop_percent = float(
+            new_values.get(
+                "auto_stop_large_output_percent",
+                base.get("auto_stop_large_output_percent", 90),
+            )
+        )
+    except (TypeError, ValueError):
+        stop_percent = 90.0
+    base["auto_stop_large_output_percent"] = round(max(1.0, min(500.0, stop_percent)), 1)
 
     # ------------------------------------------------------------------
     # Queue UI mode

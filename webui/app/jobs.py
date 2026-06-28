@@ -432,6 +432,38 @@ def _maybe_update_output_estimate(job: dict, out_path: str, progress: float) -> 
     return True
 
 
+def _estimated_output_stop_guard(job: dict) -> dict | None:
+    """Return stop details when a reliable checkpoint crosses the configured limit."""
+    if job.get("auto_stop_triggered"):
+        return None
+    try:
+        settings = load_settings()
+    except Exception:
+        return None
+    if not settings.get("auto_stop_large_output_enabled", False):
+        return None
+    try:
+        checked_progress = float(job.get("estimated_out_checked_progress") or 0.0)
+        estimated = int(job.get("estimated_out_bytes") or 0)
+        source = int(job.get("src_bytes") or 0)
+        threshold = float(settings.get("auto_stop_large_output_percent") or 90.0)
+    except (TypeError, ValueError):
+        return None
+    # The 2% checkpoint is useful for display, but too noisy for termination.
+    if checked_progress < 10.0 or estimated <= 0 or source <= 0:
+        return None
+    ratio = estimated / float(source) * 100.0
+    if ratio < threshold:
+        return None
+    return {
+        "ratio_percent": round(ratio, 1),
+        "threshold_percent": round(threshold, 1),
+        "estimated_bytes": estimated,
+        "source_bytes": source,
+        "checked_progress": round(checked_progress, 1),
+    }
+
+
 def _download_transfer_source(url: str, token: str, worker_node_id: str, destination: str, expected_size: int = 0, progress_callback=None) -> int:
     if not url or not token:
         raise RuntimeError("transfer download is missing URL or token")
@@ -808,6 +840,9 @@ def save_jobs():
                 "estimated_out_checked_progress": j.get("estimated_out_checked_progress"),
                 "estimated_out_updated_at": j.get("estimated_out_updated_at"),
                 "estimate_checkpoints_seen": j.get("estimate_checkpoints_seen") if isinstance(j.get("estimate_checkpoints_seen"), list) else [],
+                "auto_stop_triggered": bool(j.get("auto_stop_triggered", False)),
+                "auto_stop_details": j.get("auto_stop_details") if isinstance(j.get("auto_stop_details"), dict) else None,
+                "cancel_reason": j.get("cancel_reason") or "",
                 # Storage tracking
                 "src_bytes": j.get("src_bytes"),
                 "out_bytes": j.get("out_bytes"),
@@ -905,6 +940,9 @@ def load_jobs():
                 "estimated_out_checked_progress": j.get("estimated_out_checked_progress"),
                 "estimated_out_updated_at": j.get("estimated_out_updated_at"),
                 "estimate_checkpoints_seen": j.get("estimate_checkpoints_seen") if isinstance(j.get("estimate_checkpoints_seen"), list) else [],
+                "auto_stop_triggered": bool(j.get("auto_stop_triggered", False)),
+                "auto_stop_details": j.get("auto_stop_details") if isinstance(j.get("auto_stop_details"), dict) else None,
+                "cancel_reason": j.get("cancel_reason") or "",
                 # Storage tracking
                 "src_bytes": j.get("src_bytes"),
                 "out_bytes": j.get("out_bytes"),
@@ -1259,6 +1297,9 @@ def list_jobs_for_api() -> list[dict]:
                 "estimated_out_current_bytes": j.get("estimated_out_current_bytes"),
                 "estimated_out_checked_progress": j.get("estimated_out_checked_progress"),
                 "estimated_out_updated_at": j.get("estimated_out_updated_at"),
+                "auto_stop_triggered": bool(j.get("auto_stop_triggered", False)),
+                "auto_stop_details": j.get("auto_stop_details") if isinstance(j.get("auto_stop_details"), dict) else None,
+                "cancel_reason": j.get("cancel_reason") or "",
                 # Storage tracking
                 "src_bytes": j.get("src_bytes"),
                 "out_bytes": j.get("out_bytes"),
@@ -1492,6 +1533,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
         env=env,
         text=True,
         bufsize=1,
+        start_new_session=True,
     )
 
     job["pid"] = proc.pid
@@ -1523,6 +1565,34 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                     pass
                 else:
                     if _maybe_update_output_estimate(job, out_path, job["progress"]):
+                        stop_details = _estimated_output_stop_guard(job)
+                        if stop_details:
+                            job["auto_stop_triggered"] = True
+                            job["auto_stop_details"] = stop_details
+                            job["cancel_reason"] = "estimated_output_limit"
+                            job["status"] = "canceled"
+                            job["eta_seconds"] = None
+                            log_event(
+                                "job_auto_stopped",
+                                (
+                                    f"Stopped {os.path.basename(display_src_path)}: projected output "
+                                    f"{stop_details['ratio_percent']}% of original reached the "
+                                    f"{stop_details['threshold_percent']}% limit."
+                                ),
+                                level="warn",
+                                job_id=job_id,
+                                src=display_src_path,
+                                extra=stop_details,
+                            )
+                            try:
+                                os.killpg(proc.pid, signal.SIGTERM)
+                            except ProcessLookupError:
+                                pass
+                            except Exception:
+                                try:
+                                    os.kill(proc.pid, signal.SIGTERM)
+                                except ProcessLookupError:
+                                    pass
                         save_jobs()
 
             # Parse ETA from this line, if present
@@ -1978,9 +2048,14 @@ def cancel_job(job_id: str) -> tuple[bool, str | None]:
     pid = job.get("pid")
     if pid:
         try:
-            os.kill(pid, signal.SIGTERM)
+            os.killpg(pid, signal.SIGTERM)
         except ProcessLookupError:
             pass
+        except Exception:
+            try:
+                os.kill(pid, signal.SIGTERM)
+            except ProcessLookupError:
+                pass
 
     job["status"] = "canceled"
     job["returncode"] = None

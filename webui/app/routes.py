@@ -1416,22 +1416,33 @@ def _wizard_ai_choices(
             out["encoder_speed"] = "medium"
             warnings.append("Bold AI chose AV1 for small-file exploration. It may be slow, but it can win on difficult size targets.")
 
-    resolution_mode, resolution_notes, resolution_warnings = _wizard_ai_resolution_mode(
-        goal=goal,
-        src_w=src_w,
-        src_h=src_h,
-        bpp_source=bpp_source,
-        cpu_score=cpu_score,
-        source_kind=source_kind,
-    )
-    out["resolution_mode"] = resolution_mode
-    decisions.extend(resolution_notes)
-    warnings.extend(resolution_warnings)
+    requested_resolution = str(out.get("resolution_mode") or "auto")
+    resolution_locked = requested_resolution != "auto"
+    if resolution_locked:
+        out["resolution_mode"] = requested_resolution
+        if requested_resolution == "keep":
+            decisions.append("Kept the source resolution because the user locked resolution; AI will not downscale it.")
+            if is_4k and bpp_source < 0.045:
+                warnings.append("Keeping 4K is locked, but the target bitrate is tight. Increase the target size if the preview looks soft or blocky.")
+        else:
+            decisions.append(f"Honored the user-selected {requested_resolution}p resolution cap.")
+    else:
+        resolution_mode, resolution_notes, resolution_warnings = _wizard_ai_resolution_mode(
+            goal=goal,
+            src_w=src_w,
+            src_h=src_h,
+            bpp_source=bpp_source,
+            cpu_score=cpu_score,
+            source_kind=source_kind,
+        )
+        out["resolution_mode"] = resolution_mode
+        decisions.extend(resolution_notes)
+        warnings.extend(resolution_warnings)
 
-    if risk_score >= 2 and goal in {"small", "balanced"} and is_4k and target_ratio < 0.48 and out["resolution_mode"] in {"auto", "keep"}:
+    if not resolution_locked and risk_score >= 2 and goal in {"small", "balanced"} and is_4k and target_ratio < 0.48 and out["resolution_mode"] in {"auto", "keep"}:
         out["resolution_mode"] = "1440" if target_ratio >= 0.26 and risk_score < 3 else "1080"
         warnings.append(f"Explorer AI capped 4K at {out['resolution_mode']}p to spend bitrate on cleaner pixels instead of sheer resolution.")
-    elif risk_score >= 3 and source_kind == "show" and src_h >= 900 and target_mb <= 700 and out["resolution_mode"] in {"auto", "keep"}:
+    elif not resolution_locked and risk_score >= 3 and source_kind == "show" and src_h >= 900 and target_mb <= 700 and out["resolution_mode"] in {"auto", "keep"}:
         out["resolution_mode"] = "720"
         warnings.append("Bold AI capped this episode at 720p because the target is very small.")
 
@@ -1530,6 +1541,7 @@ def _wizard_ai_choices(
         "risk": risk,
         "hdr": bool(is_hdr),
         "resolution_mode": out["resolution_mode"],
+        "resolution_locked": resolution_locked,
     }
     return out, {
         "summary": summary,
@@ -2132,6 +2144,127 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
             "decision_note": note,
             "output_resolution": {"width": out_w, "height": out_h},
         },
+    }
+
+
+def _wizard_ai_chat_updates(question: str) -> dict:
+    """Translate a narrow conversational request into validated wizard options."""
+    text = " ".join(str(question or "").lower().split())
+    change_words = ("use ", "switch ", "change ", "set ", "make ", "keep ", "preserve ", "prioritize ", "prefer ")
+    if not text or not any(word in text for word in change_words):
+        return {}
+
+    updates: dict = {"ai_mode": True}
+    if any(phrase in text for phrase in ("keep 4k", "keep source", "source resolution", "preserve 4k", "do not downscale", "don't downscale")):
+        updates["resolution_mode"] = "keep"
+    elif any(phrase in text for phrase in ("auto resolution", "allow downscale", "choose resolution")):
+        updates["resolution_mode"] = "auto"
+    else:
+        cap = re.search(r"\b(720|1080|1440|2160)p?\b", text)
+        if cap and any(word in text for word in ("cap", "resolution", "downscale", "set")):
+            updates["resolution_mode"] = cap.group(1)
+
+    if "av1" in text:
+        updates["ai_codec_preference"] = "av1"
+    elif any(codec in text for codec in ("h.265", "h265", "hevc")):
+        updates["ai_codec_preference"] = "h265"
+    elif any(codec in text for codec in ("h.264", "h264", "avc")):
+        updates["ai_codec_preference"] = "h264"
+
+    if any(phrase in text for phrase in ("qsv", "hardware encode", "intel gpu")):
+        updates["ai_hardware"] = "qsv"
+    elif any(phrase in text for phrase in ("cpu encode", "software encode", "use cpu")):
+        updates["ai_hardware"] = "software"
+
+    if any(phrase in text for phrase in ("faster", "fast encode", "prioritize speed")):
+        updates["ai_goal"] = "speed"
+    elif any(phrase in text for phrase in ("best quality", "more quality", "prioritize quality", "look better")):
+        updates["ai_goal"] = "quality"
+    elif any(phrase in text for phrase in ("balanced", "good balance")):
+        updates["ai_goal"] = "balanced"
+    elif any(phrase in text for phrase in ("archive", "long term")):
+        updates["ai_goal"] = "archive"
+    elif any(phrase in text for phrase in ("smaller", "save more space", "small file")):
+        updates["ai_goal"] = "small"
+
+    target = re.search(r"\b(?:target|size|make it|set it to)?\s*(\d+(?:\.\d+)?)\s*(gb|mb)\b", text)
+    if target:
+        updates["target_size_auto"] = False
+        updates["target_size_value"] = float(target.group(1))
+        updates["target_size_unit"] = target.group(2).upper()
+
+    if any(phrase in text for phrase in ("copy audio", "keep audio quality", "preserve audio")):
+        updates["ai_copy_audio"] = True
+    elif any(phrase in text for phrase in ("compress audio", "convert audio")):
+        updates["ai_copy_audio"] = False
+    if any(phrase in text for phrase in ("keep all subtitles", "all subtitles")):
+        updates["ai_subtitle_scope"] = "all"
+    elif any(phrase in text for phrase in ("remove subtitles", "no subtitles")):
+        updates["ai_subtitle_scope"] = "none"
+
+    return updates if len(updates) > 1 else {}
+
+
+def _wizard_ai_chat_answer(plan: dict, question: str, changed: bool = False) -> dict:
+    estimates = plan.get("estimates") or {}
+    inputs = plan.get("inputs") or {}
+    probe = plan.get("probe") or {}
+    profile = estimates.get("ai_profile") or {}
+    confidence = estimates.get("ai_confidence") or {}
+    quality = estimates.get("ai_quality_expectation") or {}
+    history = estimates.get("history_prediction") or {}
+    output = estimates.get("output_resolution") or {}
+    decisions = [str(row) for row in estimates.get("ai_decisions") or [] if row]
+    warnings = [str(row) for row in estimates.get("ai_warnings") or [] if row]
+    text = " ".join(str(question or "").lower().split())
+
+    encoder = estimates.get("encoder_label") or estimates.get("encoder") or "the selected encoder"
+    resolution = f"{output.get('width', '?')}x{output.get('height', '?')}"
+    target_mb = float(inputs.get("target_mb") or 0.0)
+    target_text = f"{target_mb / 1024.0:.1f} GB" if target_mb >= 1024 else f"{target_mb:.0f} MB"
+    quality_text = quality.get("label") or estimates.get("quality_label") or "Unknown"
+    confidence_text = confidence.get("label") or "developing"
+
+    if changed:
+        opening = f"I updated the plan and ran it back through the model. It now uses {encoder} at {resolution}, targeting {target_text}."
+    elif any(word in text for word in ("resolution", "4k", "1080", "downscale")):
+        locked = bool(profile.get("resolution_locked"))
+        opening = (
+            f"The output is {resolution}. Resolution is a hard user constraint, so AI cannot downscale it."
+            if locked else
+            f"The output is {resolution}. AI was allowed to choose resolution from the bitrate available per pixel."
+        )
+    elif any(word in text for word in ("codec", "av1", "h265", "hevc", "h264", "encoder", "qsv")):
+        opening = f"I chose {encoder} by weighing target size, CPU/QSV availability, HDR, encode time, and matching job history."
+    elif any(word in text for word in ("time", "long", "fast", "speed", "eta")):
+        opening = f"The current ETA is {estimates.get('eta_human') or 'not available'} at about {estimates.get('est_fps') or '?'} fps. Encoder type, source resolution, HDR, and your CPU profile drive that estimate."
+    elif any(word in text for word in ("quality", "look", "artifact", "block", "good")):
+        opening = f"Quality is rated {quality_text} at {estimates.get('bpp') or '?'} bits per pixel per frame. The main pressure is fitting {resolution} into {target_text}."
+    elif any(word in text for word in ("size", "space", "storage", "target")):
+        ratio = float(profile.get("target_ratio") or 0.0) * 100.0
+        opening = f"The target is {target_text}, about {ratio:.0f}% of the source size. The model budgets audio first, then gives the remaining bitrate to video."
+    elif any(word in text for word in ("audio", "subtitle", "language")):
+        audio = "copied without re-encoding" if inputs.get("audio_mode") == "copy" else f"converted near {estimates.get('audio_bitrate_kbps') or '?'} kbps"
+        opening = f"Audio is {audio}; subtitle scope is {inputs.get('subtitle_mode') or 'none'}. Language filters are applied by the normal HandBrake command builder."
+    else:
+        opening = f"This is a {confidence_text.lower()}-confidence {quality_text.lower()} plan: {encoder}, {resolution}, and a {target_text} target."
+
+    evidence = decisions[-4:]
+    if history.get("available"):
+        samples = int(history.get("sample_count") or 0)
+        evidence.append(f"History estimate uses {samples} matching completed job{'' if samples == 1 else 's'}.")
+    if warnings:
+        evidence.append("Watch-out: " + warnings[0])
+
+    return {
+        "answer": opening + (" " + " ".join(evidence[:4]) if evidence else ""),
+        "evidence": evidence[:5],
+        "suggestions": [
+            "Why did you choose this codec?",
+            "Will this keep the source resolution?",
+            "Make it faster without removing audio",
+            "Prioritize quality and keep 4K",
+        ],
     }
 
 
@@ -5884,6 +6017,33 @@ def register_routes(app):
     @app.route("/wizard_preview_images", methods=["POST"])
     def wizard_preview_images():
         return wizard_preview_accurate()
+
+
+    @app.route("/wizard_ai_chat", methods=["POST"])
+    def wizard_ai_chat():
+        """Explain or safely adjust the current Size Wizard plan."""
+        data = request.get_json(force=True) or {}
+        question = str(data.pop("question", "") or "").strip()[:500]
+        if not question:
+            return jsonify(error="Ask the wizard AI a question first."), 400
+
+        updates = _wizard_ai_chat_updates(question)
+        candidate = {**data, **updates}
+        try:
+            plan = _wizard_plan(candidate, probe_func=_probe_media, preview=False)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        except Exception as e:
+            return jsonify(error=str(e)), 500
+
+        reply = _wizard_ai_chat_answer(plan, question, changed=bool(updates))
+        return jsonify(
+            ok=True,
+            option_updates=updates,
+            inputs=plan["inputs"],
+            estimates=plan["estimates"],
+            **reply,
+        )
 
 
 

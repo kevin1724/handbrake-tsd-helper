@@ -301,6 +301,19 @@
       <span class="small">Turn this on only when <code>/dev/dri</code> is mounted and usable.</span>
     </div>
 
+    <div class="row encoding-size-guard" style="margin-top:14px;">
+      <label class="toggle-line" for="autoStopLargeOutputEnabled">
+        <input id="autoStopLargeOutputEnabled" type="checkbox">
+        Stop encodes that are projected to save too little space
+      </label>
+      <div class="inline-input-group">
+        <label for="autoStopLargeOutputPercent">Stop when estimated output reaches</label>
+        <input id="autoStopLargeOutputPercent" type="number" min="1" max="500" step="1" value="90" style="width:90px;">
+        <span>% of the original</span>
+      </div>
+      <span class="small">Checked at 10%, 25%, 60%, and 90% progress. The original is preserved; only the incomplete <code>-TSD</code> output is removed.</span>
+    </div>
+
     <div class="row" style="margin-top:12px;">
       <button id="saveSettingsBtn">Save settings</button>
       <span id="settingsSaveStatus" class="small"></span>
@@ -1323,6 +1336,11 @@
 
       const qsvDeviceAvailableInput = document.getElementById("qsvDeviceAvailableInput");
       if (qsvDeviceAvailableInput) qsvDeviceAvailableInput.checked = Boolean(initialSettings?.qsv_device_available);
+
+      const autoStopEnabled = document.getElementById("autoStopLargeOutputEnabled");
+      if (autoStopEnabled) autoStopEnabled.checked = Boolean(initialSettings?.auto_stop_large_output_enabled);
+      const autoStopPercent = document.getElementById("autoStopLargeOutputPercent");
+      if (autoStopPercent) autoStopPercent.value = Number(initialSettings?.auto_stop_large_output_percent || 90);
     }
 
     async function loadCpuProfiles() {
@@ -1371,6 +1389,8 @@
       const tmdbBearerToken = document.getElementById("tmdbBearerTokenInput")?.value || "";
       const remoteTransferTempDir = document.getElementById("remoteTransferTempDirInput")?.value || "";
       const qsvDeviceAvailable = Boolean(document.getElementById("qsvDeviceAvailableInput")?.checked);
+      const autoStopLargeOutputEnabled = Boolean(document.getElementById("autoStopLargeOutputEnabled")?.checked);
+      const autoStopLargeOutputPercent = safeNumber(document.getElementById("autoStopLargeOutputPercent")?.value, 90, 1, 500);
 
       let threads = parseInt(threadsRaw, 10);
       if (isNaN(threads) || threads < 0) threads = 0;
@@ -1385,6 +1405,8 @@
             hb_threads: threads,
             cpu_profile: cpuProfile,
             qsv_device_available: qsvDeviceAvailable,
+            auto_stop_large_output_enabled: autoStopLargeOutputEnabled,
+            auto_stop_large_output_percent: autoStopLargeOutputPercent,
             queue_ui_mode: queueUiMode,
             tmdb_api_key: tmdbApiKey,
             tmdb_bearer_token: tmdbBearerToken,

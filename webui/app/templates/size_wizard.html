@@ -175,6 +175,106 @@
       color: #baf7fb;
     }
 
+    .ai-assistant {
+      margin-top: 16px;
+      border: 1px solid rgba(22, 199, 214, 0.26);
+      border-radius: 10px;
+      background: #0d141d;
+      overflow: hidden;
+    }
+
+    .ai-assistant-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      border-bottom: 1px solid rgba(255,255,255,0.08);
+      background: rgba(22, 199, 214, 0.07);
+    }
+
+    .ai-assistant-title {
+      display: grid;
+      gap: 2px;
+    }
+
+    .ai-assistant-title span {
+      color: rgba(229,229,229,0.6);
+      font-size: 11px;
+    }
+
+    .ai-model-chip {
+      border: 1px solid rgba(52, 211, 153, 0.32);
+      border-radius: 999px;
+      padding: 4px 8px;
+      color: #86efc2;
+      background: rgba(52, 211, 153, 0.08);
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+    }
+
+    .ai-chat-log {
+      display: grid;
+      gap: 10px;
+      max-height: 280px;
+      overflow-y: auto;
+      padding: 14px;
+    }
+
+    .ai-chat-message {
+      max-width: 92%;
+      padding: 10px 12px;
+      border-radius: 8px;
+      line-height: 1.45;
+      white-space: pre-wrap;
+    }
+
+    .ai-chat-message.assistant {
+      justify-self: start;
+      border: 1px solid rgba(22, 199, 214, 0.2);
+      background: rgba(22, 199, 214, 0.08);
+      color: #d8fbfd;
+    }
+
+    .ai-chat-message.user {
+      justify-self: end;
+      background: #183443;
+      color: #fff;
+    }
+
+    .ai-chat-prompts {
+      display: flex;
+      gap: 6px;
+      overflow-x: auto;
+      padding: 0 14px 10px;
+    }
+
+    .ai-prompt-chip {
+      flex: 0 0 auto;
+      min-height: 30px;
+      padding: 5px 9px;
+      border-radius: 999px;
+      font-size: 11px;
+      white-space: nowrap;
+    }
+
+    .ai-chat-compose {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      padding: 10px 14px 14px;
+    }
+
+    .ai-chat-compose input {
+      min-width: 0;
+      min-height: 42px;
+    }
+
+    .ai-chat-compose button {
+      min-height: 42px;
+    }
+
     .big-queue-btn {
       width: 100%;
       min-height: 52px;
@@ -289,6 +389,10 @@
       grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.65fr);
       gap: 16px;
       align-items: start;
+    }
+
+    .wizard-layout > * {
+      min-width: 0;
     }
 
     .section-title-row,
@@ -1353,6 +1457,28 @@
         <div id="planWarning" class="plan-warning small"></div>
         <div id="decisionNote" class="small plan-note"></div>
 
+        <section class="ai-assistant" aria-labelledby="aiAssistantHeading">
+          <div class="ai-assistant-header">
+            <div class="ai-assistant-title">
+              <strong id="aiAssistantHeading">Plan Assistant</strong>
+              <span>Grounded in this file, your hardware, and encode history</span>
+            </div>
+            <span class="ai-model-chip">Plan aware</span>
+          </div>
+          <div id="aiChatLog" class="ai-chat-log" aria-live="polite">
+            <div class="ai-chat-message assistant">Select a file and I will explain the plan, compare tradeoffs, or safely change wizard settings.</div>
+          </div>
+          <div id="aiChatPrompts" class="ai-chat-prompts">
+            <button type="button" class="ghost-btn ai-prompt-chip" data-ai-prompt="Why did you choose this codec?">Why this codec?</button>
+            <button type="button" class="ghost-btn ai-prompt-chip" data-ai-prompt="Will this keep the source resolution?">Keep resolution?</button>
+            <button type="button" class="ghost-btn ai-prompt-chip" data-ai-prompt="How risky is this target size?">Target risk?</button>
+          </div>
+          <div class="ai-chat-compose">
+            <input id="aiChatInput" type="text" maxlength="500" placeholder="Ask why, or say: prioritize quality and keep 4K">
+            <button id="aiChatSend" type="button">Ask AI</button>
+          </div>
+        </section>
+
         <div class="wizard-actions ai-plan-actions">
           <button id="saveAiPlanBtn" type="button" class="ghost-btn" disabled>Save AI Preset</button>
           <span id="aiPlanStatus" class="small status-text"></span>
@@ -1512,6 +1638,8 @@
     let activePresetId = "";
     let lastPlanData = null;
     let lastPlanPayload = null;
+    let aiChatBusy = false;
+    let aiChatHasConversation = false;
     let imgFetchController = null;
     let accuratePreviewPollTimer = null;
     let isDragging = false;
@@ -2416,6 +2544,91 @@
       updateTargetSizeHint();
     }
 
+    function appendAiChatMessage(role, text) {
+      const log = el("aiChatLog");
+      if (!log || !text) return;
+      const row = document.createElement("div");
+      row.className = `ai-chat-message ${role === "user" ? "user" : "assistant"}`;
+      row.textContent = String(text);
+      log.appendChild(row);
+      log.scrollTop = log.scrollHeight;
+    }
+
+    function renderAiChatPrompts(prompts = []) {
+      const wrap = el("aiChatPrompts");
+      if (!wrap) return;
+      wrap.replaceChildren();
+      prompts.slice(0, 4).forEach((prompt) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "ghost-btn ai-prompt-chip";
+        button.dataset.aiPrompt = prompt;
+        button.textContent = prompt
+          .replace("Why did you choose this codec?", "Why this codec?")
+          .replace("Will this keep the source resolution?", "Keep resolution?")
+          .replace("Make it faster without removing audio", "Make it faster")
+          .replace("Prioritize quality and keep 4K", "Quality + keep 4K");
+        wrap.appendChild(button);
+      });
+    }
+
+    function renderAiPlanIntro(estimates) {
+      if (aiChatHasConversation || !estimates?.ai_mode) return;
+      const log = el("aiChatLog");
+      if (!log) return;
+      const confidence = estimates.ai_confidence?.label || "Developing";
+      const quality = estimates.ai_quality_expectation?.label || estimates.quality_label || "Unknown";
+      const decisions = (estimates.ai_decisions || []).slice(-2).join(" ");
+      log.replaceChildren();
+      appendAiChatMessage(
+        "assistant",
+        `${confidence} confidence. I built a ${quality.toLowerCase()} plan using ${estimates.encoder_label || estimates.encoder}, ` +
+        `${estimates.output_resolution?.width || "?"}x${estimates.output_resolution?.height || "?"}. ${decisions}`
+      );
+    }
+
+    async function askWizardAi(questionOverride = "") {
+      const input = el("aiChatInput");
+      const question = String(questionOverride || input?.value || "").trim();
+      const payload = currentPayload();
+      if (!question || aiChatBusy) return;
+      if (!payload.src) {
+        appendAiChatMessage("assistant", "Select a file first so I can ground the answer in its probe and target plan.");
+        return;
+      }
+
+      aiChatBusy = true;
+      aiChatHasConversation = true;
+      el("aiChatSend").disabled = true;
+      if (input) input.value = "";
+      appendAiChatMessage("user", question);
+      appendAiChatMessage("assistant", "Re-evaluating the current plan...");
+      const pending = el("aiChatLog")?.lastElementChild;
+
+      try {
+        const res = await fetchWithTimeout("/wizard_ai_chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ ...payload, question })
+        }, 25000);
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(data.error || "AI assistant failed");
+        if (pending) pending.remove();
+        appendAiChatMessage("assistant", data.answer || "I updated the plan.");
+        renderAiChatPrompts(data.suggestions || []);
+        const updates = data.option_updates || {};
+        if (Object.keys(updates).length) {
+          applyWizardOptions({ ...recipeOptions(payload), ...updates });
+        }
+      } catch (e) {
+        if (pending) pending.remove();
+        appendAiChatMessage("assistant", e.message || "I could not evaluate that request.");
+      } finally {
+        aiChatBusy = false;
+        el("aiChatSend").disabled = false;
+      }
+    }
+
     function showNoSourceState() {
       setStatus("sourceStatus", "Pick a file from Jobs, or use the last file opened here.");
       setStatus("planStatus", "");
@@ -2464,6 +2677,7 @@
         .map((item) => `${item.label}: ${item.detail}`)
         .join(" ");
       el("decisionNote").textContent = [e.decision_note, e.ai_summary, aiAdvice].filter(Boolean).join(" ");
+      renderAiPlanIntro(e);
       el("argsPreview").textContent = args.length ? args.join(" ") : "-";
       el("saveAiPlanBtn").disabled = !e.ai_mode;
       setStatus("aiPlanStatus", e.ai_mode ? "AI plan can be saved as a preset." : "");
@@ -2865,6 +3079,17 @@
       el("simpleUseLastFileBtn").addEventListener("click", useLastWizardFile);
       el("savePresetBtn").addEventListener("click", saveWizardPreset);
       el("saveAiPlanBtn").addEventListener("click", saveAiGeneratedPreset);
+      el("aiChatSend").addEventListener("click", () => askWizardAi());
+      el("aiChatInput").addEventListener("keydown", (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          askWizardAi();
+        }
+      });
+      el("aiChatPrompts").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-ai-prompt]");
+        if (button) askWizardAi(button.dataset.aiPrompt || "");
+      });
       el("deletePresetBtn").addEventListener("click", deleteWizardPreset);
       el("queueBtn").addEventListener("click", queueWizard);
       el("simpleQueueBtn").addEventListener("click", queueWizard);
