@@ -1,329 +1,283 @@
-# 🎬 HandBrake TSD Helper - Web UI + Media Encoding Dashboard
+# HandBrake TSD Helper
 
-HandBrake TSD Helper is a lightweight, self-hosted web dashboard for **HandBrakeCLI**. It is built for NAS boxes, home servers, Plex/Jellyfin/Emby libraries, and anyone who wants safer automated transcoding without living in the HandBrake desktop app.
+A clean, self-hosted web dashboard for managing HandBrake encodes across a movie and TV library.
 
-✅ **TSD stands for "Transcoded"**. Completed output files are tagged with `-TSD`, so the app can skip already-encoded media and avoid duplicate work.
+HandBrake TSD Helper is built for Plex, Jellyfin, Emby, NAS, and homelab users who want to reduce media file sizes without giving up control over quality, audio, subtitles, presets, hardware encoding, or file safety.
 
-The app has grown into a full media encoding dashboard: browse files, queue jobs, use a size wizard, scan movies and shows, track storage savings, predict final file sizes, pair worker nodes, and optionally remote-transfer jobs to machines that do not have the media drives mounted.
+Completed output files are tagged with `-TSD`, short for "Transcoded", so the app can skip media that has already been processed.
 
 [![Docker Pulls](https://img.shields.io/docker/pulls/kevina1724/handbrake-tsd-helper?style=for-the-badge&logo=docker)](https://hub.docker.com/r/kevina1724/handbrake-tsd-helper)
 
----
+## Highlights
 
-## ✅ Current Progress
+- Web dashboard for local and remote HandBrake encoding
+- Modern dark UI for Jobs, Size Wizard, Library, and Settings
+- One-shot encoder, batch tools, queue history, and live progress
+- Size Wizard with Simple Mode, Advanced Mode, previews, and AI-assisted recommendations
+- Library scanner for mapped movie and show folders
+- Poster view, show tracking, seasons, episodes, and recommendation sorting
+- Storage-savings history with output-size and runtime prediction
+- Intel QSV, software encoders, HEVC, H.264, and AV1 planning support
+- Multi-node controller/worker encoding
+- Remote-transfer mode for workers that do not have media drives mounted
+- Safer cleanup behavior for failed or canceled jobs
 
-The last few update rounds added a lot of major pieces:
+## Why Use It
 
-- ✅ Modern dark dashboard UI with Jobs, Size Wizard, Library, and Settings pages
-- ✅ One-shot encoder with a cleaner file browser, selected-file card, batch tools, and live progress
-- ✅ Queue dashboard with queued/running/completed/error metrics, saved storage, runtime, ETA, and clear error status
-- ✅ Scrollable job history and scrollable Settings event/storage tables with selectable row counts
-- ✅ Safer failed-job cleanup: failed encodes remove the incomplete `-TSD` output and keep the original source
-- ✅ Running-job cancel buttons from the one-shot encoder and queue history
-- ✅ Estimated final output size while a job is running, checked at light intervals
-- ✅ Size Wizard overhaul with AI mode, CPU profile awareness, QSV/codec options, audio/subtitle language controls, previews, and saved wizard presets
-- ✅ Movie/show detection in the Size Wizard: movies default to 5 GB, shows default to 800 MB
-- ✅ Default copy behavior for English and Spanish audio/subtitle selections
-- ✅ Library page for mapped movie/show folders, poster cards, recommendations, sorting, filtering, and queueing
-- ✅ Cached library scans so the Library page does not rescan every load
-- ✅ Optional poster metadata through TMDb API credentials
-- ✅ Show tracking with expandable shows, seasons, and episodes
-- ✅ Beta auto-scan every configurable interval using cheap path/size/modified-time checks
-- ✅ Auto-queue for tracked shows after file stability checks
-- ✅ Multi-node linking with controller/worker roles, secure one-time pairing codes, heartbeat/status, token signing, rotate secret, and unlink
-- ✅ Local mounted media mode, auto local-then-remote mode, and remote-transfer mode
-- ✅ Remote transfer progress for source download, worker encoding, and finished-file upload back to the controller
-- ✅ Worker-specific prediction history so ETA and savings estimates improve per node
-- ✅ Settings split into Main, Beta, and Linked Nodes subpages
+HandBrake is powerful, but managing a large library by hand is slow. This project adds a web UI, queue system, history, predictions, library scanning, and worker-node support around HandBrakeCLI.
 
----
+Use it when you want to:
 
-## 🌟 Key Features
+- Shrink large movies and shows
+- Keep track of how much storage you saved
+- Queue encodes from a browser
+- Avoid re-encoding files that are already done
+- Use presets without opening the HandBrake desktop app
+- Send jobs to another machine on your network
+- Keep original files safe unless an encode fully succeeds
 
-- 🌐 **Web UI** - phone, tablet, and desktop friendly
-- 🧭 **Modern navigation** - Jobs, Size Wizard, Library, Settings
-- 🎛️ **Preset support** - auto 1080p/4K preset detection plus custom HandBrake preset files
-- 📥 **Job queue** - safe one-at-a-time local queue with pause, reorder, remove, and cancel
-- 📊 **Queue dashboard** - queued/running/completed/errors, saved storage, runtime, progress, ETA
-- ⏳ **Live progress** - encode progress, transfer progress, ETA, and estimated final file size
-- 📜 **Logs and history** - persisted job history and downloadable logs
-- 🧾 **Storage savings** - records before/after file sizes and total saved storage
-- 🧠 **Prediction engine** - uses past encode history, preset, HDR/SDR hints, and node history
-- 🧙 **Size Wizard** - target-size planning, previews, AI mode, QSV/codec options, and saved wizard presets
-- 🎞️ **Library scanner** - maps movie/show folders, caches scans, sorts recommendations, and queues from poster cards
-- 📺 **Show tracking** - expands shows into seasons/episodes and can auto-queue new stable episodes
-- 🖼️ **Poster metadata** - optional TMDb credentials for movie/show/season artwork
-- 🔁 **Auto scan** - configurable background scan with skip-while-encoding and file stability checks
-- 🖥️ **Multi-node workers** - pair worker nodes, dispatch jobs, map paths, and monitor remote jobs
-- 📡 **Remote-transfer workers** - download source to worker temp storage, encode locally, upload finished output back
-- 🛡️ **Safer file handling** - original files are preserved unless output is verified and completed successfully
-- 🐳 **Dockerized** - runs as a container with persistent `/app/data`
+## Quick Start
 
----
-
-## 📌 Why `-TSD`?
-
-When managing a big media library, you need a clear way to know what has already been processed.
-
-HandBrake TSD Helper:
-
-- ✅ Outputs completed files with `-TSD` in the filename
-- ✅ Skips already-transcoded `-TSD` files during browsing and scans
-- ✅ Deletes incomplete `-TSD` output if an encode fails
-- ✅ Keeps the original source available when a job errors or is canceled
-- ✅ Prevents wasted CPU and duplicate encodes
-
-Example:
-
-```text
-The.Matrix.2160p.mkv -> The.Matrix.2160p-TSD.mkv
-```
-
----
-
-## 🧭 Pages
-
-### 📥 Jobs
-
-The Jobs page is the main encoder dashboard.
-
-- One-shot file picker with folder and file browsing
-- Search, root selector, breadcrumbs, selected-file card
-- Auto preset or manual 1080p/4K preset selection
-- Open selected file directly in the Size Wizard
-- Batch rename and batch encode tools
-- Queue metrics, progress bars, ETA, estimated final file size, and saved size
-- Job history with adjustable scroll size: 10, 25, 50, or 100 rows
-- Cancel running jobs and clear top-level error status
-- Linked node panel showing worker health, worker jobs, encoding progress, and transfer progress
-
-### 🧙 Size Wizard
-
-The Size Wizard helps build HandBrake arguments from a target size and quality goal.
-
-- Movie/show auto detection
-- Movie default target: 5 GB
-- Show default target: 800 MB
-- Shows original file size before planning
-- AI mode that uses selected CPU profile and user conditions
-- QSV, codec, preset, resolution, audio, and subtitle controls
-- Default English and Spanish audio/subtitle copy behavior
-- Fast preview images and accurate preview clips
-- History-based predicted output size and savings
-- Save and reuse wizard-created presets
-
-### 🎞️ Library
-
-The Library page is the newer media-management view.
-
-- Scans mapped movie and show folders only
-- Loads saved cache first so it does not rescan every page load
-- Optional recursive scanning
-- Movie poster grid with title, year, quality, HDR/SDR, source size, predicted size, savings, and target codec
-- Show cards with episode count, season count, predicted savings, progress bar, tracking, and queue actions
-- Expand shows into seasons, then episodes
-- Queue single items, seasons, full shows, or selected batches
-- Send selected jobs to local queue, best available worker, or a selected worker node
-- Recommendations sort to show the biggest likely storage wins first
-- HDR/SDR detection uses metadata and filename hints like `HDR`, `DV`, `DoVi`, `REMUX`, `10bit`, `HEVC`, and similar release tags
-
-### ⚙️ Settings
-
-Settings are split into subpages to keep the UI manageable.
-
-- **Main Settings**: encoding defaults, CPU profile, queue UI mode, preset upload/download/delete, events, storage savings
-- **Beta Settings**: movie/show folder mapping, posters/TMDb credentials, auto-scan settings
-- **Linked Nodes**: local node identity, pairing codes, worker pairing, path mapping, transfer mode, temp folders, rotate secret, unlink
-
-Events and Storage Savings are scrollable blocks so the Settings page does not become a mile long.
-
----
-
-## 🔁 Beta Auto Scan
-
-Auto scan is designed to stay light on resources.
-
-Every interval, default 30 minutes:
-
-1. Checks if auto scan is enabled
-2. Skips if encoding is running and skip-while-encoding is enabled
-3. Loads the previous scan index
-4. Walks mapped folders only
-5. Uses cheap stat checks: path, size, and modified time
-6. Fully parses only new or changed video files
-7. Ignores already encoded `-TSD` files
-8. Marks missing files as removed
-9. Saves the scan index and Library cache
-10. Auto-queues tracked show episodes only after file stability checks pass
-
-This means normal scans do not need to ffprobe every file every time.
-
----
-
-## 🖥️ Multi-Node Linking
-
-HandBrake TSD Helper can link multiple app containers/nodes together.
-
-- One node acts as the **controller/master**
-- Other nodes act as **workers**
-- Workers generate secure one-time pairing codes
-- Pairing codes expire quickly and can only be used once
-- Nodes use trusted tokens/HMAC-style signed requests
-- Workers report heartbeat, queue counts, running jobs, completed jobs, errors, and prediction data
-- Controller can send jobs locally, to the best available worker, or to a selected worker
-- Worker-specific encode history is kept separate for better ETA predictions
-
-### 🔐 Security Controls
-
-- No unauthenticated node commands
-- Pairing codes and secrets are not intended to be logged
-- Rotate secret invalidates the old trusted token and replaces it with a new one
-- Unlink/revoke removes a worker relationship
-- Path mappings are required for local-mounted worker mode
-
----
-
-## 📡 Worker Transfer Modes
-
-### Local Mounted Media Mode
-
-Use this when the worker can access the same media files through mounted paths.
-
-Example:
-
-```text
-Controller path: /media/Movies
-Worker path:     /mnt/media/Movies
-```
-
-The controller translates the path and sends the job to the worker.
-
-### Auto Local Then Remote
-
-Use this when some worker paths are mounted and others are not.
-
-The controller tries path mapping first. If no mapping matches, it falls back to remote transfer.
-
-### Remote Transfer Mode
-
-Use this when the worker does not have the media drives mounted.
-
-Flow:
-
-1. Controller creates authenticated temporary transfer links
-2. Worker downloads the source file to its temp folder
-3. Worker encodes the temp file locally
-4. Worker uploads the finished `-TSD` output back to the controller/storage node
-5. Controller verifies the uploaded output
-6. Controller writes the completed output next to the original
-7. Original source is deleted only after successful verification
-8. Temp files are cleaned up
-
-The Jobs page shows source download progress, encoding progress, and finished-file upload progress for linked worker jobs.
-
----
-
-## 🏗️ Folder Structure
-
-```text
-handbrake-tsd-helper/
-│
-├── docker-compose.yml
-├── Dockerfile
-├── README.md
-├── .gitignore
-│
-├── webui/
-│   └── app/
-│       ├── __init__.py              # Flask app factory
-│       ├── __main__.py              # python -m webui.app entry point
-│       ├── config.py                # media roots, data paths, preset paths
-│       ├── cpu_profiles.py          # CPU profile list for ETA/wizard planning
-│       ├── events.py                # event feed persistence
-│       ├── jobs.py                  # queue, dispatcher, progress, remote-transfer worker jobs
-│       ├── node_linking.py          # pairing, tokens, HMAC signing, transfer grants
-│       ├── presets.py               # HandBrake preset config
-│       ├── routes.py                # UI/API routes, Library scanner, Size Wizard
-│       ├── settings.py              # app settings and defaults
-│       ├── storage_stats.py         # encode history and savings tracking
-│       ├── static/
-│       │   ├── app.js
-│       │   └── styleui.css
-│       └── templates/
-│           ├── index.html           # Jobs dashboard
-│           ├── size_wizard.html     # Size Wizard
-│           ├── beta.html            # Library page
-│           └── settings.html        # Settings subpages
-│
-├── worker/
-│   └── encode-one.sh                # HandBrakeCLI execution script
-│
-├── presets/
-│   ├── full1080.json
-│   └── 4k.json
-│
-└── data/                            # runtime state, not for git
-    ├── jobs.json
-    ├── settings.json
-    ├── storage_stats.json
-    ├── events.json
-    ├── beta_library_cache.json
-    ├── beta_scan_index.json
-    ├── beta_tracked_shows.json
-    ├── beta_autoscan_status.json
-    ├── node_linking.json
-    ├── wizard_presets.json
-    └── logs/
-```
-
----
-
-## 🐳 Quick Start - Docker Compose
-
-1. Clone the repo:
+Clone the repo:
 
 ```bash
 git clone https://github.com/kevin1724/handbrake-tsd-helper.git
 cd handbrake-tsd-helper
 ```
 
-2. Edit `docker-compose.yml` and mount your media folders under `/media/...`.
-
-Example:
+Edit `docker-compose.yml` and mount your media folders:
 
 ```yaml
-volumes:
-  - /path/to/movies:/media/Movies
-  - /path/to/shows:/media/Shows
-  - ./data:/app/data
-  - ./presets:/presets
+services:
+  hb-web:
+    ports:
+      - "8081:8080"
+    volumes:
+      - /path/to/movies:/media/Movies
+      - /path/to/shows:/media/Shows
+      - ./data:/app/data
+      - ./presets:/presets
 ```
 
-3. Start the stack:
+Start the app:
 
 ```bash
 docker compose up -d --build
 ```
 
-4. Open the UI:
+Open the web UI:
 
 ```text
 http://SERVER-IP:8081
 ```
 
-🎉 Done. Start by opening Settings, mapping your movie/show folders, then scanning the Library.
+Recommended first setup:
 
----
+1. Open Settings.
+2. Select your CPU profile.
+3. Confirm or upload your HandBrake presets.
+4. Map movie and show folders.
+5. Add TMDb credentials if you want posters.
+6. Run a Library scan.
+7. Queue a few test encodes.
 
-## 🐳 Official Image
+## Core Pages
 
-Pull the latest image:
+### Jobs
+
+The Jobs page is the main encode dashboard.
+
+- Browse folders and video files
+- Select a file and encode it with presets
+- Open a file in the Size Wizard
+- Run batch tools
+- View queued, running, completed, and failed jobs
+- Track ETA, progress, estimated final size, saved size, and runtime
+- Cancel running jobs
+- View linked worker-node status
+
+### Size Wizard
+
+The Size Wizard helps choose better settings before starting an encode.
+
+Simple Mode keeps the workflow easy:
+
+- Pick a file
+- Choose a quality goal
+- Set a target size
+- Choose speed or compression preference
+- Keep or filter audio and subtitle languages
+- Review the live plan
+- Queue the encode
+
+Advanced Mode keeps the full technical surface available:
+
+- Codec and encoder
+- AV1, HEVC, H.264, software, and QSV choices
+- Bit depth
+- Frame rate
+- Resolution and downscale controls
+- Audio tracks
+- Subtitle tracks
+- Language selection
+- Crop, deinterlace, filters, two-pass, and extra args
+- Saved wizard presets
+- Fast and accurate previews
+
+The wizard also includes AI-assisted recommendations. It can suggest a best overall plan, a best-compression plan, a faster plan, or a 1080p space-saving plan for large 4K files.
+
+### Library
+
+The Library page scans the movie and show folders you map in Settings.
+
+- Cached scans
+- Movie poster grid
+- Show cards with seasons and episodes
+- Optional TMDb posters
+- Sort by likely storage savings
+- Filter by title, quality, type, and status
+- Queue movies, episodes, seasons, shows, or selected batches
+- Track shows and auto-queue new stable episodes
+- Send jobs to local encoding or linked workers
+
+The scanner ignores files that already contain `-TSD`.
+
+### Settings
+
+Settings are split into cleaner sections:
+
+- Encoding defaults
+- Preset management
+- CPU profile
+- Intel QSV availability
+- Library folder mapping
+- Poster metadata
+- Auto scan
+- Linked nodes
+- Events
+- Storage savings
+
+Events and storage savings use scrollable tables so the page stays compact.
+
+## File Safety
+
+The app is designed to protect original files.
+
+- Failed jobs delete the incomplete `-TSD` output, not the source file
+- Canceled jobs preserve the source file
+- Already encoded `-TSD` files are skipped by scans and queues
+- Remote-transfer output is verified before being written beside the original
+- Original deletion only happens after a successful encode and verification
+- Clear actions ask for confirmation
+
+Keep backups of important media before enabling any aggressive cleanup behavior.
+
+## Auto Scan
+
+Auto scan can keep the Library updated without constantly probing every file.
+
+By default, it is designed to run every 30 minutes. On each pass it:
+
+1. Checks whether auto scan is enabled.
+2. Skips if an encode is running and skip-while-encoding is enabled.
+3. Loads the previous scan index.
+4. Walks only mapped movie and show folders.
+5. Compares path, size, and modified time.
+6. Parses only new or changed video files.
+7. Ignores `-TSD` files.
+8. Marks missing files as removed.
+9. Saves the scan index and Library cache.
+10. Auto-queues tracked episodes only after file stability checks pass.
+
+This keeps normal scans lightweight.
+
+## Multi-Node Encoding
+
+HandBrake TSD Helper can link multiple app containers together.
+
+- One node acts as the controller
+- Other nodes act as workers
+- Workers pair with one-time codes
+- Paired nodes use trusted tokens for commands
+- Workers report heartbeat, status, progress, completed jobs, and errors
+- Nodes can reconnect after normal offline periods
+- Prediction history is tracked per worker
+
+The controller can send jobs to the local node, the best available worker, or a selected worker.
+
+### Worker Modes
+
+**Local mounted media mode**
+
+Use this when the worker can access the same media through its own mounted paths.
+
+```text
+Controller path: /media/Movies
+Worker path:     /mnt/media/Movies
+```
+
+**Auto local then remote**
+
+Use this when some paths are mounted on the worker and some are not. The app tries path mapping first, then falls back to remote transfer.
+
+**Remote transfer mode**
+
+Use this when the worker cannot access the media drive.
+
+1. The controller grants temporary authenticated file access.
+2. The worker downloads the source file to local temp storage.
+3. The worker encodes locally.
+4. The worker uploads the finished `-TSD` file back.
+5. The controller verifies the output.
+6. The controller writes the output beside the original file.
+7. Temporary files are cleaned up.
+
+If the controller is offline when the worker finishes, the worker keeps the finished output and waits to upload it later.
+
+## Intel QSV / Quick Sync
+
+The Docker image builds HandBrakeCLI with QSV support and installs Intel media runtime packages where available.
+
+Rebuild after QSV-related Dockerfile changes:
+
+```bash
+docker compose build --no-cache hb-web
+docker compose up -d hb-web
+```
+
+Check QSV inside the container:
+
+```bash
+docker exec -it hb-web check-qsv
+```
+
+Expected signs of working QSV:
+
+```text
+/dev/dri exists
+vainfo returns Intel driver details
+HandBrake lists qsv_h264, qsv_h265, or qsv_h265_10bit
+```
+
+Requirements:
+
+- Intel CPU with enabled iGPU
+- Host exposes `/dev/dri/renderD128`
+- Compose maps `/dev/dri:/dev/dri`
+- Container has access to `video` and `render` groups
+- QSV render-device availability is enabled in Settings
+
+Intel `F` and `KF` desktop CPUs usually do not include an iGPU.
+
+## Official Image
+
+Pull:
 
 ```bash
 docker pull ghcr.io/kevin1724/handbrake-tsd-helper:latest
 ```
 
-Run manually:
+Run:
 
 ```bash
 docker run -d \
@@ -332,190 +286,130 @@ docker run -d \
   -v /path/to/media:/media/Media \
   -v /path/to/data:/app/data \
   -v /path/to/presets:/presets \
+  --device /dev/dri:/dev/dri \
   ghcr.io/kevin1724/handbrake-tsd-helper:latest
 ```
 
----
+## Runtime Data
 
-## ⚙️ Recommended First Setup
+Runtime state is stored in `data/`.
 
-1. Open **Settings -> Main**
-2. Pick your CPU profile for better ETA and Size Wizard planning
-3. Upload or verify your 1080p and 4K presets
-4. Open **Settings -> Beta**
-5. Map your movie folders and show folders
-6. Add TMDb credentials if you want posters
-7. Enable auto scan if desired
-8. Open **Library**
-9. Run a scan and sort by **Recommendations**
-10. Queue a few files and let the app build prediction history
+Common files:
 
-For workers:
-
-1. On the worker node, open **Settings -> Linked Nodes**
-2. Generate a pairing code
-3. On the controller node, enter the worker URL/IP and pairing code
-4. Choose Local, Auto, or Remote transfer mode
-5. Add path mappings or remote temp folder as needed
-6. Refresh nodes and confirm controller/worker status
-
----
-
-## 🧠 Prediction History
-
-The app learns from completed jobs.
-
-It records:
-
-- Source size
-- Output size
-- Saved bytes
-- Runtime
-- Preset used
-- HDR/SDR hint
-- Node that ran the job
-
-The Library and Size Wizard use this history to estimate:
-
-- Final output size
-- Storage savings
-- Runtime/ETA
-- Worker-specific timing when dispatching to linked nodes
-
-The more jobs each node completes, the better that node's estimate gets.
-
----
-
-## 🛡️ Safety Notes
-
-- ✅ Failed jobs delete the incomplete `-TSD` output, not the original source
-- ✅ Canceled jobs preserve the original source
-- ✅ Remote-transfer output is verified before it is written beside the original
-- ✅ Original source deletion only happens after successful encode/verification
-- ✅ Already encoded `-TSD` files are ignored by scans and queues
-- ✅ Clear buttons ask for confirmation before deleting event/storage history
-- ⚠️ Always keep backups of important media before enabling aggressive cleanup behavior
-
----
----
-
-## 🔥 Performance Notes
-
-- Auto scan uses cheap file stat checks before deeper parsing
-- Scan cache prevents rescanning the full Library every page load
-- File stability checks avoid queueing half-copied episodes
-- Running output-size estimates are checked at lightweight progress intervals
-- HandBrake thread count can be tuned in Settings
-- QSV options are available in the Size Wizard when your hardware/container setup supports it
-- Multi-node mode can spread work across multiple machines
-
----
-
-## ❓ Troubleshooting
-
-### No files appear in Jobs?
-
-Check your Docker volume mounts and make sure media is under `/media/...` or configured roots.
-
-```yaml
-volumes:
-  - /your/media:/media/Media
+```text
+data/jobs.json
+data/settings.json
+data/storage_stats.json
+data/events.json
+data/beta_library_cache.json
+data/beta_scan_index.json
+data/beta_tracked_shows.json
+data/beta_autoscan_status.json
+data/node_linking.json
+data/wizard_presets.json
+data/logs/
 ```
 
-### Library scan is empty?
+Do not commit private runtime data, API keys, node secrets, cache files, or logs.
 
-Open **Settings -> Beta** and map at least one movie folder or show folder. The Library page scans mapped folders, not the whole drive.
+Safe staging example:
 
-### Posters do not show?
+```bash
+git add README.md Dockerfile docker-compose.yml .gitignore webui worker presets tests
+git status --short
+```
 
-Add TMDb API credentials in **Settings -> Beta**, save, then refresh the Library scan.
+## Project Layout
 
-### Worker pairing fails?
+```text
+handbrake-tsd-helper/
+|-- Dockerfile
+|-- docker-compose.yml
+|-- README.md
+|-- presets/
+|-- worker/
+|-- webui/
+|   `-- app/
+|       |-- jobs.py
+|       |-- node_linking.py
+|       |-- routes.py
+|       |-- settings.py
+|       |-- storage_stats.py
+|       |-- wizard_llm.py
+|       |-- static/
+|       `-- templates/
+|-- tests/
+`-- data/
+```
 
-- Confirm the worker URL is reachable from the controller
-- Generate a fresh pairing code on the worker
-- Pair before the code expires
-- Check **Settings -> Linked Nodes** on both sides for controller/worker status
+## Troubleshooting
 
-### Worker cannot access the media path?
+### No files appear in Jobs
 
-Use **Auto local then remote** or **Remote transfer mode**, and set a worker temp folder if the default data folder is too small.
+Check your Docker volume mounts. Media should be mounted under a path the app can browse, commonly `/media/...`.
 
-### Job looks stuck?
+### Library scan is empty
 
-- Check the job row progress and ETA
-- Download the job log
-- Check linked node status if it is a worker job
-- Cancel the job if needed
-- Restart the container only if the process is truly stuck
+Open Settings and map at least one movie folder or show folder.
+
+### Posters do not show
+
+Add TMDb credentials in Settings, save, then refresh the Library scan.
+
+### QSV does not show up
+
+Run:
+
+```bash
+docker exec -it hb-web check-qsv
+```
+
+Confirm `/dev/dri` exists in the container and that the host iGPU is enabled.
+
+### Worker pairing fails
+
+Check that the worker URL is reachable from the controller, generate a fresh pairing code, and confirm both nodes show the expected role in Settings.
+
+### Worker cannot access a media path
+
+Use Auto local then remote or Remote transfer mode. Set a worker temp folder if the default data folder is too small.
+
+### Job looks stuck
+
+Check the job progress, ETA, linked node status, and job log. If needed, cancel the job from the Jobs page.
+
+Restart only when the process is truly stuck:
 
 ```bash
 docker restart hb-web
 ```
 
----
-
-## 🛠️ Updating
+## Updating
 
 ```bash
 git pull
 docker compose up -d --build
 ```
 
-If the UI changed a lot, hard-refresh your browser after rebuilding.
+After larger UI updates, hard-refresh the browser.
 
----
+## Roadmap
 
-## 🗺️ Roadmap
+Current focus:
 
-Already completed:
+- Improve Size Wizard recommendations
+- Improve node reconnect and long-running worker reliability
+- Polish Library workflows for shows, seasons, and episodes
+- Expand hardware encoder support
+- Add authentication and permissions
+- Add notification hooks
 
-- ✅ Modern dark UI
-- ✅ Size Wizard overhaul
-- ✅ Saved wizard presets
-- ✅ Library scanner with posters and recommendations
-- ✅ Cached scans and mapped movie/show folders
-- ✅ Auto scan and tracked show auto-queue
-- ✅ Storage savings history and prediction engine
-- ✅ Multi-node linking
-- ✅ Remote-transfer worker mode
-- ✅ Node-specific prediction history
-- ✅ Safer failed-job cleanup
+## Contributing
 
-Possible next steps:
+Issues, feature ideas, test results, and pull requests are welcome.
 
-- 🔜 Authentication and multi-user permissions
-- 🔜 Webhook/email notifications
-- 🔜 More hardware encoder presets
-- 🔜 Better per-title quality recommendations
-- 🔜 Full Library rename from Beta once it feels finished
+Helpful reports include the source filename, codec, resolution, preset or wizard settings, whether the job was local or remote, and the relevant log lines.
 
----
+## License
 
-## 🤝 Contributing
-
-Issues, feature ideas, testing notes, and PRs are welcome.
-
-This project is especially useful when real media-library edge cases show up, so bug reports with filenames, codec details, and workflow notes help a lot.
-
----
-
-## 📄 License
-
-MIT - free for personal, commercial, and homelab use.
-
----
-
-## 💙 Built For Media Nerds
-
-If you:
-
-- ✅ hoard TBs of movies and shows
-- ✅ run Plex, Jellyfin, or Emby
-- ✅ care about saving storage
-- ✅ want automation without losing control
-- ✅ like seeing exactly what your encodes are doing
-
-...this tool was made for you 😎
-
-Enjoy, and happy transcoding!
+MIT. Free for personal, commercial, and homelab use.
