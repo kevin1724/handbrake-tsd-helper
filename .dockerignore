@@ -1,0 +1,22 @@
+.git
+.github
+.gitignore
+.dockerignore
+
+# Local runtime state and secrets
+data/
+.env
+.env.*
+!.env.example
+*.log
+
+# Local Python/editor artifacts
+**/__pycache__/
+**/*.py[cod]
+.pytest_cache/
+.idea/
+.vscode/
+
+# Files that are not needed in the runtime image
+README.md
+docker-compose*.yml

@@ -274,7 +274,7 @@ Intel `F` and `KF` desktop CPUs usually do not include an iGPU.
 Pull:
 
 ```bash
-docker pull ghcr.io/kevin1724/handbrake-tsd-helper:latest
+docker pull kevina1724/handbrake-tsd-helper:latest
 ```
 
 Run:
@@ -287,8 +287,11 @@ docker run -d \
   -v /path/to/data:/app/data \
   -v /path/to/presets:/presets \
   --device /dev/dri:/dev/dri \
-  ghcr.io/kevin1724/handbrake-tsd-helper:latest
+  kevina1724/handbrake-tsd-helper:latest
 ```
+
+The `latest` image is published automatically from `main`. Version tags such as
+`v1.2.3` also publish `1.2.3` and `1.2` tags.
 
 ## Runtime Data
 
