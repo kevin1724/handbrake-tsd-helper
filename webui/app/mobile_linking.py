@@ -30,9 +30,19 @@ MOBILE_ACCESS_TTL_SECONDS = 30 * 24 * 60 * 60
 MOBILE_REFRESH_TTL_SECONDS = 180 * 24 * 60 * 60
 MOBILE_CAPABILITIES = [
     "status:read",
+    "dashboard:read",
     "jobs:read",
+    "jobs:control",
+    "library:read",
+    "library:control",
     "nodes:read",
     "events:read",
+    "events:control",
+    "automation:read",
+    "automation:control",
+    "storage:read",
+    "smart-presets:read",
+    "smart-presets:control",
     "queue:control",
     "token:refresh",
 ]

@@ -5565,17 +5565,278 @@ def register_routes(app):
             },
         )
 
+    @app.route("/api/mobile/v1/dashboard")
+    def mobile_dashboard_api():
+        device = _authenticated_mobile("read")
+        if not device:
+            return jsonify(error="unauthorized mobile device"), 401
+        settings = load_settings()
+        nodes = list_nodes_public()
+        jobs = list_jobs_for_api()
+        active_jobs = [
+            row for row in jobs
+            if str(row.get("status") or "").lower() in {"queued", "running", "waiting_to_upload"}
+        ]
+        library = _beta_load_library_cache(settings)
+        movies = library.get("movies") if isinstance(library.get("movies"), list) else []
+        shows = library.get("shows") if isinstance(library.get("shows"), list) else []
+        return jsonify(
+            ok=True,
+            release="2.0.0",
+            device=device,
+            queue={"paused": get_queue_state(), "summary": get_job_summary()},
+            active_jobs=active_jobs[:8],
+            nodes={
+                "local": local_node_overview(),
+                "items": nodes,
+                "paired": len(nodes),
+                "online": sum(1 for node in nodes if node.get("online")),
+            },
+            library={
+                "movies": len(movies),
+                "shows": len(shows),
+                "last_scan_at": library.get("scanned_at") or library.get("updated_at") or 0,
+                "configured": bool(_beta_mapped_roots(settings)),
+            },
+            automation=_autopilot_status_payload(),
+            storage=get_storage_summary(),
+            events=load_events(limit=8),
+        )
+
     @app.route("/api/mobile/v1/jobs")
     def mobile_jobs_api():
         if not _authenticated_mobile("read"):
             return jsonify(error="unauthorized mobile device"), 401
         return jsonify(ok=True, jobs=list_jobs_for_api(), summary=get_job_summary(), paused=get_queue_state())
 
+    @app.route("/api/mobile/v1/jobs/<job_id>/action", methods=["POST"])
+    def mobile_job_action_api(job_id):
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        data = request.get_json(silent=True) or {}
+        action = str(data.get("action") or "").strip().lower()
+        if action == "cancel":
+            ok, error = cancel_job(job_id)
+        elif action == "remove":
+            ok, error = remove_queued_job(job_id)
+        elif action in {"up", "down", "top", "bottom"}:
+            ok, error = move_queued_job(job_id, action)
+        elif action == "position":
+            ok, error = move_queued_job_to_position(job_id, data.get("position"))
+        else:
+            return jsonify(error="invalid job action"), 400
+        if not ok:
+            return jsonify(error=error or "job action failed"), 400
+        log_event(
+            "mobile_job_action",
+            f"{device.get('name')} requested {action} for job {job_id}.",
+            level="warn" if action in {"cancel", "remove"} else "info",
+            job_id=job_id,
+        )
+        return jsonify(ok=True, job_id=job_id, action=action, jobs=list_jobs_for_api(), summary=get_job_summary())
+
+    @app.route("/api/mobile/v1/jobs/clear", methods=["POST"])
+    def mobile_jobs_clear_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        data = request.get_json(silent=True) or {}
+        target = str(data.get("target") or "finished").strip().lower()
+        if target == "finished":
+            removed = clear_finished_jobs_core()
+        elif target == "queued":
+            removed = clear_queued_jobs()
+        else:
+            return jsonify(error="target must be finished or queued"), 400
+        log_event("mobile_jobs_clear", f"{device.get('name')} cleared {removed} {target} jobs.", level="warn")
+        return jsonify(ok=True, removed=removed, target=target, summary=get_job_summary())
+
+    @app.route("/api/mobile/v1/library")
+    def mobile_library_api():
+        if not _authenticated_mobile("read"):
+            return jsonify(error="unauthorized mobile device"), 401
+        settings = load_settings()
+        data = _beta_load_library_cache(settings)
+        data["configured"] = bool(_beta_mapped_roots(settings))
+        data["roots"] = [
+            {"label": row.get("label") or row.get("kind") or "Media", "kind": row.get("kind") or ""}
+            for row in _beta_mapped_roots(settings)
+        ]
+        return jsonify(ok=True, library=data)
+
+    @app.route("/api/mobile/v1/library/refresh", methods=["POST"])
+    def mobile_library_refresh_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        status = _beta_run_incremental_auto_scan(reason="bytesqueeze", force=True)
+        log_event("mobile_library_refresh", f"{device.get('name')} refreshed the media library.", level="info")
+        return jsonify(ok=True, status=status, library=_beta_load_library_cache(load_settings()))
+
+    @app.route("/api/mobile/v1/library/queue", methods=["POST"])
+    def mobile_library_queue_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        data = request.get_json(silent=True) or {}
+        raw_paths = data.get("paths")
+        if isinstance(raw_paths, str):
+            raw_paths = [raw_paths]
+        if not isinstance(raw_paths, list):
+            return jsonify(error="missing paths"), 400
+        preset = str(data.get("preset") or "smart").strip().lower()
+        if preset not in {"auto", "1080", "4k", "smart"}:
+            return jsonify(error="invalid preset"), 400
+
+        seen = set()
+        queueable = []
+        skipped = []
+        for raw in raw_paths:
+            src = str(raw or "").strip()
+            if not src or src in seen:
+                continue
+            seen.add(src)
+            reason = ""
+            if not os.path.isfile(src):
+                reason = "not a file"
+            elif not is_allowed_path(src):
+                reason = "path not allowed"
+            elif not src.lower().endswith(VIDEO_EXTS):
+                reason = "not a video"
+            elif os.path.splitext(os.path.basename(src))[0].lower().endswith("-tsd"):
+                reason = "already tagged -TSD"
+            if reason:
+                skipped.append({"path": src, "reason": reason})
+            else:
+                queueable.append(src)
+
+        queued = 0
+        if preset == "smart":
+            for src in queueable:
+                try:
+                    _create_smart_job(src)
+                    queued += 1
+                except Exception as exc:
+                    skipped.append({"path": src, "reason": f"smart preset planning failed: {exc}"})
+        else:
+            jobs_to_create = [
+                (src, guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset)
+                for src in queueable
+            ]
+            queued = int(create_jobs_batch(jobs_to_create) or 0)
+        if queued <= 0:
+            return jsonify(error="no files could be queued", skipped=skipped), 400
+        log_event("mobile_library_queue", f"{device.get('name')} queued {queued} library item(s) with {preset}.", level="info")
+        return jsonify(ok=True, queued=queued, requested=len(seen), skipped=skipped, preset=preset)
+
+    @app.route("/api/mobile/v1/library/tracked_show", methods=["POST"])
+    def mobile_library_tracked_show_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        data = request.get_json(silent=True) or {}
+        tracked = bool(data.get("tracked"))
+        show_id = str(data.get("show_id") or data.get("id") or "").strip() or _beta_show_tracking_key(data)
+        if not show_id:
+            return jsonify(error="missing show id"), 400
+        tracking = _beta_load_tracking()
+        shows = tracking.setdefault("shows", {})
+        if tracked:
+            existing = shows.get(show_id) if isinstance(shows.get(show_id), dict) else {}
+            shows[show_id] = {
+                **existing,
+                "id": show_id,
+                "title": str(data.get("title") or "Unknown Title").strip()[:160],
+                "year": data.get("year"),
+                "tmdb_id": data.get("tmdb_id"),
+                "poster_url": str(data.get("poster_url") or ""),
+                "tracked": True,
+                "known_paths": _beta_clean_path_list(data.get("paths")),
+                "created_at": float(existing.get("created_at") or time.time()),
+                "updated_at": time.time(),
+            }
+        else:
+            shows.pop(show_id, None)
+        _beta_save_tracking(tracking)
+        log_event("mobile_show_tracking", f"{device.get('name')} {'tracked' if tracked else 'untracked'} {data.get('title') or show_id}.", level="info")
+        return jsonify(ok=True, show_id=show_id, tracked=tracked)
+
     @app.route("/api/mobile/v1/nodes")
     def mobile_nodes_api():
         if not _authenticated_mobile("read"):
             return jsonify(error="unauthorized mobile device"), 401
         return jsonify(ok=True, local=local_node_overview(), nodes=list_nodes_public())
+
+    @app.route("/api/mobile/v1/automation", methods=["GET", "POST"])
+    def mobile_automation_api():
+        required_scope = "control" if request.method == "POST" else "read"
+        device = _authenticated_mobile(required_scope)
+        if not device:
+            return jsonify(error="control permission required" if request.method == "POST" else "unauthorized mobile device"), (403 if request.method == "POST" else 401)
+        allowed_keys = {
+            "autopilot_enabled",
+            "autopilot_mode",
+            "autopilot_include_movies",
+            "autopilot_include_shows",
+            "autopilot_min_size_gb",
+            "autopilot_min_savings_percent",
+            "autopilot_batch_limit",
+            "autopilot_max_active_jobs",
+            "autopilot_schedule_start",
+            "autopilot_schedule_end",
+            "beta_auto_scan_enabled",
+            "beta_auto_scan_interval_minutes",
+            "beta_auto_scan_skip_while_encoding",
+            "beta_auto_scan_auto_queue_tracked",
+            "beta_auto_scan_file_stability_enabled",
+            "beta_auto_scan_file_stability_minutes",
+        }
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            action = str(data.get("action") or "save").strip().lower()
+            if action == "run":
+                scan_status = _beta_run_incremental_auto_scan(reason="bytesqueeze-autopilot", force=True)
+                log_event("mobile_autopilot_run", f"{device.get('name')} ran Autopilot.", level="info")
+            elif action == "save":
+                updates = {key: data[key] for key in allowed_keys if key in data}
+                save_settings(updates)
+                scan_status = None
+                log_event("mobile_autopilot_settings", f"{device.get('name')} updated automation settings.", level="info")
+            else:
+                return jsonify(error="action must be save or run"), 400
+        else:
+            scan_status = None
+
+        settings = load_settings()
+        public_settings = {key: settings.get(key) for key in allowed_keys}
+        return jsonify(
+            ok=True,
+            settings=public_settings,
+            status=_autopilot_status_payload(),
+            scan_status=scan_status,
+        )
+
+    @app.route("/api/mobile/v1/storage")
+    def mobile_storage_api():
+        if not _authenticated_mobile("read"):
+            return jsonify(error="unauthorized mobile device"), 401
+        try:
+            limit = max(1, min(500, int(request.args.get("limit") or 100)))
+        except (TypeError, ValueError):
+            limit = 100
+        return jsonify(ok=True, summary=get_storage_summary(), encodes=list_storage_encodes(limit=limit))
+
+    @app.route("/api/mobile/v1/smart_presets", methods=["GET", "POST"])
+    def mobile_smart_presets_api():
+        required_scope = "control" if request.method == "POST" else "read"
+        if not _authenticated_mobile(required_scope):
+            return jsonify(error="control permission required" if request.method == "POST" else "unauthorized mobile device"), (403 if request.method == "POST" else 401)
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            profile_data = data.get("profile") if isinstance(data.get("profile"), dict) else data
+            save_smart_preset_profile(profile_data)
+        return jsonify(ok=True, **public_smart_preset_state())
 
     @app.route("/api/mobile/v1/events")
     def mobile_events_api():
@@ -5586,6 +5847,15 @@ def register_routes(app):
         except (TypeError, ValueError):
             limit = 50
         return jsonify(ok=True, events=load_events(limit=limit))
+
+    @app.route("/api/mobile/v1/events/clear", methods=["POST"])
+    def mobile_events_clear_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        clear_events()
+        log_event("mobile_events_clear", f"{device.get('name')} cleared the event history.", level="warn")
+        return jsonify(ok=True)
 
     @app.route("/api/mobile/v1/queue", methods=["POST"])
     def mobile_queue_control_api():
