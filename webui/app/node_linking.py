@@ -9,6 +9,7 @@ import shutil
 import threading
 import time
 import uuid
+from copy import deepcopy
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
@@ -19,11 +20,22 @@ from .config import DATA_DIR
 NODE_LINK_FILE = os.path.join(DATA_DIR.rstrip("/"), "linked_nodes.json")
 NODE_TRANSFER_FILE = os.path.join(DATA_DIR.rstrip("/"), "node_transfers.json")
 PAIRING_TTL_SECONDS = 15 * 60
+PAIRING_RETRY_GRACE_SECONDS = 5 * 60
 HEARTBEAT_WARN_SECONDS = 2 * 60
 HEARTBEAT_STALE_SECONDS = 10 * 60
 HEARTBEAT_RUNNING_GRACE_SECONDS = 2 * 60 * 60
 HEARTBEAT_MAX_MISSES = 3
 TRANSFER_TTL_SECONDS = 48 * 60 * 60
+NODE_STATE_SCHEMA_VERSION = 2
+NODE_PROTOCOL_VERSION = 2
+NODE_CAPABILITIES = [
+    "heartbeat",
+    "pair-recovery",
+    "remote-transfer",
+    "preset-bundle",
+    "job-dispatch",
+    "diagnostics",
+]
 STATE_LOCK = threading.RLock()
 TRANSFER_LOCK = threading.RLock()
 
@@ -32,8 +44,16 @@ def _now() -> float:
     return time.time()
 
 
+def _safe_int(value, default: int = 0) -> int:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return int(default)
+
+
 def _empty_state() -> dict:
     return {
+        "schema_version": NODE_STATE_SCHEMA_VERSION,
         "local_node_id": uuid.uuid4().hex,
         "local_node_name": "HandBrake TSD Node",
         "pairing": {},
@@ -43,27 +63,11 @@ def _empty_state() -> dict:
     }
 
 
-def _load_state() -> dict:
-    with STATE_LOCK:
-        try:
-            with open(NODE_LINK_FILE, "r", encoding="utf-8") as f:
-                data = json.load(f)
-        except FileNotFoundError:
-            data = _empty_state()
-            _save_state(data)
-            return data
-        except Exception:
-            try:
-                with open(NODE_LINK_FILE + ".bak", "r", encoding="utf-8") as f:
-                    data = json.load(f)
-            except Exception:
-                data = _empty_state()
-                _save_state(data)
-                return data
-
+def _normalize_state(data) -> dict:
     if not isinstance(data, dict):
         data = _empty_state()
 
+    data["schema_version"] = NODE_STATE_SCHEMA_VERSION
     data.setdefault("local_node_id", uuid.uuid4().hex)
     data.setdefault("local_node_name", "HandBrake TSD Node")
     data.setdefault("pairing", {})
@@ -73,17 +77,71 @@ def _load_state() -> dict:
     return data
 
 
-def _save_state(data: dict) -> None:
-    with STATE_LOCK:
-        data["updated_at"] = _now()
-        os.makedirs(DATA_DIR, exist_ok=True)
-        tmp = NODE_LINK_FILE + ".tmp"
+def _load_state_unlocked() -> dict:
+    data = None
+    for path in (NODE_LINK_FILE, NODE_LINK_FILE + ".bak"):
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                candidate = json.load(f)
+            if isinstance(candidate, dict):
+                data = candidate
+                break
+        except FileNotFoundError:
+            continue
+        except Exception:
+            continue
+    return _normalize_state(data if isinstance(data, dict) else _empty_state())
+
+
+def _write_json_atomic(path: str, data: dict) -> None:
+    os.makedirs(os.path.dirname(path) or DATA_DIR, exist_ok=True)
+    tmp = f"{path}.tmp.{os.getpid()}.{threading.get_ident()}"
+    try:
         with open(tmp, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
             f.flush()
             os.fsync(f.fileno())
-        os.replace(tmp, NODE_LINK_FILE)
+        os.replace(tmp, path)
+    finally:
+        try:
+            if os.path.exists(tmp):
+                os.remove(tmp)
+        except OSError:
+            pass
+
+
+def _save_state_unlocked(data: dict) -> None:
+    data["schema_version"] = NODE_STATE_SCHEMA_VERSION
+    data["updated_at"] = _now()
+    _write_json_atomic(NODE_LINK_FILE, data)
+    try:
         shutil.copy2(NODE_LINK_FILE, NODE_LINK_FILE + ".bak")
+    except OSError:
+        # The primary file is already durable. A backup failure on a NAS must
+        # not turn a successful pairing or heartbeat into an HTTP 500.
+        pass
+
+
+def _load_state() -> dict:
+    with STATE_LOCK:
+        data = _load_state_unlocked()
+        if not os.path.exists(NODE_LINK_FILE):
+            _save_state_unlocked(data)
+        return deepcopy(data)
+
+
+def _save_state(data: dict) -> None:
+    with STATE_LOCK:
+        _save_state_unlocked(_normalize_state(data))
+
+
+def _mutate_state(mutator):
+    """Run one read/modify/write transaction under the process state lock."""
+    with STATE_LOCK:
+        data = _load_state_unlocked()
+        result = mutator(data)
+        _save_state_unlocked(data)
+        return deepcopy(result)
 
 
 def local_node_info() -> dict:
@@ -94,11 +152,25 @@ def local_node_info() -> dict:
     }
 
 
+def node_discovery() -> dict:
+    local = local_node_info()
+    return {
+        "service": "handbrake-tsd-node",
+        "node_id": local["id"],
+        "node_name": local["name"],
+        "protocol_version": NODE_PROTOCOL_VERSION,
+        "state_schema_version": NODE_STATE_SCHEMA_VERSION,
+        "capabilities": list(NODE_CAPABILITIES),
+        "pairing": {
+            "code_format": "XXXXX-XXXXX",
+            "idempotent_retry_seconds": PAIRING_RETRY_GRACE_SECONDS,
+        },
+    }
+
+
 def set_local_node_name(name: str) -> dict:
-    data = _load_state()
     value = str(name or "").strip()[:80] or "HandBrake TSD Node"
-    data["local_node_name"] = value
-    _save_state(data)
+    _mutate_state(lambda data: data.update({"local_node_name": value}))
     return local_node_info()
 
 
@@ -137,117 +209,160 @@ def heartbeat_allowed_age(row: dict) -> int:
 
 
 def create_pairing_code(ttl_seconds: int = PAIRING_TTL_SECONDS) -> dict:
-    data = _load_state()
-    code = secrets.token_urlsafe(10)
+    # Human-friendly Crockford-style code: easy to type and avoids 0/O/1/I.
+    alphabet = "23456789ABCDEFGHJKLMNPQRSTUVWXYZ"
+    raw = "".join(secrets.choice(alphabet) for _ in range(10))
+    code = f"{raw[:5]}-{raw[5:]}"
     expires_at = _now() + max(60, min(3600, int(ttl_seconds or PAIRING_TTL_SECONDS)))
-    data["pairing"] = {
-        "code_hash": _hash_pairing_code(code),
-        "expires_at": expires_at,
-        "created_at": _now(),
-        "used_at": 0,
-    }
-    _save_state(data)
+
+    def apply(data):
+        data["pairing"] = {
+            "code_hash": _hash_pairing_code(code),
+            "expires_at": expires_at,
+            "created_at": _now(),
+            "used_at": 0,
+            "used_by_controller_id": "",
+            "attempt_count": 0,
+        }
+
+    _mutate_state(apply)
     return {"code": code, "expires_at": expires_at}
 
 
 def accept_pairing(code: str, controller: dict) -> dict:
-    data = _load_state()
-    pairing = data.get("pairing") if isinstance(data.get("pairing"), dict) else {}
-    now = _now()
-    expected = pairing.get("code_hash") or ""
-    if not expected or not hmac.compare_digest(expected, _hash_pairing_code(code)):
-        raise ValueError("invalid pairing code")
-    if float(pairing.get("expires_at") or 0) < now:
-        raise ValueError("pairing code expired")
-    if pairing.get("used_at"):
-        raise ValueError("pairing code already used")
-
-    controller_id = str(controller.get("controller_id") or controller.get("id") or "").strip() or uuid.uuid4().hex
+    normalized_code = str(code or "").strip().upper()
+    controller_id = str(controller.get("controller_id") or controller.get("id") or "").strip()
+    if not controller_id:
+        raise ValueError("controller identity is required")
     controller_name = str(controller.get("controller_name") or controller.get("name") or "Controller").strip()[:80]
     controller_url = str(controller.get("controller_url") or controller.get("url") or "").strip().rstrip("/")[:300]
     allowed_ips = controller.get("allowed_ips")
     if not isinstance(allowed_ips, list):
         allowed_ips = []
 
-    token = secrets.token_urlsafe(32)
-    recovery_token = secrets.token_urlsafe(40)
-    trusted = data.setdefault("trusted_controllers", {})
-    trusted[controller_id] = {
-        "id": controller_id,
-        "name": controller_name,
-        "token": token,
-        "recovery_token_hash": _hash_secret(recovery_token),
-        "url": controller_url,
-        "paired_at": now,
-        "last_seen": 0,
-        "allowed_ips": [str(ip).strip() for ip in allowed_ips if str(ip).strip()][:20],
-    }
-    pairing["used_at"] = now
-    data["pairing"] = pairing
-    _save_state(data)
+    controller_protocol = max(1, _safe_int(controller.get("protocol_version"), 1))
 
-    return {
-        "worker_id": data["local_node_id"],
-        "worker_name": data.get("local_node_name") or "HandBrake TSD Node",
-        "token": token,
-        "recovery_token": recovery_token,
-        "controller_url": controller_url,
-        "paired_at": now,
-    }
+    def apply(data):
+        pairing = data.get("pairing") if isinstance(data.get("pairing"), dict) else {}
+        now = _now()
+        expected = pairing.get("code_hash") or ""
+        if not expected or not hmac.compare_digest(expected, _hash_pairing_code(normalized_code)):
+            raise ValueError("invalid pairing code")
+        if float(pairing.get("expires_at") or 0) < now:
+            raise ValueError("pairing code expired")
+
+        used_at = float(pairing.get("used_at") or 0)
+        used_by = str(pairing.get("used_by_controller_id") or "")
+        retrying_same_controller = bool(
+            used_at
+            and used_by == controller_id
+            and now - used_at <= PAIRING_RETRY_GRACE_SECONDS
+        )
+        if used_at and not retrying_same_controller:
+            raise ValueError("pairing code already used")
+
+        token = secrets.token_urlsafe(32)
+        recovery_token = secrets.token_urlsafe(40)
+        trusted = data.setdefault("trusted_controllers", {})
+        existing = trusted.get(controller_id) if isinstance(trusted.get(controller_id), dict) else {}
+        paired_at = float(existing.get("paired_at") or now)
+        trusted[controller_id] = {
+            **existing,
+            "id": controller_id,
+            "name": controller_name,
+            "token": token,
+            "recovery_token_hash": _hash_secret(recovery_token),
+            "url": controller_url,
+            "paired_at": paired_at,
+            "last_seen": 0,
+            "allowed_ips": [str(ip).strip() for ip in allowed_ips if str(ip).strip()][:20],
+            "protocol_version": min(NODE_PROTOCOL_VERSION, controller_protocol),
+            "last_pair_request_id": str(controller.get("request_id") or "")[:80],
+        }
+        pairing.update({
+            "used_at": used_at or now,
+            "used_by_controller_id": controller_id,
+            "last_retry_at": now if retrying_same_controller else 0,
+            "attempt_count": int(pairing.get("attempt_count") or 0) + 1,
+        })
+        data["pairing"] = pairing
+        return {
+            "worker_id": data["local_node_id"],
+            "worker_name": data.get("local_node_name") or "HandBrake TSD Node",
+            "token": token,
+            "recovery_token": recovery_token,
+            "controller_url": controller_url,
+            "paired_at": paired_at,
+            "protocol_version": NODE_PROTOCOL_VERSION,
+            "capabilities": NODE_CAPABILITIES,
+            "retry_recovered": retrying_same_controller,
+        }
+
+    return _mutate_state(apply)
 
 
 def recover_pairing(controller: dict) -> dict:
     """Repair a paired controller session without a new pairing code."""
-    data = _load_state()
     controller_id = str(controller.get("controller_id") or controller.get("id") or "").strip()
-    trusted = data.setdefault("trusted_controllers", {})
-    row = trusted.get(controller_id)
-    if not controller_id or not isinstance(row, dict):
-        raise ValueError("controller is not paired")
+    if not controller_id:
+        raise ValueError("controller identity is required")
 
-    supplied_recovery = str(controller.get("recovery_token") or "").strip()
-    supplied_session = str(controller.get("session_token") or "").strip()
-    expected_recovery = str(row.get("recovery_token_hash") or "")
-    recovery_ok = bool(expected_recovery and supplied_recovery and hmac.compare_digest(expected_recovery, _hash_secret(supplied_recovery)))
-    session_ok = bool(supplied_session and hmac.compare_digest(str(row.get("token") or ""), supplied_session))
-    if not recovery_ok and not session_ok:
-        raise ValueError("pair recovery credential rejected")
+    def apply(data):
+        trusted = data.setdefault("trusted_controllers", {})
+        row = trusted.get(controller_id)
+        if not isinstance(row, dict):
+            raise ValueError("controller is not paired")
 
-    new_token = secrets.token_urlsafe(32)
-    new_recovery = supplied_recovery if recovery_ok else secrets.token_urlsafe(40)
-    controller_url = str(controller.get("controller_url") or row.get("url") or "").strip().rstrip("/")[:300]
-    row.update({
-        "token": new_token,
-        "recovery_token_hash": _hash_secret(new_recovery),
-        "url": controller_url,
-        "last_seen": _now(),
-        "recovered_at": _now(),
-    })
-    trusted[controller_id] = row
-    _save_state(data)
-    return {
-        "worker_id": data.get("local_node_id"),
-        "worker_name": data.get("local_node_name") or "HandBrake TSD Node",
-        "token": new_token,
-        "recovery_token": new_recovery,
-        "controller_url": controller_url,
-        "recovered_at": row["recovered_at"],
-    }
+        supplied_recovery = str(controller.get("recovery_token") or "").strip()
+        supplied_session = str(controller.get("session_token") or "").strip()
+        expected_recovery = str(row.get("recovery_token_hash") or "")
+        recovery_ok = bool(expected_recovery and supplied_recovery and hmac.compare_digest(expected_recovery, _hash_secret(supplied_recovery)))
+        session_ok = bool(supplied_session and hmac.compare_digest(str(row.get("token") or ""), supplied_session))
+        if not recovery_ok and not session_ok:
+            raise ValueError("pair recovery credential rejected")
+
+        new_token = secrets.token_urlsafe(32)
+        new_recovery = supplied_recovery if recovery_ok else secrets.token_urlsafe(40)
+        now = _now()
+        controller_url = str(controller.get("controller_url") or row.get("url") or "").strip().rstrip("/")[:300]
+        row.update({
+            "token": new_token,
+            "recovery_token_hash": _hash_secret(new_recovery),
+            "url": controller_url,
+            "last_seen": now,
+            "recovered_at": now,
+            "protocol_version": min(NODE_PROTOCOL_VERSION, max(1, _safe_int(controller.get("protocol_version"), row.get("protocol_version") or 1))),
+        })
+        trusted[controller_id] = row
+        return {
+            "worker_id": data.get("local_node_id"),
+            "worker_name": data.get("local_node_name") or "HandBrake TSD Node",
+            "token": new_token,
+            "recovery_token": new_recovery,
+            "controller_url": controller_url,
+            "recovered_at": now,
+            "protocol_version": NODE_PROTOCOL_VERSION,
+            "capabilities": list(NODE_CAPABILITIES),
+        }
+
+    return _mutate_state(apply)
 
 
 def enable_pair_recovery(controller_id: str) -> str:
-    with STATE_LOCK:
-        data = _load_state()
+    controller_id = str(controller_id or "")
+
+    def apply(data):
         trusted = data.setdefault("trusted_controllers", {})
-        row = trusted.get(str(controller_id or ""))
+        row = trusted.get(controller_id)
         if not isinstance(row, dict):
             raise ValueError("controller is not paired")
         recovery_token = secrets.token_urlsafe(40)
         row["recovery_token_hash"] = _hash_secret(recovery_token)
         row["recovery_enabled_at"] = _now()
-        trusted[str(controller_id)] = row
-        _save_state(data)
+        trusted[controller_id] = row
         return recovery_token
+
+    return _mutate_state(apply)
 
 
 def public_node(row: dict) -> dict:
@@ -293,6 +408,10 @@ def public_node(row: dict) -> dict:
         "paired_controllers": row.get("paired_controllers") if isinstance(row.get("paired_controllers"), list) else [],
         "jobs": row.get("jobs") if isinstance(row.get("jobs"), list) else [],
         "prediction_profile": row.get("prediction_profile") if isinstance(row.get("prediction_profile"), dict) else {},
+        "protocol_version": max(1, _safe_int(row.get("protocol_version"), 1)),
+        "capabilities": row.get("capabilities") if isinstance(row.get("capabilities"), list) else [],
+        "last_success_at": row.get("last_success_at") or 0,
+        "consecutive_failures": _safe_int(row.get("consecutive_failures"), heartbeat_misses),
     }
 
 
@@ -310,6 +429,7 @@ def public_trusted_controller(row: dict) -> dict:
         "paired_at": row.get("paired_at") or 0,
         "last_seen": last_seen,
         "allowed_ips": row.get("allowed_ips") if isinstance(row.get("allowed_ips"), list) else [],
+        "protocol_version": max(1, _safe_int(row.get("protocol_version"), 1)),
     }
 
 
@@ -366,44 +486,48 @@ def get_node_private(node_id: str) -> dict | None:
 
 
 def save_node(row: dict) -> dict:
-    with STATE_LOCK:
-        data = _load_state()
-        node_id = str(row.get("id") or "").strip()
-        if not node_id:
-            raise ValueError("missing node id")
+    node_id = str(row.get("id") or "").strip()
+    if not node_id:
+        raise ValueError("missing node id")
+
+    def apply(data):
         nodes = data.setdefault("nodes", {})
         existing = nodes.get(node_id) if isinstance(nodes.get(node_id), dict) else {}
         merged = {**existing, **row, "id": node_id}
         nodes[node_id] = merged
-        _save_state(data)
         return merged
+
+    return _mutate_state(apply)
 
 
 def delete_node(node_id: str) -> bool:
-    data = _load_state()
-    nodes = data.setdefault("nodes", {})
-    existed = str(node_id or "") in nodes
-    nodes.pop(str(node_id or ""), None)
-    _save_state(data)
-    return existed
+    node_id = str(node_id or "")
+
+    def apply(data):
+        nodes = data.setdefault("nodes", {})
+        existed = node_id in nodes
+        nodes.pop(node_id, None)
+        return existed
+
+    return _mutate_state(apply)
 
 
 def delete_nodes_by_url(url: str, *, keep_id: str = "") -> int:
     value = str(url or "").strip().rstrip("/")
     if not value:
         return 0
-    data = _load_state()
-    nodes = data.setdefault("nodes", {})
-    removed = 0
-    for node_id, row in list(nodes.items()):
-        if str(node_id) == str(keep_id or ""):
-            continue
-        if isinstance(row, dict) and str(row.get("url") or "").strip().rstrip("/") == value:
-            nodes.pop(node_id, None)
-            removed += 1
-    if removed:
-        _save_state(data)
-    return removed
+    def apply(data):
+        nodes = data.setdefault("nodes", {})
+        removed = 0
+        for node_id, row in list(nodes.items()):
+            if str(node_id) == str(keep_id or ""):
+                continue
+            if isinstance(row, dict) and str(row.get("url") or "").strip().rstrip("/") == value:
+                nodes.pop(node_id, None)
+                removed += 1
+        return removed
+
+    return _mutate_state(apply)
 
 
 def trusted_controller(controller_id: str) -> dict | None:
@@ -425,22 +549,21 @@ def trusted_controller_by_url(url: str) -> dict | None:
 
 
 def update_trusted_controller(controller_id: str, updates: dict) -> None:
-    with STATE_LOCK:
-        data = _load_state()
+    controller_id = str(controller_id or "")
+
+    def apply(data):
         trusted = data.setdefault("trusted_controllers", {})
-        row = trusted.get(str(controller_id or ""))
+        row = trusted.get(controller_id)
         if not isinstance(row, dict):
             return
         row.update(updates)
-        trusted[str(controller_id)] = row
-        _save_state(data)
+        trusted[controller_id] = row
+
+    _mutate_state(apply)
 
 
 def delete_trusted_controller(controller_id: str) -> None:
-    data = _load_state()
-    trusted = data.setdefault("trusted_controllers", {})
-    trusted.pop(str(controller_id or ""), None)
-    _save_state(data)
+    _mutate_state(lambda data: data.setdefault("trusted_controllers", {}).pop(str(controller_id or ""), None))
 
 
 def normalize_url(url: str) -> str:
@@ -451,7 +574,15 @@ def normalize_url(url: str) -> str:
     return value
 
 
-def _request_json(url: str, *, method: str = "GET", body: dict | None = None, headers: dict | None = None, timeout: int = 8) -> dict:
+def _request_json(
+    url: str,
+    *,
+    method: str = "GET",
+    body: dict | None = None,
+    headers: dict | None = None,
+    timeout: int = 8,
+    retries: int = 0,
+) -> dict:
     body_bytes = b""
     if body is not None:
         body_bytes = json.dumps(body).encode("utf-8")
@@ -465,30 +596,51 @@ def _request_json(url: str, *, method: str = "GET", body: dict | None = None, he
             **(headers or {}),
         },
     )
-    try:
-        with urlopen(req, timeout=timeout) as res:
-            payload = json.loads(res.read().decode("utf-8", errors="replace"))
-    except HTTPError as e:
+    payload = {}
+    for attempt in range(max(0, int(retries)) + 1):
         try:
-            payload = json.loads(e.read().decode("utf-8", errors="replace"))
-        except Exception:
-            payload = {"error": str(e)}
-        raise RuntimeError(payload.get("error") or str(e))
-    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
-        raise RuntimeError(str(e))
+            with urlopen(req, timeout=timeout) as res:
+                payload = json.loads(res.read().decode("utf-8", errors="replace"))
+            break
+        except HTTPError as e:
+            try:
+                error_payload = json.loads(e.read().decode("utf-8", errors="replace"))
+            except Exception:
+                error_payload = {"error": str(e)}
+            raise RuntimeError(error_payload.get("error") or str(e))
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError) as e:
+            if attempt >= max(0, int(retries)):
+                reason = getattr(e, "reason", e)
+                raise RuntimeError(f"node request failed: {reason}")
+            time.sleep(0.25 * (attempt + 1))
     return payload if isinstance(payload, dict) else {}
 
 
 def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: list | None = None, transfer_mode: str = "local", controller_url: str = "", remote_temp_dir: str = "") -> dict:
     url = normalize_url(worker_url)
     local = local_node_info()
+    try:
+        discovery = _request_json(f"{url}/api/node/discovery", timeout=5, retries=1)
+    except RuntimeError:
+        # Protocol v1 workers predate discovery and remain pairable.
+        discovery = {"protocol_version": 1, "capabilities": []}
+    request_id = uuid.uuid4().hex
+    raw_code = str(code or "").strip()
+    negotiated_protocol = max(1, _safe_int(discovery.get("protocol_version"), 1))
     payload = {
-        "code": str(code or "").strip(),
+        # Legacy v1 codes were case-sensitive URL-safe tokens. v2 uses the
+        # upper-case human format shown by discovery.
+        "code": raw_code.upper() if negotiated_protocol >= 2 else raw_code,
         "controller_id": local["id"],
         "controller_name": local["name"],
         "controller_url": str(controller_url or "").strip().rstrip("/"),
+        "protocol_version": NODE_PROTOCOL_VERSION,
+        "capabilities": list(NODE_CAPABILITIES),
+        "request_id": request_id,
     }
-    data = _request_json(f"{url}/api/node/pair/accept", method="POST", body=payload, timeout=10)
+    # v2 pairing is idempotent for this controller during a short recovery
+    # window, so a lost response can safely be retried.
+    data = _request_json(f"{url}/api/node/pair/accept", method="POST", body=payload, timeout=10, retries=1)
     token = str(data.get("token") or "")
     recovery_token = str(data.get("recovery_token") or "")
     worker_id = str(data.get("worker_id") or data.get("id") or "").strip()
@@ -515,6 +667,12 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
         "transfer_mode": normalize_transfer_mode(transfer_mode),
         "controller_url": stored_controller_url,
         "remote_temp_dir": str(remote_temp_dir or "").strip()[:500],
+        "protocol_version": max(1, _safe_int(data.get("protocol_version"), discovery.get("protocol_version") or 1)),
+        "capabilities": data.get("capabilities") if isinstance(data.get("capabilities"), list) else (
+            discovery.get("capabilities") if isinstance(discovery.get("capabilities"), list) else []
+        ),
+        "pair_request_id": request_id,
+        "pair_retry_recovered": bool(data.get("retry_recovered")),
     }
     delete_nodes_by_url(url, keep_id=worker_id)
     save_node(row)
@@ -530,6 +688,7 @@ def recover_worker_session(row: dict, *, controller_url: str = "") -> dict:
         "controller_url": str(controller_url or row.get("controller_url") or "").strip().rstrip("/"),
         "recovery_token": str(row.get("recovery_token") or ""),
         "session_token": str(row.get("token") or ""),
+        "protocol_version": NODE_PROTOCOL_VERSION,
     }
     data = _request_json(f"{worker_url}/api/node/pair/recover", method="POST", body=payload, timeout=12)
     token = str(data.get("token") or "").strip()
@@ -545,6 +704,8 @@ def recover_worker_session(row: dict, *, controller_url: str = "") -> dict:
         "heartbeat_misses": 0,
         "recovered_at": _now(),
         "status": "reconnecting",
+        "protocol_version": max(1, _safe_int(data.get("protocol_version"), row.get("protocol_version") or 1)),
+        "capabilities": data.get("capabilities") if isinstance(data.get("capabilities"), list) else row.get("capabilities", []),
     }
     return save_node(updated)
 

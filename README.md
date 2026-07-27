@@ -20,7 +20,22 @@ Completed output files are tagged with `-TSD`, short for "Transcoded", so the ap
 - Intel QSV, software encoders, HEVC, H.264, and AV1 planning support
 - Multi-node controller/worker encoding
 - Remote-transfer mode for workers that do not have media drives mounted
+- Bounded Autopilot with observe/manage modes, schedules, queue caps, and explained decisions
+- Transactional node protocol v2 with safe pairing retries, automatic session recovery, and diagnostics
+- Versioned mobile API foundation with hashed tokens, refresh, scopes, and device revocation
 - Safer cleanup behavior for failed or canceled jobs
+
+## Release 2.0 Refresh
+
+The 2.0 control center is designed for set-it-up-and-let-it-run operation without giving automation unlimited control:
+
+- **Observe mode** scans and explains what it would queue without changing the queue.
+- **Manage mode** queues only stable, allowed media within the configured schedule, batch limit, and maximum active-job count.
+- **Readiness checks** call out missing library mappings, presets, durable storage, hardware acceleration, and worker availability.
+- **Decision history** shows why each item was eligible, skipped, or left waiting.
+- **Production runtime** uses a single Gunicorn process with threaded HTTP handling so queue and scheduler ownership stays deterministic.
+
+Autopilot is disabled and set to Observe by default. Start with a few manual test encodes so prediction history can learn your presets and hardware.
 
 ## Why Use It
 
@@ -80,13 +95,16 @@ Recommended first setup:
 5. Add TMDb credentials if you want posters.
 6. Run a Library scan.
 7. Queue a few test encodes.
+8. Open **Settings → Automation & Apps**, review readiness, and enable Autopilot in Observe mode.
 
 ## Core Pages
 
-### Jobs
+### Dashboard
 
-The Jobs page is the main encode dashboard.
+The Dashboard is the main operations and encode view.
 
+- Review Autopilot readiness, schedule, worker capacity, and potential savings
+- Run a bounded decision cycle and jump to its policy settings
 - Browse folders and video files
 - Select a file and encode it with presets
 - Open a file in the Size Wizard
@@ -126,6 +144,19 @@ Advanced Mode keeps the full technical surface available:
 
 The wizard also includes AI-assisted recommendations. It can suggest a best overall plan, a best-compression plan, a faster plan, or a 1080p space-saving plan for large 4K files.
 
+Smart Presets add a learning loop on top of that safe planner:
+
+- Choose the main goal, playback compatibility, hardware preference, and audio strategy
+- Always retain every matching English and Spanish audio and subtitle track
+- Copy original audio bit-for-bit, or save space with E-AC3 5.1 at 640 kbps while retaining surround playback
+- Generate three source-aware candidates ranked by quality, savings, speed, compatibility, and prior feedback
+- Apply a candidate and inspect the same short HandBrake encode that a real job will use
+- Approve the preview or mark quality, size, speed, or compatibility concerns
+- Keep all preference history local in `data/smart_presets.json`
+- Unlock automatic selection only after the configured minimum number of consistent reviews
+
+The learned model is intentionally explainable. It uses similar source type, HDR state, resolution, codec, encoder family, target ratio, and output resolution to weight past reviews. The deterministic Size Wizard remains authoritative over HandBrake arguments, while the AI planner and optional local model help evaluate and explain the safe choices. When learning is ready, **Smart learned preset** is available from Jobs and Library, and Autopilot Manage mode can choose it automatically.
+
 ### Library
 
 The Library page scans the movie and show folders you map in Settings.
@@ -153,6 +184,8 @@ Settings are split into cleaner sections:
 - Library folder mapping
 - Poster metadata
 - Auto scan
+- Autopilot policy and decision status
+- Companion-app access and device revocation
 - Linked nodes
 - Events
 - Storage savings
@@ -191,6 +224,20 @@ By default, it is designed to run every 30 minutes. On each pass it:
 
 This keeps normal scans lightweight.
 
+## Autopilot
+
+Autopilot reuses the incremental Library index and existing file-safety checks. A decision cycle:
+
+1. Scans only mapped media roots and ignores `-TSD` outputs.
+2. Waits for new or changed files to pass the configured stability window.
+3. Excludes files already owned by queued or running jobs.
+4. Applies movie/show, minimum-size, and predicted-savings policy rules.
+5. Sorts eligible work by predicted savings and source size.
+6. In Observe mode, records recommendations only.
+7. In Manage mode, queues no more than the per-scan limit and never exceeds the active-job cap.
+
+Autopilot does not weaken the existing output verification or original-file protections.
+
 ## Multi-Node Encoding
 
 HandBrake TSD Helper can link multiple app containers together.
@@ -198,12 +245,30 @@ HandBrake TSD Helper can link multiple app containers together.
 - One node acts as the controller
 - Other nodes act as workers
 - Workers pair with one-time codes
+- Pairing is idempotently recoverable for the same controller when a network response is lost
+- Node state writes are serialized and atomic, with backup recovery
+- Protocol discovery negotiates capabilities while remaining compatible with older workers
 - Paired nodes use trusted tokens for commands
 - Workers report heartbeat, status, progress, completed jobs, and errors
 - Nodes can reconnect after normal offline periods
 - Prediction history is tracked per worker
 
 The controller can send jobs to the local node, the best available worker, or a selected worker.
+
+Use `GET /api/nodes/diagnostics` to inspect protocol, monitor health, heartbeat failures, and linked-node totals.
+
+## Android Companion API Foundation
+
+Release 2.0 includes the backend contract for a future Android companion app; it does **not** include the Android app itself.
+
+- Discovery: `GET /api/mobile/v1/discovery`
+- Pairing: `POST /api/mobile/v1/pair`
+- Token rotation: `POST /api/mobile/v1/token/refresh`
+- Read endpoints for status, jobs, nodes, and events
+- Scoped queue pause/resume for devices granted control permission
+- Browser-admin controls for creating pairing codes and revoking devices
+
+Access and refresh tokens are returned only to the client and stored on the server as hashes. Keep the web UI and mobile API on a trusted LAN or behind your own authenticated reverse proxy; the main web UI does not yet provide user accounts.
 
 ### Worker Modes
 
@@ -308,8 +373,10 @@ data/beta_library_cache.json
 data/beta_scan_index.json
 data/beta_tracked_shows.json
 data/beta_autoscan_status.json
-data/node_linking.json
+data/linked_nodes.json
+data/mobile_devices.json
 data/wizard_presets.json
+data/smart_presets.json
 data/logs/
 ```
 
@@ -337,6 +404,7 @@ handbrake-tsd-helper/
 |       |-- node_linking.py
 |       |-- routes.py
 |       |-- settings.py
+|       |-- smart_presets.py
 |       |-- storage_stats.py
 |       |-- wizard_llm.py
 |       |-- static/
@@ -401,10 +469,10 @@ After larger UI updates, hard-refresh the browser.
 Current focus:
 
 - Improve Size Wizard recommendations
-- Improve node reconnect and long-running worker reliability
 - Polish Library workflows for shows, seasons, and episodes
 - Expand hardware encoder support
-- Add authentication and permissions
+- Build the Android companion client on top of the mobile API v1 contract
+- Add web user authentication and per-user permissions
 - Add notification hooks
 
 ## Contributing

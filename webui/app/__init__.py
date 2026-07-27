@@ -8,6 +8,8 @@ This file:
 - Registers all HTTP routes
 """
 
+import os
+
 from flask import Flask
 
 # Import initialization functions
@@ -27,8 +29,9 @@ def create_app():
         Flask app instance
     """
     app = Flask(__name__)
-    app.config["TEMPLATES_AUTO_RELOAD"] = True
-    app.jinja_env.auto_reload = True
+    development = os.environ.get("FLASK_DEBUG") == "1" or os.environ.get("FLASK_ENV") == "development"
+    app.config["TEMPLATES_AUTO_RELOAD"] = development
+    app.jinja_env.auto_reload = development
 
     # 1️⃣ Load preset configuration into memory
     load_preset_config()

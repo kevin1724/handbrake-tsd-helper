@@ -11,6 +11,8 @@ Settings are stored as JSON on disk in settings.json.
 
 import json
 import os
+import shutil
+import threading
 
 from .config import DATA_DIR, ROOTS
 from .cpu_profiles import CPU_PROFILES  # NEW
@@ -58,12 +60,27 @@ DEFAULT_SETTINGS = {
     "beta_auto_scan_file_stability_enabled": True,
     "beta_auto_scan_file_stability_minutes": 10,
 
+    # Autopilot is intentionally bounded and defaults to observe-only. In
+    # manage mode it can queue stable, eligible files up to the configured
+    # per-run and active-job limits.
+    "autopilot_enabled": False,
+    "autopilot_mode": "observe",
+    "autopilot_include_movies": True,
+    "autopilot_include_shows": False,
+    "autopilot_min_size_gb": 2.0,
+    "autopilot_min_savings_percent": 10.0,
+    "autopilot_batch_limit": 3,
+    "autopilot_max_active_jobs": 5,
+    "autopilot_schedule_start": "00:00",
+    "autopilot_schedule_end": "23:59",
+
     # Worker-side folder used for remote-transfer source downloads and
     # temporary encodes. Blank means DATA_DIR/node_transfer_work.
     "remote_transfer_temp_dir": "",
 }
 
 _settings_cache: dict | None = None
+SETTINGS_LOCK = threading.RLock()
 
 
 def _ensure_dict(obj) -> dict:
@@ -136,31 +153,58 @@ def _normalize_beta_media_folders(value) -> dict:
 def load_settings() -> dict:
     """Load settings from disk (with in-memory caching)."""
     global _settings_cache
-    if _settings_cache is not None:
-        return _settings_cache
+    with SETTINGS_LOCK:
+        if _settings_cache is not None:
+            return _settings_cache
 
+        data = {}
+        for path in (SETTINGS_FILE, SETTINGS_FILE + ".bak"):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    candidate = json.load(f)
+                if isinstance(candidate, dict):
+                    data = candidate
+                    break
+            except FileNotFoundError:
+                continue
+            except Exception as e:  # just logging
+                print(f"[WARN] Failed to load {os.path.basename(path)}: {e}", flush=True)
+
+        data = _ensure_dict(data)
+        merged = DEFAULT_SETTINGS.copy()
+        merged.update(data)
+        merged["beta_media_folders"] = _normalize_beta_media_folders(merged.get("beta_media_folders"))
+        _settings_cache = merged
+        return merged
+
+
+def _bounded_number(value, default, minimum, maximum, *, integer: bool = False):
     try:
-        with open(SETTINGS_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        data = {}
-    except Exception as e:  # just logging
-        print(f"[WARN] Failed to load settings.json: {e}", flush=True)
-        data = {}
-
-    data = _ensure_dict(data)
-    merged = DEFAULT_SETTINGS.copy()
-    merged.update(data)
-    merged["beta_media_folders"] = _normalize_beta_media_folders(merged.get("beta_media_folders"))
-    _settings_cache = merged
-    return merged
+        parsed = int(value) if integer else float(value)
+    except (TypeError, ValueError):
+        parsed = default
+    parsed = max(minimum, min(maximum, parsed))
+    return int(parsed) if integer else round(float(parsed), 2)
 
 
-def save_settings(new_values: dict) -> dict:
+def _clock_value(value, default: str) -> str:
+    text = str(value or "").strip()
+    try:
+        hour_text, minute_text = text.split(":", 1)
+        hour, minute = int(hour_text), int(minute_text)
+        if 0 <= hour <= 23 and 0 <= minute <= 59:
+            return f"{hour:02d}:{minute:02d}"
+    except (TypeError, ValueError):
+        pass
+    return default
+
+
+def _save_settings_unlocked(new_values: dict) -> dict:
     """Merge and persist settings to disk, returning the updated dict."""
     global _settings_cache
-    base = load_settings().copy()
-    new_values = _ensure_dict(new_values)
+    with SETTINGS_LOCK:
+        base = load_settings().copy()
+        new_values = _ensure_dict(new_values)
 
     # ------------------------------------------------------------------
     # HandBrake threads
@@ -307,6 +351,33 @@ def save_settings(new_values: dict) -> dict:
     base["beta_auto_scan_file_stability_minutes"] = max(1, min(240, stability_minutes))
 
     # ------------------------------------------------------------------
+    # Bounded Autopilot policy
+    # ------------------------------------------------------------------
+    base["autopilot_enabled"] = bool(new_values.get("autopilot_enabled", base.get("autopilot_enabled", False)))
+    mode = str(new_values.get("autopilot_mode", base.get("autopilot_mode", "observe"))).strip().lower()
+    base["autopilot_mode"] = mode if mode in {"observe", "manage"} else "observe"
+    base["autopilot_include_movies"] = bool(new_values.get("autopilot_include_movies", base.get("autopilot_include_movies", True)))
+    base["autopilot_include_shows"] = bool(new_values.get("autopilot_include_shows", base.get("autopilot_include_shows", False)))
+    base["autopilot_min_size_gb"] = _bounded_number(
+        new_values.get("autopilot_min_size_gb", base.get("autopilot_min_size_gb", 2.0)), 2.0, 0.1, 1000.0
+    )
+    base["autopilot_min_savings_percent"] = _bounded_number(
+        new_values.get("autopilot_min_savings_percent", base.get("autopilot_min_savings_percent", 10.0)), 10.0, 0.0, 95.0
+    )
+    base["autopilot_batch_limit"] = _bounded_number(
+        new_values.get("autopilot_batch_limit", base.get("autopilot_batch_limit", 3)), 3, 1, 50, integer=True
+    )
+    base["autopilot_max_active_jobs"] = _bounded_number(
+        new_values.get("autopilot_max_active_jobs", base.get("autopilot_max_active_jobs", 5)), 5, 1, 100, integer=True
+    )
+    base["autopilot_schedule_start"] = _clock_value(
+        new_values.get("autopilot_schedule_start", base.get("autopilot_schedule_start", "00:00")), "00:00"
+    )
+    base["autopilot_schedule_end"] = _clock_value(
+        new_values.get("autopilot_schedule_end", base.get("autopilot_schedule_end", "23:59")), "23:59"
+    )
+
+    # ------------------------------------------------------------------
     # Remote transfer worker temp folder
     # ------------------------------------------------------------------
     remote_temp = new_values.get("remote_transfer_temp_dir", base.get("remote_transfer_temp_dir", ""))
@@ -317,9 +388,24 @@ def save_settings(new_values: dict) -> dict:
     # ------------------------------------------------------------------
     _settings_cache = base
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
+        os.makedirs(os.path.dirname(SETTINGS_FILE) or DATA_DIR, exist_ok=True)
+        tmp = f"{SETTINGS_FILE}.tmp.{os.getpid()}.{threading.get_ident()}"
+        with open(tmp, "w", encoding="utf-8") as f:
             json.dump(base, f, indent=2)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, SETTINGS_FILE)
+        try:
+            shutil.copy2(SETTINGS_FILE, SETTINGS_FILE + ".bak")
+        except OSError:
+            pass
     except Exception as e:  # just logging
         print(f"[WARN] Failed to save settings.json: {e}", flush=True)
 
     return base
+
+
+def save_settings(new_values: dict) -> dict:
+    """Serialize settings updates so concurrent requests cannot lose fields."""
+    with SETTINGS_LOCK:
+        return _save_settings_unlocked(new_values)

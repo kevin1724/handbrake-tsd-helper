@@ -226,7 +226,7 @@
       </span>
     </a>
     <div class="nav-links">
-      <a href="/" class="nav-link nav-jobs">Jobs</a>
+      <a href="/" class="nav-link nav-jobs">Dashboard</a>
       <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
       <a href="/beta" class="nav-link nav-library">Library</a>
       <a href="/settings" class="nav-link nav-settings nav-link-active">Settings</a>
@@ -238,8 +238,10 @@
     <header class="page-hero">
       <div>
         <h1>
-          {% if settings_page == 'beta' %}
-            Beta Settings
+          {% if settings_page == 'automation' %}
+            Automation &amp; Apps
+          {% elif settings_page == 'beta' %}
+            Library Settings
           {% elif settings_page == 'nodes' %}
             Linked Node Settings
           {% else %}
@@ -247,8 +249,10 @@
           {% endif %}
         </h1>
         <p class="page-subtitle">
-          {% if settings_page == 'beta' %}
-            Library folders, posters, and automatic Beta scans.
+          {% if settings_page == 'automation' %}
+            Run a bounded Autopilot and manage secure access for future companion apps.
+          {% elif settings_page == 'beta' %}
+            Library folders, posters, and incremental media discovery.
           {% elif settings_page == 'nodes' %}
             Pair workers, choose local or remote transfer modes, and review node status.
           {% else %}
@@ -260,12 +264,16 @@
 
     <nav class="settings-section-nav" aria-label="Settings sections">
       <a class="settings-section-link {% if settings_page == 'main' %}settings-section-link-active{% endif %}" href="/settings">
-        <strong>Main</strong>
+        <strong>General</strong>
         <span>Encoding, presets, events, storage</span>
       </a>
+      <a class="settings-section-link {% if settings_page == 'automation' %}settings-section-link-active{% endif %}" href="/settings/automation">
+        <strong>Automation &amp; Apps</strong>
+        <span>Autopilot policies and mobile access</span>
+      </a>
       <a class="settings-section-link {% if settings_page == 'beta' %}settings-section-link-active{% endif %}" href="/settings/beta">
-        <strong>Beta</strong>
-        <span>Library folders, posters, auto scan</span>
+        <strong>Library</strong>
+        <span>Folders, posters, incremental scan</span>
       </a>
       <a class="settings-section-link {% if settings_page == 'nodes' %}settings-section-link-active{% endif %}" href="/settings/nodes">
         <strong>Linked Nodes</strong>
@@ -274,6 +282,104 @@
     </nav>
 
     <div class="settings-grid">
+
+  <div class="section-card settings-wide automation-settings-section autopilot-card">
+    <div class="section-heading-row">
+      <div>
+        <div class="eyebrow">Release 2.0</div>
+        <h2>Autopilot</h2>
+        <p class="small">Continuously discovers stable media, explains its decisions, and—only in Manage mode—fills a bounded number of queue slots.</p>
+      </div>
+      <div id="autopilotStatePill" class="node-pill node-pill-paired">Observe</div>
+    </div>
+
+    <div class="autopilot-settings-grid">
+      <label class="autopilot-toggle-card" for="autopilotEnabled">
+        <input id="autopilotEnabled" type="checkbox">
+        <span><strong>Enable scheduled Autopilot</strong><small>Uses the Library scan interval and stability window.</small></span>
+      </label>
+      <label>
+        <span>Operating mode</span>
+        <select id="autopilotMode">
+          <option value="observe">Observe — recommend only</option>
+          <option value="manage">Manage — queue within limits</option>
+        </select>
+      </label>
+      <label>
+        <span>Minimum source size (GB)</span>
+        <input id="autopilotMinSize" type="number" min="0.1" max="1000" step="0.1">
+      </label>
+      <label>
+        <span>Minimum predicted savings (%)</span>
+        <input id="autopilotMinSavings" type="number" min="0" max="95" step="1">
+      </label>
+      <label>
+        <span>Maximum queued per scan</span>
+        <input id="autopilotBatchLimit" type="number" min="1" max="50" step="1">
+      </label>
+      <label>
+        <span>Maximum active jobs</span>
+        <input id="autopilotMaxActive" type="number" min="1" max="100" step="1">
+      </label>
+      <label>
+        <span>Schedule starts</span>
+        <input id="autopilotScheduleStart" type="time">
+      </label>
+      <label>
+        <span>Schedule ends</span>
+        <input id="autopilotScheduleEnd" type="time">
+      </label>
+    </div>
+
+    <div class="autopilot-media-options">
+      <label><input id="autopilotIncludeMovies" type="checkbox"> Movies</label>
+      <label><input id="autopilotIncludeShows" type="checkbox"> TV episodes</label>
+      <span class="small">The source file is always preserved until the existing encode verification succeeds.</span>
+    </div>
+
+    <div class="row button-row">
+      <button id="saveAutopilotBtn" type="button">Save Autopilot policy</button>
+      <button id="runAutopilotBtn" type="button">Run decision cycle now</button>
+      <button id="refreshAutopilotBtn" class="ghost-btn" type="button">Refresh</button>
+      <span id="autopilotSaveStatus" class="small"></span>
+    </div>
+
+    <div id="autopilotReadiness" class="autopilot-readiness"></div>
+    <div id="autopilotDecisionList" class="autopilot-decisions"><div class="node-empty">Loading Autopilot status…</div></div>
+  </div>
+
+  <div class="section-card settings-wide automation-settings-section mobile-access-card">
+    <div class="section-heading-row">
+      <div>
+        <div class="eyebrow">Android backend preview</div>
+        <h2>Companion app access</h2>
+        <p class="small">The versioned API is ready for a future Android client. No Android app is included in this release.</p>
+      </div>
+      <span class="node-pill node-pill-idle">API v1</span>
+    </div>
+    <div class="mobile-pair-grid">
+      <div class="node-link-panel">
+        <h3>Pair a phone</h3>
+        <p class="small">Generate a short-lived, one-use code. Tokens are shown only to the client during pairing and are stored here as hashes.</p>
+        <div class="inline-input-group">
+          <select id="mobilePairScope">
+            <option value="control">Read + queue control</option>
+            <option value="read">Read only</option>
+          </select>
+          <button id="generateMobilePairingBtn" type="button">Generate phone code</button>
+        </div>
+        <div id="mobilePairingCodeBox" class="pairing-code-box">No active phone code</div>
+        <div id="mobilePairingStatus" class="small"></div>
+      </div>
+      <div class="node-link-panel">
+        <div class="section-heading-row">
+          <h3>Authorized devices</h3>
+          <button id="refreshMobileDevicesBtn" class="ghost-btn" type="button">Refresh</button>
+        </div>
+        <div id="mobileDeviceList" class="mobile-device-list"><div class="node-empty">Loading devices…</div></div>
+      </div>
+    </div>
+  </div>
 
   <!-- ============================================================
        Global encoding settings
@@ -1285,6 +1391,12 @@
       return Math.max(min, Math.min(max, n));
     }
 
+    function safeFloat(value, fallback, min, max) {
+      const parsed = parseFloat(value);
+      const n = Number.isFinite(parsed) ? parsed : fallback;
+      return Math.max(min, Math.min(max, n));
+    }
+
     function initAutoScanSettings() {
       const enabled = document.getElementById("betaAutoScanEnabled");
       const interval = document.getElementById("betaAutoScanIntervalInput");
@@ -1309,6 +1421,36 @@
         beta_auto_scan_auto_queue_tracked: Boolean(document.getElementById("betaAutoQueueTracked")?.checked),
         beta_auto_scan_file_stability_enabled: Boolean(document.getElementById("betaFileStabilityEnabled")?.checked),
         beta_auto_scan_file_stability_minutes: safeNumber(document.getElementById("betaFileStabilityMinutes")?.value, 10, 1, 240)
+      };
+    }
+
+    function initAutopilotSettings() {
+      const set = (id, value) => { const el = document.getElementById(id); if (el) el.value = value; };
+      const check = (id, value) => { const el = document.getElementById(id); if (el) el.checked = Boolean(value); };
+      check("autopilotEnabled", initialSettings?.autopilot_enabled);
+      set("autopilotMode", initialSettings?.autopilot_mode || "observe");
+      check("autopilotIncludeMovies", initialSettings?.autopilot_include_movies !== false);
+      check("autopilotIncludeShows", initialSettings?.autopilot_include_shows);
+      set("autopilotMinSize", safeFloat(initialSettings?.autopilot_min_size_gb, 2, 0.1, 1000));
+      set("autopilotMinSavings", safeFloat(initialSettings?.autopilot_min_savings_percent, 10, 0, 95));
+      set("autopilotBatchLimit", safeNumber(initialSettings?.autopilot_batch_limit, 3, 1, 50));
+      set("autopilotMaxActive", safeNumber(initialSettings?.autopilot_max_active_jobs, 5, 1, 100));
+      set("autopilotScheduleStart", initialSettings?.autopilot_schedule_start || "00:00");
+      set("autopilotScheduleEnd", initialSettings?.autopilot_schedule_end || "23:59");
+    }
+
+    function getAutopilotSettingsForSave() {
+      return {
+        autopilot_enabled: Boolean(document.getElementById("autopilotEnabled")?.checked),
+        autopilot_mode: document.getElementById("autopilotMode")?.value || "observe",
+        autopilot_include_movies: Boolean(document.getElementById("autopilotIncludeMovies")?.checked),
+        autopilot_include_shows: Boolean(document.getElementById("autopilotIncludeShows")?.checked),
+        autopilot_min_size_gb: safeFloat(document.getElementById("autopilotMinSize")?.value, 2, 0.1, 1000),
+        autopilot_min_savings_percent: safeFloat(document.getElementById("autopilotMinSavings")?.value, 10, 0, 95),
+        autopilot_batch_limit: safeNumber(document.getElementById("autopilotBatchLimit")?.value, 3, 1, 50),
+        autopilot_max_active_jobs: safeNumber(document.getElementById("autopilotMaxActive")?.value, 5, 1, 100),
+        autopilot_schedule_start: document.getElementById("autopilotScheduleStart")?.value || "00:00",
+        autopilot_schedule_end: document.getElementById("autopilotScheduleEnd")?.value || "23:59"
       };
     }
 
@@ -1412,7 +1554,8 @@
             tmdb_bearer_token: tmdbBearerToken,
             remote_transfer_temp_dir: remoteTransferTempDir,
             beta_media_folders: getBetaMediaFoldersForSave(),
-            ...getAutoScanSettingsForSave()
+            ...getAutoScanSettingsForSave(),
+            ...getAutopilotSettingsForSave()
           })
         });
 
@@ -1799,7 +1942,12 @@
       const entries = Object.entries(data);
       if (!entries.length) return "No summary yet";
       return entries
-        .map(([key, value]) => `${key.replace(/_/g, " ")}: ${value}`)
+        .map(([key, value]) => {
+          if (key === "autopilot" && value && typeof value === "object") {
+            return `autopilot: ${value.eligible || 0} eligible, ${value.queued || 0} queued`;
+          }
+          return `${key.replace(/_/g, " ")}: ${value}`;
+        })
         .join(" / ");
     }
 
@@ -1909,6 +2057,191 @@
     async function saveAutoScanSettings() {
       const ok = await saveSettings("autoScanSaveStatus");
       if (ok) await loadAutoScanStatus(true);
+    }
+
+    // -------------------------------
+    // Autopilot + companion access
+    // -------------------------------
+    function renderAutopilotStatus(data) {
+      const autopilot = data?.autopilot || {};
+      const readiness = data?.readiness || {};
+      const pill = document.getElementById("autopilotStatePill");
+      if (pill) {
+        const mode = autopilot.enabled ? (autopilot.mode || "observe") : "disabled";
+        pill.textContent = mode === "manage" ? "Managing" : (mode === "observe" ? "Observing" : "Disabled");
+        pill.className = `node-pill node-pill-${mode === "manage" ? "online" : (mode === "observe" ? "paired" : "offline")}`;
+      }
+
+      const readyBox = document.getElementById("autopilotReadiness");
+      if (readyBox) {
+        readyBox.innerHTML = "";
+        const score = document.createElement("div");
+        score.className = "autopilot-score";
+        const scoreValue = document.createElement("strong");
+        scoreValue.textContent = `${readiness.score || 0}%`;
+        const scoreCopy = document.createElement("span");
+        scoreCopy.textContent = readiness.ready ? "Ready for bounded automation" : "Setup needs attention";
+        score.append(scoreValue, scoreCopy);
+        readyBox.appendChild(score);
+        const checks = document.createElement("div");
+        checks.className = "autopilot-checks";
+        (readiness.checks || []).forEach(item => {
+          const check = document.createElement("div");
+          check.className = `autopilot-check ${item.ok ? "is-ok" : "is-warn"}`;
+          const mark = document.createElement("span");
+          mark.textContent = item.ok ? "✓" : "!";
+          const copy = document.createElement("div");
+          const title = document.createElement("strong");
+          title.textContent = item.label || "Check";
+          const detail = document.createElement("small");
+          detail.textContent = item.detail || "";
+          copy.append(title, detail);
+          check.append(mark, copy);
+          checks.appendChild(check);
+        });
+        readyBox.appendChild(checks);
+      }
+
+      const list = document.getElementById("autopilotDecisionList");
+      if (!list) return;
+      list.innerHTML = "";
+      const summary = document.createElement("div");
+      summary.className = "autopilot-decision-summary";
+      summary.textContent = `${autopilot.eligible || 0} eligible · ${autopilot.queued || 0} queued · ${autopilot.active_jobs || 0}/${autopilot.max_active_jobs || 0} active · schedule ${autopilot.schedule_open ? "open" : "closed"}`;
+      list.appendChild(summary);
+      const decisions = Array.isArray(autopilot.decisions) ? autopilot.decisions : [];
+      if (!decisions.length) {
+        const empty = document.createElement("div");
+        empty.className = "node-empty";
+        empty.textContent = "Run a decision cycle to see what Autopilot would do and why.";
+        list.appendChild(empty);
+        return;
+      }
+      decisions.slice(0, 12).forEach(item => {
+        const row = document.createElement("div");
+        row.className = "autopilot-decision";
+        const mark = document.createElement("span");
+        mark.className = `decision-mark decision-${item.decision || "skip"}`;
+        mark.textContent = item.decision || "skip";
+        const copy = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = item.label || item.path || "Media";
+        const detail = document.createElement("small");
+        detail.textContent = `${item.reason || ""} · ${fmtGB(item.size_bytes)} GB · ${item.preset || "auto"}`;
+        copy.append(title, detail);
+        row.append(mark, copy);
+        list.appendChild(row);
+      });
+    }
+
+    async function loadAutopilotStatus() {
+      try {
+        const res = await fetch("/api/autopilot/status");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not load Autopilot");
+        renderAutopilotStatus(data);
+      } catch (err) {
+        const list = document.getElementById("autopilotDecisionList");
+        if (list) list.textContent = err.message || "Could not load Autopilot.";
+      }
+    }
+
+    async function saveAutopilot() {
+      const ok = await saveSettings("autopilotSaveStatus");
+      if (ok) await loadAutopilotStatus();
+    }
+
+    async function runAutopilot() {
+      const button = document.getElementById("runAutopilotBtn");
+      try {
+        if (button) { button.disabled = true; button.textContent = "Scanning…"; }
+        const res = await fetch("/api/autopilot/run", { method: "POST" });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Autopilot cycle failed");
+        renderAutopilotStatus(data);
+        if (window.appToast) appToast("Autopilot decision cycle complete.", "success");
+      } catch (err) {
+        if (window.appToast) appToast(err.message || "Autopilot cycle failed.", "error");
+      } finally {
+        if (button) { button.disabled = false; button.textContent = "Run decision cycle now"; }
+      }
+    }
+
+    function renderMobileDevices(devices) {
+      const list = document.getElementById("mobileDeviceList");
+      if (!list) return;
+      list.innerHTML = "";
+      if (!Array.isArray(devices) || !devices.length) {
+        const empty = document.createElement("div");
+        empty.className = "node-empty";
+        empty.textContent = "No phones have been authorized yet.";
+        list.appendChild(empty);
+        return;
+      }
+      devices.forEach(device => {
+        const row = document.createElement("div");
+        row.className = "mobile-device-row";
+        const copy = document.createElement("div");
+        const name = document.createElement("strong");
+        name.textContent = device.name || "Mobile device";
+        const detail = document.createElement("small");
+        detail.textContent = `${device.platform || "android"} · ${device.scope || "read"} · last seen ${fmtNodeTime(device.last_seen)}`;
+        copy.append(name, detail);
+        const actions = document.createElement("div");
+        appendNodePill(actions, device.active ? "Active" : "Revoked", device.active ? "online" : "offline");
+        if (!device.revoked_at) {
+          const revoke = document.createElement("button");
+          revoke.type = "button";
+          revoke.className = "danger-outline";
+          revoke.textContent = "Revoke";
+          revoke.onclick = () => revokeMobileDevice(device.id, device.name);
+          actions.appendChild(revoke);
+        }
+        row.append(copy, actions);
+        list.appendChild(row);
+      });
+    }
+
+    async function loadMobileDevices() {
+      try {
+        const res = await fetch("/api/mobile/devices");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not load devices");
+        renderMobileDevices(data.devices);
+      } catch (err) {
+        const list = document.getElementById("mobileDeviceList");
+        if (list) list.textContent = err.message || "Could not load devices.";
+      }
+    }
+
+    async function generateMobilePairing() {
+      const box = document.getElementById("mobilePairingCodeBox");
+      const status = document.getElementById("mobilePairingStatus");
+      try {
+        const res = await fetch("/api/mobile/pairing_code", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ scope: document.getElementById("mobilePairScope")?.value || "control" })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not create phone code");
+        if (box) box.textContent = data.pairing?.code || "";
+        if (status) status.textContent = `Expires ${fmtNodeTime(data.pairing?.expires_at)} · pair at ${location.origin}/api/mobile/v1/pair`;
+      } catch (err) {
+        if (status) status.textContent = err.message || "Could not create phone code.";
+      }
+    }
+
+    async function revokeMobileDevice(id, name) {
+      if (!confirm(`Revoke ${name || "this phone"}?`)) return;
+      const res = await fetch(`/api/mobile/devices/${encodeURIComponent(id)}`, { method: "DELETE" });
+      const data = await res.json();
+      if (!res.ok) {
+        if (window.appToast) appToast(data.error || "Revoke failed.", "error");
+        return;
+      }
+      if (window.appToast) appToast("Mobile access revoked.", "success");
+      await loadMobileDevices();
     }
 
     // -------------------------------
@@ -2127,7 +2460,8 @@
         meta.className = "node-message";
         const missText = Number(node.heartbeat_misses || 0) > 0 ? ` / missed ${node.heartbeat_misses}` : "";
         const ageText = node.last_heartbeat_age_seconds != null ? ` / age ${Math.round(Number(node.last_heartbeat_age_seconds || 0))}s` : "";
-        meta.textContent = `${node.url || ""} / ${jobSummaryText(node.summary)} / last heartbeat ${fmtNodeTime(node.last_heartbeat)}${ageText}${missText}`;
+        const protocolText = ` / protocol v${node.protocol_version || 1}`;
+        meta.textContent = `${node.url || ""} / ${jobSummaryText(node.summary)} / last heartbeat ${fmtNodeTime(node.last_heartbeat)}${ageText}${missText}${protocolText}`;
         main.appendChild(meta);
 
         if (Array.isArray(node.paired_controllers) && node.paired_controllers.length) {
@@ -2255,13 +2589,15 @@
 
     async function pairWorker() {
       const status = document.getElementById("pairWorkerStatus");
+      const button = document.getElementById("pairWorkerBtn");
       const url = document.getElementById("pairWorkerUrlInput")?.value || "";
       const code = document.getElementById("pairWorkerCodeInput")?.value || "";
       const name = document.getElementById("pairWorkerNameInput")?.value || "";
       const transferMode = document.getElementById("pairWorkerTransferModeSelect")?.value || "local";
       const mappings = parsePathMappingsText(document.getElementById("pairWorkerMappingsInput")?.value || "");
       try {
-        if (status) status.textContent = "Pairing...";
+        if (button) button.disabled = true;
+        if (status) status.textContent = "Discovering worker and pairing safely…";
         const res = await fetch("/api/nodes/pair", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -2275,6 +2611,8 @@
       } catch (err) {
         if (status) status.textContent = err.message || "Pairing failed";
         if (window.appToast) appToast(err.message || "Pairing failed.", "error");
+      } finally {
+        if (button) button.disabled = false;
       }
     }
 
@@ -2366,10 +2704,13 @@
     document.addEventListener("DOMContentLoaded", () => {
       initEncodingSettings();
       initAutoScanSettings();
+      initAutopilotSettings();
       loadCpuProfiles();
       renderPresetFilesList(presetFiles);
       loadPresetConfigUI();
       loadAutoScanStatus(true);
+      loadAutopilotStatus();
+      loadMobileDevices();
       loadNodes();
 
       // Events + Storage
@@ -2404,6 +2745,17 @@
       if (runAutoScanNowBtn) runAutoScanNowBtn.onclick = runAutoScanNow;
       const refreshAutoScanStatusBtn = document.getElementById("refreshAutoScanStatusBtn");
       if (refreshAutoScanStatusBtn) refreshAutoScanStatusBtn.onclick = () => loadAutoScanStatus(true);
+
+      const saveAutopilotBtn = document.getElementById("saveAutopilotBtn");
+      if (saveAutopilotBtn) saveAutopilotBtn.onclick = saveAutopilot;
+      const runAutopilotBtn = document.getElementById("runAutopilotBtn");
+      if (runAutopilotBtn) runAutopilotBtn.onclick = runAutopilot;
+      const refreshAutopilotBtn = document.getElementById("refreshAutopilotBtn");
+      if (refreshAutopilotBtn) refreshAutopilotBtn.onclick = loadAutopilotStatus;
+      const generateMobilePairingBtn = document.getElementById("generateMobilePairingBtn");
+      if (generateMobilePairingBtn) generateMobilePairingBtn.onclick = generateMobilePairing;
+      const refreshMobileDevicesBtn = document.getElementById("refreshMobileDevicesBtn");
+      if (refreshMobileDevicesBtn) refreshMobileDevicesBtn.onclick = loadMobileDevices;
 
       const saveLocalNodeNameBtn = document.getElementById("saveLocalNodeNameBtn");
       if (saveLocalNodeNameBtn) saveLocalNodeNameBtn.onclick = saveLocalNodeName;

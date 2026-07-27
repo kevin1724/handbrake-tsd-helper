@@ -96,12 +96,30 @@ from .settings import (
     load_settings,
     save_settings,
 )
+from .mobile_linking import (
+    accept_mobile_pairing,
+    authenticate_mobile_token,
+    create_mobile_pairing,
+    list_mobile_devices,
+    mobile_discovery,
+    refresh_mobile_token,
+    revoke_mobile_device,
+)
 
 from .cpu_profiles import (
     list_cpu_profiles,
     get_cpu_profile,
 )
 from .wizard_llm import run_wizard_llm, wizard_llm_status
+from .smart_presets import (
+    candidate_learning as smart_candidate_learning,
+    feedback_context as smart_feedback_context,
+    learning_status as smart_learning_status,
+    load_state as load_smart_preset_state,
+    public_state as public_smart_preset_state,
+    record_feedback as record_smart_preset_feedback,
+    save_profile as save_smart_preset_profile,
+)
 
 from .events import load_events, clear_events, log_event
 from .storage_stats import get_summary as get_storage_summary, list_encodes as list_storage_encodes, clear_stats as clear_storage_stats, record_encode
@@ -118,6 +136,7 @@ from .node_linking import (
     list_nodes_private,
     list_nodes_public,
     local_node_overview,
+    node_discovery,
     normalize_path_mappings,
     normalize_transfer_mode,
     node_has_running_work,
@@ -163,6 +182,8 @@ PREVIEW_CLIPS: dict[str, tuple[str, float]] = {}
 PREVIEW_CLIPS_LOCK = threading.Lock()
 PREVIEW_TASKS: dict[str, dict] = {}
 PREVIEW_TASK_LOCK = threading.Lock()
+SMART_FEEDBACK_TOKENS: dict[str, tuple[dict, float]] = {}
+SMART_FEEDBACK_TOKEN_LOCK = threading.Lock()
 PREVIEW_PROGRESS_RE = re.compile(r"Encoding:\s+task\s+\d+\s+of\s+\d+,\s*([\d.]+)\s*%", re.IGNORECASE)
 PREVIEW_QSV_CHECK = {"checked_at": 0.0, "available": False, "reason": "not checked"}
 
@@ -240,6 +261,23 @@ def _preview_cleanup_tasks() -> None:
                 ts = 0
             if ts < cutoff:
                 PREVIEW_TASKS.pop(key, None)
+    with SMART_FEEDBACK_TOKEN_LOCK:
+        for token, (_context, created_at) in list(SMART_FEEDBACK_TOKENS.items()):
+            if float(created_at or 0) < cutoff:
+                SMART_FEEDBACK_TOKENS.pop(token, None)
+
+
+def _register_smart_feedback_context(context: dict) -> str:
+    token = secrets.token_urlsafe(24)
+    with SMART_FEEDBACK_TOKEN_LOCK:
+        SMART_FEEDBACK_TOKENS[token] = (context, time.time())
+    return token
+
+
+def _consume_smart_feedback_context(token: str) -> dict | None:
+    with SMART_FEEDBACK_TOKEN_LOCK:
+        row = SMART_FEEDBACK_TOKENS.pop(str(token or ""), None)
+    return row[0] if row and isinstance(row[0], dict) else None
 
 
 def _qsv_preview_available(force: bool = False) -> tuple[bool, str]:
@@ -839,7 +877,8 @@ WIZARD_BIT_DEPTHS = {"8", "10"}
 WIZARD_QUALITIES = {"high", "balanced", "small"}
 WIZARD_ENCODER_SPEEDS = {"auto", "fast", "medium", "slow"}
 WIZARD_RESOLUTION_MODES = {"auto", "keep", "2160", "1440", "1080", "720"}
-WIZARD_AUDIO_MODES = {"auto", "aac", "copy"}
+WIZARD_AUDIO_MODES = {"auto", "aac", "copy", "eac3"}
+WIZARD_SMART_AUDIO_STRATEGIES = {"", "copy", "eac3_surround"}
 WIZARD_AUDIO_TRACKS = {"first", "all"}
 WIZARD_SUBTITLE_MODES = {"none", "first", "all"}
 WIZARD_FRAMERATE_MODES = {"same", "pfr", "cfr"}
@@ -875,6 +914,7 @@ WIZARD_DEFAULT_OPTIONS = {
     "encoder_speed": "auto",
     "resolution_mode": "auto",
     "audio_mode": "copy",
+    "smart_audio_strategy": "",
     "audio_bitrate": "auto",
     "audio_tracks": "all",
     "subtitle_mode": "all",
@@ -1087,6 +1127,8 @@ def _wizard_encoder_preset(options: dict) -> str:
 def _wizard_audio_kbps(options: dict) -> int:
     if options["audio_mode"] == "copy":
         return 256
+    if options["audio_mode"] == "eac3":
+        return 640
     if options["audio_bitrate"] != "auto":
         try:
             return max(64, min(640, int(options["audio_bitrate"])))
@@ -1212,7 +1254,12 @@ def _wizard_ai_choices(
     target_ratio = target_bytes / float(source_size_bytes_i)
     source_bitrate_kbps = (source_size_bytes_i * 8.0 / max(1.0, duration_sec)) / 1000.0
     target_total_kbps = (target_bytes * 8.0 / max(1.0, duration_sec)) / 1000.0
-    rough_audio_kbps = 256 if out.get("ai_copy_audio", True) else _quality_audio_kbps(out.get("quality"))
+    if out.get("smart_audio_strategy") == "eac3_surround":
+        rough_audio_kbps = 640
+    elif out.get("smart_audio_strategy") == "copy" or out.get("ai_copy_audio", True):
+        rough_audio_kbps = 256
+    else:
+        rough_audio_kbps = _quality_audio_kbps(out.get("quality"))
     rough_video_kbps = max(250.0, target_total_kbps - rough_audio_kbps)
     bpp_source = _bpp(rough_video_kbps, src_w, src_h, fps)
     decisions: list[str] = []
@@ -1479,10 +1526,30 @@ def _wizard_ai_choices(
     if out["two_pass"]:
         decisions.append("Enabled two-pass because the target is tight and CPU mode can benefit from it.")
 
-    out["audio_mode"] = "copy" if out["ai_copy_audio"] else "aac"
+    smart_audio_strategy = out.get("smart_audio_strategy") or ""
+    if smart_audio_strategy == "eac3_surround":
+        out["audio_mode"] = "eac3"
+        out["audio_bitrate"] = "640"
+        decisions.append("Encoding English and Spanish audio to E-AC3 5.1 at 640 kbps to save space while retaining surround sound.")
+    elif smart_audio_strategy == "copy":
+        out["audio_mode"] = "copy"
+    else:
+        out["audio_mode"] = "copy" if out["ai_copy_audio"] else "aac"
+
+    if smart_audio_strategy:
+        out["audio_tracks"] = "all"
+        out["ai_audio_scope"] = "all"
+        out["ai_subtitle_scope"] = "all"
+        out["audio_languages"] = ["eng", "spa"]
+        out["subtitle_languages"] = ["eng", "spa"]
+
     if out["audio_mode"] == "copy":
         out["audio_bitrate"] = "auto"
         decisions.append("Copying audio to avoid quality loss.")
+    elif out["audio_mode"] == "eac3":
+        # The fixed surround-safe rate above is intentional; do not let the
+        # video quality goal reduce it to a stereo-oriented AAC budget.
+        out["audio_bitrate"] = "640"
     elif goal == "quality":
         out["audio_bitrate"] = "256"
         decisions.append("Converting audio at 256 kbps for quality.")
@@ -1520,10 +1587,15 @@ def _wizard_ai_choices(
         "small": "Small file",
         "archive": "Archive",
     }.get(goal, "AI")
+    audio_summary = (
+        "copy audio"
+        if out["audio_mode"] == "copy"
+        else ("E-AC3 5.1 audio" if out["audio_mode"] == "eac3" else out["audio_bitrate"] + " kbps audio")
+    )
     summary = (
         f"{goal_label}: {_wizard_encoder_label(_wizard_encoder_name(out))}, "
         f"{out['resolution_mode']} resolution, "
-        f"{'copy audio' if out['audio_mode'] == 'copy' else out['audio_bitrate'] + ' kbps audio'}, "
+        f"{audio_summary}, "
         f"{out['subtitle_mode']} subtitles."
     )
     profile = {
@@ -1708,7 +1780,14 @@ def _wizard_ai_plan_insights(
             "warning",
         )
 
-    if options.get("audio_mode") == "copy" and options.get("audio_tracks") == "all" and total_bitrate_kbps < 2500:
+    if options.get("audio_mode") == "eac3":
+        _wizard_ai_add_recommendation(
+            recommendations,
+            "Surround retained",
+            "English and Spanish audio will use E-AC3 5.1 at 640 kbps for smaller surround-capable tracks.",
+            "success",
+        )
+    elif options.get("audio_mode") == "copy" and options.get("audio_tracks") == "all" and total_bitrate_kbps < 2500:
         flags.append({"label": "Audio budget", "detail": "Copying all audio on a tight target can leave less bitrate for video.", "severity": "warning"})
         _wizard_ai_add_recommendation(
             recommendations,
@@ -1854,6 +1933,11 @@ def _wizard_normalize_options(data: dict) -> dict:
             "ai_copy_audio": _truthy(data.get("ai_copy_audio"), options["ai_copy_audio"]),
             "ai_audio_scope": _choice(data.get("ai_audio_scope"), WIZARD_AI_TRACK_SCOPES, options["ai_audio_scope"]),
             "ai_subtitle_scope": _choice(data.get("ai_subtitle_scope"), WIZARD_AI_SUBTITLE_SCOPES, options["ai_subtitle_scope"]),
+            "smart_audio_strategy": _choice(
+                data.get("smart_audio_strategy"),
+                WIZARD_SMART_AUDIO_STRATEGIES,
+                options["smart_audio_strategy"],
+            ),
             "audio_languages": _wizard_languages(audio_language_value),
             "subtitle_languages": _wizard_languages(subtitle_language_value),
             "preset": preset,
@@ -1967,6 +2051,8 @@ def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h
 
         if options["audio_mode"] == "copy":
             args += ["-E", "copy"]
+        elif options["audio_mode"] == "eac3":
+            args += ["-E", "eac3", "-B", "640", "-6", "5point1"]
         else:
             args += ["-E", "av_aac", "-B", str(_wizard_audio_kbps(options))]
 
@@ -2361,6 +2447,229 @@ def _clean_wizard_preset_name(name: str) -> str:
     return value[:80]
 
 
+def _smart_profile_options(data: dict, profile: dict) -> dict:
+    """Apply a few user goals to the validated Size Wizard option surface."""
+    options = _wizard_public_options(data)
+    goal = str(profile.get("goal") or "balanced")
+    compatibility = str(profile.get("compatibility") or "modern")
+    hardware = str(profile.get("hardware") or "auto")
+    codec = {
+        "broad": "h264",
+        "modern": "h265",
+        "maximum": "av1" if goal in {"small", "archive"} else "h265",
+    }.get(compatibility, "h265")
+    audio_strategy = str(profile.get("audio_strategy") or "copy")
+    if audio_strategy not in {"copy", "eac3_surround"}:
+        audio_strategy = "copy"
+    copy_audio = audio_strategy == "copy"
+
+    options.update(
+        {
+            "ai_mode": True,
+            "ai_goal": goal,
+            "ai_hardware": hardware,
+            "ai_codec_preference": codec,
+            "ai_risk": "safe" if compatibility == "broad" else ("explorer" if goal == "small" else "smart"),
+            "ai_copy_audio": copy_audio,
+            "ai_audio_scope": "all",
+            "ai_subtitle_scope": "all",
+            "smart_audio_strategy": audio_strategy,
+            "audio_mode": "copy" if copy_audio else "eac3",
+            "audio_bitrate": "auto" if copy_audio else "640",
+            "audio_tracks": "all",
+            "audio_languages": ["eng", "spa"],
+            "subtitle_mode": "all",
+            "subtitle_languages": ["eng", "spa"],
+        }
+    )
+    return options
+
+
+def _smart_candidate_definitions(profile: dict) -> list[dict]:
+    goal = str(profile.get("goal") or "balanced")
+    rows = {
+        "quality": [
+            ("detail", "Detail first", 1.24, "quality", "Protects fine detail with a larger target."),
+            ("balanced", "Balanced", 1.0, "balanced", "Balances visible quality, time, and storage."),
+            ("compact", "Smaller", 0.82, "small", "Tests a smaller target while guarding resolution."),
+        ],
+        "small": [
+            ("compact", "Space saver", 0.74, "small", "Prioritizes storage savings and efficient compression."),
+            ("balanced", "Balanced", 0.92, "balanced", "Keeps extra quality headroom at a modest size."),
+            ("detail", "Detail first", 1.10, "quality", "Uses more space when detail is worth keeping."),
+        ],
+        "speed": [
+            ("fast", "Fast", 0.90, "speed", "Prioritizes a short encode time."),
+            ("balanced", "Balanced", 1.0, "balanced", "Trades some speed for compression efficiency."),
+            ("detail", "Detail first", 1.18, "quality", "Protects detail when speed is less important."),
+        ],
+        "archive": [
+            ("archive", "Archive", 1.08, "archive", "Uses efficient long-term settings with quality headroom."),
+            ("detail", "Detail first", 1.25, "quality", "Keeps more source detail for important masters."),
+            ("compact", "Smaller archive", 0.84, "small", "Reduces storage with a more aggressive archive target."),
+        ],
+        "balanced": [
+            ("balanced", "Balanced", 1.0, "balanced", "Balances visible quality, time, and storage."),
+            ("detail", "Detail first", 1.22, "quality", "Protects detail with a larger target."),
+            ("compact", "Smaller", 0.80, "small", "Tests meaningful savings at a tighter target."),
+        ],
+    }
+    return [
+        {"id": cid, "name": name, "target_factor": factor, "goal": candidate_goal, "summary": summary}
+        for cid, name, factor, candidate_goal, summary in rows.get(goal, rows["balanced"])
+    ]
+
+
+def _smart_objective_score(plan: dict, profile: dict, fastest_eta: float) -> tuple[float, str]:
+    estimates = plan.get("estimates") if isinstance(plan.get("estimates"), dict) else {}
+    inputs = plan.get("inputs") if isinstance(plan.get("inputs"), dict) else {}
+    probe = plan.get("probe") if isinstance(plan.get("probe"), dict) else {}
+    options = plan.get("options") if isinstance(plan.get("options"), dict) else {}
+    bpp = float(estimates.get("bpp") or 0.0)
+    quality = max(0.0, min(1.0, (bpp - 0.025) / 0.065))
+    source_mb = max(1.0, float(probe.get("source_size_bytes") or 1) / (1024.0 * 1024.0))
+    ratio = max(0.0, min(1.5, float(inputs.get("target_mb") or 0.0) / source_mb))
+    savings = max(0.0, min(1.0, 1.0 - ratio))
+    eta = max(1.0, float(estimates.get("eta_seconds") or 1.0))
+    speed = max(0.0, min(1.0, fastest_eta / eta))
+    codec = str(options.get("video_codec") or "")
+    compatibility_mode = str(profile.get("compatibility") or "modern")
+    compatibility = {
+        "broad": {"h264": 1.0, "h265": 0.65, "av1": 0.35},
+        "modern": {"h264": 0.9, "h265": 1.0, "av1": 0.72},
+        "maximum": {"h264": 0.7, "h265": 0.9, "av1": 1.0},
+    }.get(compatibility_mode, {}).get(codec, 0.7)
+    goal = str(profile.get("goal") or "balanced")
+    weights = {
+        "quality": (0.56, 0.16, 0.08, 0.20),
+        "small": (0.28, 0.47, 0.10, 0.15),
+        "speed": (0.27, 0.18, 0.40, 0.15),
+        "archive": (0.47, 0.28, 0.08, 0.17),
+        "balanced": (0.42, 0.28, 0.15, 0.15),
+    }.get(goal, (0.42, 0.28, 0.15, 0.15))
+    score = quality * weights[0] + savings * weights[1] + speed * weights[2] + compatibility * weights[3]
+    reason = (
+        f"{round(quality * 100)}% quality headroom, {round(savings * 100)}% target savings, "
+        f"and {round(speed * 100)}% relative speed fit."
+    )
+    return score, reason
+
+
+def _smart_recommendation(data: dict, *, require_automation_ready: bool = False) -> dict:
+    """Build and rank three safe plans for one source."""
+    state = load_smart_preset_state()
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    learning = smart_learning_status(state)
+
+    base_options = _smart_profile_options(data, profile)
+    baseline = _wizard_plan({**data, **base_options}, probe_func=_probe_media, preview=False)
+    target_mb = max(1.0, float(baseline.get("inputs", {}).get("target_mb") or 1.0))
+    plans = []
+    errors = []
+    for definition in _smart_candidate_definitions(profile):
+        candidate_options = dict(base_options)
+        candidate_options.update(
+            {
+                "ai_goal": definition["goal"],
+                "target_size_auto": False,
+                "target_size_value": round(target_mb * float(definition["target_factor"]), 1),
+                "target_size_unit": "MB",
+            }
+        )
+        try:
+            plan = _wizard_plan({**data, **candidate_options}, probe_func=_probe_media, preview=False)
+            plans.append((definition, plan))
+        except Exception as exc:
+            errors.append(f"{definition['name']}: {exc}")
+    if not plans:
+        raise RuntimeError("no smart preset candidates could be planned")
+
+    fastest_eta = min(max(1.0, float(plan.get("estimates", {}).get("eta_seconds") or 1.0)) for _d, plan in plans)
+    candidates = []
+    for definition, plan in plans:
+        context = smart_feedback_context(plan, definition["id"])
+        learned = smart_candidate_learning(context, state)
+        objective, reason = _smart_objective_score(plan, profile, fastest_eta)
+        evidence = float(learned.get("weighted_evidence") or 0.0)
+        learned_weight = min(0.38, evidence / max(1.0, float(profile.get("minimum_feedback") or 3)) * 0.38)
+        final_score = objective * (1.0 - learned_weight) + float(learned.get("acceptance") or 0.5) * learned_weight
+        estimates = plan.get("estimates") or {}
+        options = plan.get("options") or {}
+        public_options = _wizard_public_options(options)
+        candidates.append(
+            {
+                "id": definition["id"],
+                "name": definition["name"],
+                "summary": definition["summary"],
+                "score": round(final_score, 3),
+                "score_percent": int(round(final_score * 100)),
+                "reason": reason,
+                "learned": learned,
+                "options": public_options,
+                "plan": {
+                    "preset": plan.get("preset"),
+                    "target_mb": round(float(plan.get("inputs", {}).get("target_mb") or 0.0), 1),
+                    "video_bitrate_kbps": estimates.get("video_bitrate_kbps"),
+                    "quality_label": estimates.get("quality_label"),
+                    "encoder": estimates.get("encoder"),
+                    "encoder_label": estimates.get("encoder_label"),
+                    "eta_seconds": estimates.get("eta_seconds"),
+                    "eta_human": estimates.get("eta_human"),
+                    "output_resolution": estimates.get("output_resolution"),
+                },
+                "_queue_plan": plan,
+            }
+        )
+    candidates.sort(key=lambda row: float(row.get("score") or 0.0), reverse=True)
+    for index, row in enumerate(candidates):
+        row["recommended"] = index == 0
+    recommended_learning = candidates[0].get("learned") if isinstance(candidates[0].get("learned"), dict) else {}
+    context_auto_ready = bool(
+        learning.get("automation_ready")
+        and float(recommended_learning.get("confidence") or 0.0) >= 0.65
+        and float(recommended_learning.get("acceptance") or 0.0) >= float(profile.get("confidence_threshold") or 0.72)
+    )
+    if require_automation_ready and not context_auto_ready:
+        raise ValueError("smart preset automation needs more reviews for this kind of source")
+    selected_plan = candidates[0].pop("_queue_plan")
+    for row in candidates[1:]:
+        row.pop("_queue_plan", None)
+    return {
+        "profile": profile,
+        "learning": learning,
+        "recommended_id": candidates[0]["id"],
+        "auto_apply": context_auto_ready,
+        "candidates": candidates,
+        "errors": errors,
+        "selected_plan": selected_plan,
+    }
+
+
+def _create_smart_job(src: str, *, require_automation_ready: bool = False) -> tuple[str, dict]:
+    recommendation = _smart_recommendation({"src": src, "preset": "auto"}, require_automation_ready=require_automation_ready)
+    plan = recommendation.pop("selected_plan")
+    recommended_id = recommendation.get("recommended_id")
+    job_id = create_job(
+        plan["src"],
+        plan["preset"],
+        extra_args=" ".join(plan["extra_args"]),
+        encode_metadata={
+            "encode_method": plan["estimates"].get("encoder"),
+            "encoder": plan["estimates"].get("encoder"),
+            "video_codec": plan["options"].get("video_codec"),
+            "encoder_family": plan["options"].get("encoder_family"),
+            "bit_depth": plan["options"].get("bit_depth"),
+            "audio_strategy": plan["options"].get("smart_audio_strategy") or plan["options"].get("audio_mode"),
+            "audio_languages": plan["options"].get("audio_languages"),
+            "subtitle_languages": plan["options"].get("subtitle_languages"),
+            "smart_preset": True,
+            "smart_profile_id": "default",
+            "smart_candidate_id": recommended_id,
+        },
+    )
+    return job_id, recommendation
+
+
 BETA_LIBRARY_CACHE_FILE = os.path.join(DATA_DIR, "beta_library_cache.json")
 BETA_TRACKED_SHOWS_FILE = os.path.join(DATA_DIR, "beta_tracked_shows.json")
 BETA_SCAN_INDEX_FILE = os.path.join(DATA_DIR, "beta_scan_index.json")
@@ -2373,6 +2682,14 @@ BETA_AUTOSCAN_RUN_NOW = threading.Event()
 BETA_AUTOSCAN_LOCK = threading.Lock()
 NODE_HEARTBEAT_THREAD = None
 NODE_HEARTBEAT_STOP = threading.Event()
+NODE_HEARTBEAT_HEALTH = {
+    "running": False,
+    "started_at": 0,
+    "last_cycle_at": 0,
+    "last_success_at": 0,
+    "cycle_errors": 0,
+    "last_error": "",
+}
 BETA_MEDIA_TAG_RE = re.compile(
     r"(?<!\w)(480p|576p|720p|1080p|2160p|4320p|4k|8k|uhd|hdr10\+|hdr10plus|hdr10|hdr|hlg|dv|dovi|dolby ?vision|"
     r"bluray|blu-ray|brrip|webrip|web-dl|webdl|hdtv|remux|proper|repack|"
@@ -3801,6 +4118,200 @@ def _beta_queue_stable_tracked_episodes(data: dict, index: dict, settings: dict)
     return result
 
 
+def _autopilot_schedule_open(settings: dict, now: float | None = None) -> bool:
+    now_struct = time.localtime(now or time.time())
+    minute = now_struct.tm_hour * 60 + now_struct.tm_min
+
+    def parse(value: str, fallback: int) -> int:
+        try:
+            hour, part = str(value or "").split(":", 1)
+            return max(0, min(1439, int(hour) * 60 + int(part)))
+        except (TypeError, ValueError):
+            return fallback
+
+    start = parse(settings.get("autopilot_schedule_start"), 0)
+    end = parse(settings.get("autopilot_schedule_end"), 1439)
+    if start <= end:
+        return start <= minute <= end
+    return minute >= start or minute <= end
+
+
+def _autopilot_active_job_count() -> int:
+    active_states = {"queued", "running", "waiting_to_upload"}
+    return sum(1 for job in list_jobs_for_api() if str(job.get("status") or "").lower() in active_states)
+
+
+def _autopilot_candidates(data: dict, index: dict, settings: dict) -> dict:
+    """Explain and, in manage mode, apply one bounded Autopilot decision."""
+    now = time.time()
+    enabled = bool(settings.get("autopilot_enabled", False))
+    mode = str(settings.get("autopilot_mode") or "observe").strip().lower()
+    if mode not in {"observe", "manage"}:
+        mode = "observe"
+    schedule_open = _autopilot_schedule_open(settings, now)
+    min_bytes = int(float(settings.get("autopilot_min_size_gb") or 2.0) * (1024 ** 3))
+    min_savings = float(settings.get("autopilot_min_savings_percent") or 0.0) / 100.0
+    active_paths = _beta_active_job_paths()
+    active_jobs = _autopilot_active_job_count()
+    max_active = max(1, int(settings.get("autopilot_max_active_jobs") or 5))
+    batch_limit = max(1, int(settings.get("autopilot_batch_limit") or 3))
+    capacity = max(0, max_active - active_jobs)
+    index_files = index.get("files") if isinstance(index.get("files"), dict) else {}
+    decisions = []
+    eligible = []
+    smart_learning = smart_learning_status()
+    smart_ready = bool(smart_learning.get("automation_ready"))
+
+    items = []
+    for movie in data.get("movies") or []:
+        if isinstance(movie, dict):
+            items.append(("movie", movie.get("title") or os.path.basename(str(movie.get("path") or "")), movie))
+    for show in data.get("shows") or []:
+        if not isinstance(show, dict):
+            continue
+        for episode in show.get("files") or []:
+            if isinstance(episode, dict):
+                label = f"{show.get('title') or 'Show'} · {episode.get('filename') or os.path.basename(str(episode.get('path') or ''))}"
+                items.append(("show", label, episode))
+
+    for media_type, label, item in items:
+        path = str(item.get("path") or "")
+        size_bytes = int(item.get("size_bytes") or 0)
+        idx_row = index_files.get(path) if isinstance(index_files.get(path), dict) else {}
+        prediction = item.get("prediction") if isinstance(item.get("prediction"), dict) else {}
+        saved_ratio = float(prediction.get("saved_ratio") or 0.0) if prediction.get("available") else None
+        reason = "Eligible: stable, allowed, and within the configured policy."
+        decision = "eligible"
+
+        if not path or not os.path.isfile(path) or not is_allowed_path(path):
+            decision, reason = "skip", "File is missing or outside an allowed media root."
+        elif media_type == "movie" and not settings.get("autopilot_include_movies", True):
+            decision, reason = "skip", "Movies are disabled in this Autopilot policy."
+        elif media_type == "show" and not settings.get("autopilot_include_shows", False):
+            decision, reason = "skip", "TV episodes are disabled in this Autopilot policy."
+        elif size_bytes < min_bytes:
+            decision, reason = "skip", "Source is below the configured minimum size."
+        elif path in active_paths:
+            decision, reason = "skip", "A queue or encode job already owns this file."
+        elif float(idx_row.get("queued_at") or 0) > 0:
+            decision, reason = "skip", "This indexed file was already queued by automation."
+        elif not _beta_file_is_stable(idx_row, settings, now):
+            decision, reason = "wait", "File is still inside the write-stability window."
+        elif saved_ratio is not None and saved_ratio < min_savings:
+            decision, reason = "skip", "History predicts savings below the configured threshold."
+        elif saved_ratio is None:
+            reason = "Eligible by safety rules; encode-history confidence is not available yet."
+
+        row = {
+            "path": path,
+            "label": str(label or os.path.basename(path))[:180],
+            "media_type": media_type,
+            "size_bytes": size_bytes,
+            "decision": decision,
+            "reason": reason,
+            "preset": "smart" if smart_ready else guess_preset_from_filename(os.path.basename(path)),
+            "predicted_saved_bytes": int(prediction.get("estimated_saved_bytes") or 0),
+            "prediction_confidence": prediction.get("confidence") or ("unknown" if not prediction.get("available") else "low"),
+        }
+        decisions.append(row)
+        if decision == "eligible":
+            eligible.append(row)
+
+    eligible.sort(key=lambda row: (int(row.get("predicted_saved_bytes") or 0), int(row.get("size_bytes") or 0)), reverse=True)
+    selected = eligible[: min(batch_limit, capacity)]
+    should_queue = enabled and mode == "manage" and schedule_open and bool(selected)
+    queued = 0
+    if should_queue:
+        if smart_ready:
+            for row in selected:
+                try:
+                    _job_id, recommendation = _create_smart_job(row["path"], require_automation_ready=True)
+                    queued += 1
+                    row["smart_candidate_id"] = recommendation.get("recommended_id")
+                    row["reason"] = f"{row['reason']} Learned Smart Preset selected {recommendation.get('recommended_id')}."
+                except Exception as exc:
+                    row["decision"] = "error"
+                    row["reason"] = f"Smart Preset planning failed; file was not queued: {exc}"
+        else:
+            queued = int(create_jobs_batch([(row["path"], row["preset"]) for row in selected]) or 0)
+        for row in selected:
+            if row.get("decision") != "error" and isinstance(index_files.get(row["path"]), dict):
+                index_files[row["path"]]["queued_at"] = now
+                index_files[row["path"]]["autopilot_reason"] = row["reason"]
+        _beta_save_scan_index(index)
+
+    return {
+        "enabled": enabled,
+        "mode": mode,
+        "schedule_open": schedule_open,
+        "active_jobs": active_jobs,
+        "max_active_jobs": max_active,
+        "capacity": capacity,
+        "considered": len(items),
+        "eligible": len(eligible),
+        "selected": len(selected),
+        "queued": queued,
+        "estimated_selected_savings_bytes": sum(int(row.get("predicted_saved_bytes") or 0) for row in selected),
+        "smart_presets": smart_learning,
+        "decisions": sorted(decisions, key=lambda row: (row["decision"] != "eligible", -int(row.get("size_bytes") or 0)))[:50],
+    }
+
+
+def _autopilot_readiness(settings: dict | None = None) -> dict:
+    settings = settings or load_settings()
+    roots = _beta_mapped_roots(settings)
+    valid_roots = [row for row in roots if row.get("path") and os.path.isdir(row["path"]) and is_allowed_path(row["path"])]
+    nodes = list_nodes_public()
+    recommendations = []
+    checks = []
+
+    def add(key: str, ok: bool, label: str, detail: str, *, required: bool = False):
+        checks.append({"key": key, "ok": bool(ok), "label": label, "detail": detail, "required": required})
+        if not ok:
+            recommendations.append(detail)
+
+    add("library", bool(valid_roots), "Library folders", f"{len(valid_roots)} accessible media folder(s)." if valid_roots else "Map at least one accessible Movies or Shows folder.", required=True)
+    add("data", os.path.isdir(DATA_DIR) and os.access(DATA_DIR, os.W_OK), "Durable data", "Automation state storage is writable." if os.path.isdir(DATA_DIR) and os.access(DATA_DIR, os.W_OK) else "Make the app data directory writable so decisions can be recovered.", required=True)
+    add("preset", bool(list_preset_files()), "Encode presets", "At least one HandBrake preset is available." if list_preset_files() else "Install or configure a HandBrake preset before enabling manage mode.", required=True)
+    add("stability", bool(settings.get("beta_auto_scan_file_stability_enabled", True)), "Write protection", "New files must become stable before they can be queued." if settings.get("beta_auto_scan_file_stability_enabled", True) else "Enable the file-stability window to avoid encoding files that are still being copied.")
+    add("hardware", bool(settings.get("qsv_device_available", False)), "Hardware acceleration", "Intel QSV is configured." if settings.get("qsv_device_available", False) else "Optional: configure Intel QSV for faster unattended encoding.")
+    add("nodes", any(node.get("online") for node in nodes) if nodes else True, "Worker network", f"{sum(1 for node in nodes if node.get('online'))} of {len(nodes)} linked worker(s) online." if nodes else "Standalone mode is ready; link workers later for more capacity.")
+
+    required = [check for check in checks if check.get("required")]
+    ready = all(check["ok"] for check in required)
+    score = round(100 * sum(1 for check in checks if check["ok"]) / max(1, len(checks)))
+    return {"ready": ready, "score": score, "checks": checks, "recommendations": recommendations[:6]}
+
+
+def _autopilot_status_payload() -> dict:
+    settings = load_settings()
+    scan = _beta_load_autoscan_status(settings)
+    autopilot = (scan.get("last_summary") or {}).get("autopilot")
+    if not isinstance(autopilot, dict):
+        active_jobs = _autopilot_active_job_count()
+        max_active = max(1, int(settings.get("autopilot_max_active_jobs") or 5))
+        autopilot = {
+            "enabled": bool(settings.get("autopilot_enabled", False)),
+            "mode": settings.get("autopilot_mode") or "observe",
+            "eligible": 0,
+            "queued": 0,
+            "decisions": [],
+            "schedule_open": _autopilot_schedule_open(settings),
+            "active_jobs": active_jobs,
+            "max_active_jobs": max_active,
+            "capacity": max(0, max_active - active_jobs),
+            "estimated_selected_savings_bytes": 0,
+        }
+    return {
+        "release": "2.0.0",
+        "autopilot": autopilot,
+        "readiness": _autopilot_readiness(settings),
+        "scan": scan,
+        "queue": {"paused": get_queue_state(), "summary": get_job_summary()},
+        "nodes": list_nodes_public(),
+    }
+
+
 def _beta_encoding_is_running() -> bool:
     try:
         summary = get_job_summary()
@@ -3828,7 +4339,7 @@ def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = Fals
     })
     _beta_save_autoscan_status(status)
     try:
-        if not force and not settings.get("beta_auto_scan_enabled", False):
+        if not force and not (settings.get("beta_auto_scan_enabled", False) or settings.get("autopilot_enabled", False)):
             status.update({
                 "running": False,
                 "last_finished_at": time.time(),
@@ -3865,14 +4376,17 @@ def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = Fals
             "skipped_unstable": queue_summary.get("skipped_unstable", 0),
             "skipped_active": queue_summary.get("skipped_active", 0),
         }
+        autopilot_summary = _autopilot_candidates(data, index, settings)
+        data["autopilot"] = autopilot_summary
         data = _beta_stamp_library_scan(data)
         _beta_save_library_cache(data)
 
-        summary = {**scan_summary, **{f"queue_{k}": v for k, v in queue_summary.items()}}
+        summary = {**scan_summary, **{f"queue_{k}": v for k, v in queue_summary.items()}, "autopilot": autopilot_summary}
         message = (
             f"Auto scan complete: {scan_summary['scanned']} scanned, "
             f"{scan_summary['new'] + scan_summary['changed']} changed, "
-            f"{scan_summary['removed']} removed, {queue_summary.get('queued', 0)} queued."
+            f"{scan_summary['removed']} removed, "
+            f"{queue_summary.get('queued', 0) + autopilot_summary.get('queued', 0)} queued."
         )
         log_event("beta_auto_scan", message, level="info", extra=summary)
         status.update({
@@ -3909,12 +4423,13 @@ def _beta_autoscan_loop() -> None:
         next_scan_at = float(status.get("next_scan_at") or 0)
         now = time.time()
 
-        if settings.get("beta_auto_scan_enabled", False) and now >= next_scan_at:
+        automation_enabled = settings.get("beta_auto_scan_enabled", False) or settings.get("autopilot_enabled", False)
+        if automation_enabled and now >= next_scan_at:
             _beta_run_incremental_auto_scan(reason="timer", force=False)
             continue
 
         wait_seconds = 30
-        if settings.get("beta_auto_scan_enabled", False) and next_scan_at > now:
+        if automation_enabled and next_scan_at > now:
             wait_seconds = max(5, min(30, int(next_scan_at - now)))
         if BETA_AUTOSCAN_RUN_NOW.wait(timeout=wait_seconds):
             BETA_AUTOSCAN_RUN_NOW.clear()
@@ -3978,6 +4493,8 @@ def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
             "status": _node_summary_status(summary),
             "summary": summary,
             "last_error": "",
+            "last_success_at": time.time(),
+            "consecutive_failures": 0,
             "next_heartbeat_at": time.time() + 30,
             "paired_controllers": paired_controllers,
             "jobs": data.get("jobs") if isinstance(data.get("jobs"), list) else [],
@@ -3999,6 +4516,7 @@ def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
         now = time.time()
         misses = int(row.get("heartbeat_misses") or 0) + 1
         row["heartbeat_misses"] = misses
+        row["consecutive_failures"] = misses
         row["last_failed_at"] = now
         row["last_error"] = error_text[:180]
         retry_delay = min(5 * 60, 10 * (2 ** min(max(0, misses - 1), 5)))
@@ -4017,13 +4535,33 @@ def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
 
 
 def _node_heartbeat_loop() -> None:
-    while not NODE_HEARTBEAT_STOP.is_set():
-        now = time.time()
-        for row in list_nodes_private():
-            if float(row.get("next_heartbeat_at") or 0) > now:
-                continue
-            _refresh_linked_node(row)
-        NODE_HEARTBEAT_STOP.wait(timeout=10)
+    NODE_HEARTBEAT_HEALTH.update({"running": True, "started_at": time.time(), "last_error": ""})
+    try:
+        while not NODE_HEARTBEAT_STOP.is_set():
+            try:
+                now = time.time()
+                NODE_HEARTBEAT_HEALTH["last_cycle_at"] = now
+                for row in list_nodes_private():
+                    if float(row.get("next_heartbeat_at") or 0) > now:
+                        continue
+                    try:
+                        refreshed = _refresh_linked_node(row)
+                        if public_node(refreshed).get("online"):
+                            NODE_HEARTBEAT_HEALTH["last_success_at"] = time.time()
+                    except Exception as node_error:
+                        NODE_HEARTBEAT_HEALTH["cycle_errors"] = int(NODE_HEARTBEAT_HEALTH.get("cycle_errors") or 0) + 1
+                        NODE_HEARTBEAT_HEALTH["last_error"] = str(node_error)[:240]
+                        log_event(
+                            "node_heartbeat_error",
+                            f"Node monitor recovered from an error for {(row or {}).get('name') or (row or {}).get('id')}: {str(node_error)[:140]}",
+                            level="warn",
+                        )
+            except Exception as cycle_error:
+                NODE_HEARTBEAT_HEALTH["cycle_errors"] = int(NODE_HEARTBEAT_HEALTH.get("cycle_errors") or 0) + 1
+                NODE_HEARTBEAT_HEALTH["last_error"] = str(cycle_error)[:240]
+            NODE_HEARTBEAT_STOP.wait(timeout=10)
+    finally:
+        NODE_HEARTBEAT_HEALTH["running"] = False
 
 
 def _start_node_heartbeat_thread() -> None:
@@ -4091,6 +4629,14 @@ def _authenticated_worker():
     })
     save_node(worker)
     return worker
+
+
+def _authenticated_mobile(required_scope: str = "read"):
+    authorization = str(request.headers.get("Authorization") or "").strip()
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token:
+        return None
+    return authenticate_mobile_token(token, required_scope=required_scope)
 
 
 def _request_scheme() -> str:
@@ -4705,6 +5251,15 @@ def register_routes(app):
             status=status,
         )
 
+    @app.route("/api/autopilot/status")
+    def autopilot_status_api():
+        return jsonify(ok=True, **_autopilot_status_payload())
+
+    @app.route("/api/autopilot/run", methods=["POST"])
+    def autopilot_run_api():
+        status = _beta_run_incremental_auto_scan(reason="autopilot-manual", force=True)
+        return jsonify(ok=True, status=status, **_autopilot_status_payload())
+
     @app.route("/api/beta/auto_scan/run", methods=["POST"])
     def beta_auto_scan_run_api():
         """Trigger an immediate incremental Beta auto scan."""
@@ -4754,7 +5309,7 @@ def register_routes(app):
         """Queue selected Beta library files using the normal Jobs presets."""
         data = request.get_json(force=True) or {}
         preset = str(data.get("preset") or "auto").strip().lower()
-        if preset not in {"auto", "1080", "4k"}:
+        if preset not in {"auto", "1080", "4k", "smart"}:
             return jsonify(error="invalid preset"), 400
 
         raw_paths = data.get("paths")
@@ -4792,7 +5347,18 @@ def register_routes(app):
         if not to_create:
             return jsonify(error="no queueable files selected", skipped=skipped), 400
 
-        count = create_jobs_batch(to_create)
+        if preset == "smart":
+            count = 0
+            for src, _effective in to_create:
+                try:
+                    _create_smart_job(src)
+                    count += 1
+                except Exception as exc:
+                    skipped.append({"path": src, "reason": f"smart preset planning failed: {exc}"})
+        else:
+            count = create_jobs_batch(to_create)
+        if count <= 0:
+            return jsonify(error="no files could be queued", skipped=skipped), 400
         return jsonify(
             ok=True,
             count=count,
@@ -4857,12 +5423,48 @@ def register_routes(app):
         _save_wizard_presets(kept)
         return jsonify(ok=True, presets=_load_wizard_presets())
 
+    @app.route("/api/smart_presets", methods=["GET"])
+    def smart_presets_api():
+        """Return the user's smart-preset goals and learning progress."""
+        return jsonify(ok=True, **public_smart_preset_state())
+
+    @app.route("/api/smart_presets/profile", methods=["POST"])
+    def smart_preset_profile_api():
+        data = request.get_json(silent=True) or {}
+        profile_data = data.get("profile") if isinstance(data.get("profile"), dict) else data
+        profile = save_smart_preset_profile(profile_data)
+        return jsonify(ok=True, profile=profile, learning=smart_learning_status())
+
+    @app.route("/api/smart_presets/recommend", methods=["POST"])
+    def smart_preset_recommend_api():
+        data = request.get_json(silent=True) or {}
+        try:
+            recommendation = _smart_recommendation(data)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except Exception as exc:
+            return jsonify(error=str(exc)), 500
+        recommendation.pop("selected_plan", None)
+        return jsonify(ok=True, **recommendation)
+
+    @app.route("/api/smart_presets/feedback", methods=["POST"])
+    def smart_preset_feedback_api():
+        data = request.get_json(silent=True) or {}
+        context = _consume_smart_feedback_context(data.get("token") or "")
+        if not context:
+            return jsonify(error="preview feedback expired or was already submitted"), 409
+        try:
+            result = record_smart_preset_feedback(context, data.get("verdict"), data.get("reason"))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        return jsonify(ok=True, **result)
+
     @app.route("/settings")
     @app.route("/settings/<settings_page>")
     def settings_page(settings_page="main"):
         """Render the settings page (global app settings)."""
         settings_page = str(settings_page or "main").strip().lower()
-        if settings_page not in {"main", "beta", "nodes"}:
+        if settings_page not in {"main", "automation", "beta", "nodes"}:
             abort(404)
         settings = load_settings()
         preset_files = list_preset_files()
@@ -4886,6 +5488,24 @@ def register_routes(app):
             preset_dir=PRESET_DIR,
         )
 
+    @app.route("/api/health")
+    def health_api():
+        try:
+            usage = shutil.disk_usage(DATA_DIR)
+            storage = {"writable": os.access(DATA_DIR, os.W_OK), "free_bytes": int(usage.free)}
+        except Exception as e:
+            storage = {"writable": False, "free_bytes": 0, "error": str(e)[:160]}
+        monitor = dict(NODE_HEARTBEAT_HEALTH)
+        healthy = bool(storage.get("writable")) and bool(monitor.get("running"))
+        return jsonify(
+            ok=healthy,
+            status="healthy" if healthy else "degraded",
+            release="2.0.0",
+            storage=storage,
+            queue={"paused": get_queue_state(), "summary": get_job_summary()},
+            schedulers={"node_monitor": monitor, "autopilot": _beta_load_autoscan_status(load_settings())},
+        ), (200 if healthy else 503)
+
     # ------------- Global settings (JSON API) -------------
 
     @app.route("/api/settings", methods=["GET", "POST"])
@@ -4904,6 +5524,100 @@ def register_routes(app):
             _beta_clear_library_cache()
         return jsonify(settings=new_settings, tmdb_changed=tmdb_changed)
 
+    # ------------- Future Android companion API (v1) -------------
+
+    @app.route("/api/mobile/v1/discovery")
+    def mobile_discovery_api():
+        return jsonify(ok=True, **mobile_discovery())
+
+    @app.route("/api/mobile/v1/pair", methods=["POST"])
+    def mobile_pair_api():
+        data = request.get_json(silent=True) or {}
+        try:
+            credentials = accept_mobile_pairing(data.get("code") or "", data)
+        except ValueError as e:
+            return jsonify(error=str(e)), 400
+        log_event("mobile_paired", f"Paired mobile device: {credentials.get('device_name')}", level="info")
+        return jsonify(ok=True, **credentials)
+
+    @app.route("/api/mobile/v1/token/refresh", methods=["POST"])
+    def mobile_refresh_api():
+        data = request.get_json(silent=True) or {}
+        try:
+            credentials = refresh_mobile_token(data.get("device_id") or "", data.get("refresh_token") or "")
+        except ValueError as e:
+            return jsonify(error=str(e)), 401
+        return jsonify(ok=True, **credentials)
+
+    @app.route("/api/mobile/v1/status")
+    def mobile_status_api():
+        device = _authenticated_mobile("read")
+        if not device:
+            return jsonify(error="unauthorized mobile device"), 401
+        nodes = list_nodes_public()
+        return jsonify(
+            ok=True,
+            device=device,
+            queue={"paused": get_queue_state(), "summary": get_job_summary()},
+            nodes={
+                "paired": len(nodes),
+                "online": sum(1 for node in nodes if node.get("online")),
+            },
+        )
+
+    @app.route("/api/mobile/v1/jobs")
+    def mobile_jobs_api():
+        if not _authenticated_mobile("read"):
+            return jsonify(error="unauthorized mobile device"), 401
+        return jsonify(ok=True, jobs=list_jobs_for_api(), summary=get_job_summary(), paused=get_queue_state())
+
+    @app.route("/api/mobile/v1/nodes")
+    def mobile_nodes_api():
+        if not _authenticated_mobile("read"):
+            return jsonify(error="unauthorized mobile device"), 401
+        return jsonify(ok=True, local=local_node_overview(), nodes=list_nodes_public())
+
+    @app.route("/api/mobile/v1/events")
+    def mobile_events_api():
+        if not _authenticated_mobile("read"):
+            return jsonify(error="unauthorized mobile device"), 401
+        try:
+            limit = max(1, min(200, int(request.args.get("limit") or 50)))
+        except (TypeError, ValueError):
+            limit = 50
+        return jsonify(ok=True, events=load_events(limit=limit))
+
+    @app.route("/api/mobile/v1/queue", methods=["POST"])
+    def mobile_queue_control_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data.get("paused"), bool):
+            return jsonify(error="paused must be true or false"), 400
+        paused = set_queue_paused(data["paused"])
+        log_event("mobile_queue_control", f"{device.get('name')} {'paused' if paused else 'resumed'} the queue.", level="info")
+        return jsonify(ok=True, paused=paused)
+
+    # Browser-admin endpoints used by the web settings page.
+    @app.route("/api/mobile/pairing_code", methods=["POST"])
+    def mobile_pairing_code_admin_api():
+        data = request.get_json(silent=True) or {}
+        pairing = create_mobile_pairing(scope=data.get("scope") or "control")
+        log_event("mobile_pairing_code", "Generated a mobile pairing code.", level="info")
+        return jsonify(ok=True, pairing=pairing, discovery=mobile_discovery())
+
+    @app.route("/api/mobile/devices")
+    def mobile_devices_admin_api():
+        return jsonify(ok=True, devices=list_mobile_devices())
+
+    @app.route("/api/mobile/devices/<device_id>", methods=["DELETE"])
+    def mobile_device_revoke_admin_api(device_id):
+        if not revoke_mobile_device(device_id):
+            return jsonify(error="mobile device not found"), 404
+        log_event("mobile_revoked", f"Revoked mobile device {device_id}.", level="warn")
+        return jsonify(ok=True)
+
     # ------------- Multi-node linking -------------
 
     @app.route("/api/node/local", methods=["GET", "POST"])
@@ -4913,6 +5627,11 @@ def register_routes(app):
             set_local_node_name(data.get("name") or "")
             return jsonify(local=local_node_overview())
         return jsonify(local=local_node_overview())
+
+    @app.route("/api/node/discovery")
+    def node_discovery_api():
+        """Unauthenticated protocol metadata used before a pairing exists."""
+        return jsonify(ok=True, **node_discovery())
 
     @app.route("/api/node/pairing_code", methods=["POST"])
     def node_pairing_code_api():
@@ -5186,7 +5905,23 @@ def register_routes(app):
             elif worker_samples > 0:
                 node["prediction_profile"] = worker_profile
             nodes.append(node)
-        return jsonify(local=local_node_overview(), nodes=nodes)
+        return jsonify(local=local_node_overview(), nodes=nodes, monitor=dict(NODE_HEARTBEAT_HEALTH))
+
+    @app.route("/api/nodes/diagnostics")
+    def nodes_diagnostics_api():
+        nodes = list_nodes_public()
+        return jsonify(
+            ok=True,
+            protocol=node_discovery(),
+            monitor=dict(NODE_HEARTBEAT_HEALTH),
+            totals={
+                "paired": len(nodes),
+                "online": sum(1 for node in nodes if node.get("online")),
+                "reconnecting": sum(1 for node in nodes if node.get("status") in {"reconnecting", "stale"}),
+                "offline": sum(1 for node in nodes if node.get("status") == "offline"),
+            },
+            nodes=nodes,
+        )
 
     @app.route("/api/nodes/pair", methods=["POST"])
     def nodes_pair_api():
@@ -5567,13 +6302,27 @@ def register_routes(app):
         if not is_allowed_path(src):
             return jsonify(error="path not allowed"), 400
 
-        if preset not in ("1080", "4k", "auto"):
+        if preset not in ("1080", "4k", "auto", "smart"):
             return jsonify(error="invalid preset"), 400
 
         base = os.path.basename(src)
         name_only, _ext = os.path.splitext(base)
         if name_only.lower().endswith("-tsd"):
             return jsonify(error="file already tagged -TSD, not queuing"), 400
+
+        if preset == "smart":
+            try:
+                job_id, recommendation = _create_smart_job(src)
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
+            except Exception as exc:
+                return jsonify(error=f"smart preset planning failed: {exc}"), 500
+            return jsonify(
+                job_id=job_id,
+                preset="smart",
+                smart_candidate_id=recommendation.get("recommended_id"),
+                learning=recommendation.get("learning"),
+            )
 
         if preset == "auto":
             preset = guess_preset_from_filename(base)
@@ -5603,6 +6352,9 @@ def register_routes(app):
                 "video_codec": plan["options"].get("video_codec"),
                 "encoder_family": plan["options"].get("encoder_family"),
                 "bit_depth": plan["options"].get("bit_depth"),
+                "audio_strategy": plan["options"].get("smart_audio_strategy") or plan["options"].get("audio_mode"),
+                "audio_languages": plan["options"].get("audio_languages"),
+                "subtitle_languages": plan["options"].get("subtitle_languages"),
             },
         )
         return jsonify(
@@ -5977,6 +6729,8 @@ def register_routes(app):
             except Exception:
                 pass
             _register_preview_clip(token, compare_clip)
+            feedback_context = smart_feedback_context(plan, str(data.get("smart_candidate_id") or "manual"))
+            feedback_token = _register_smart_feedback_context(feedback_context)
 
             result = {
                 "ok": True,
@@ -5999,6 +6753,9 @@ def register_routes(app):
                 "new_b64": _b64_jpg(new_jpg),
                 "fallback": used_fallback,
                 "qsv_reason": qsv_reason,
+                "smart_feedback_token": feedback_token,
+                "smart_profile_id": "default",
+                "smart_candidate_id": str(data.get("smart_candidate_id") or "manual")[:40],
             }
             _preview_set_task(preview_id, state="done", progress=100.0, message="Accurate preview ready.", result=result)
         except Exception as e:

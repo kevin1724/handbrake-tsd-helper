@@ -1,0 +1,369 @@
+"""Persistent preference learning for Size Wizard smart presets.
+
+The model is deliberately small and explainable.  HandBrake planning remains
+deterministic; this module only learns which safe plans a person tends to
+approve for similar sources.
+"""
+
+from __future__ import annotations
+
+import json
+import math
+import os
+import tempfile
+import threading
+import time
+import uuid
+
+from .config import DATA_DIR
+
+
+SMART_PRESETS_FILE = os.path.join(DATA_DIR, "smart_presets.json")
+SMART_PRESET_VERSION = 2
+SMART_FEEDBACK_LIMIT = 1000
+SMART_LOCK = threading.RLock()
+
+GOALS = {"balanced", "quality", "small", "speed", "archive"}
+COMPATIBILITY = {"broad", "modern", "maximum"}
+HARDWARE = {"auto", "software", "qsv"}
+AUDIO_STRATEGIES = {"copy", "eac3_surround"}
+SMART_LANGUAGES = ["eng", "spa"]
+
+
+def _truthy(value, default=False) -> bool:
+    if value is None:
+        return bool(default)
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _choice(value, allowed: set[str], default: str) -> str:
+    clean = str(value or default).strip().lower()
+    return clean if clean in allowed else default
+
+
+def _bounded(value, default: float, low: float, high: float) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        number = float(default)
+    return max(low, min(high, number))
+
+
+def default_profile() -> dict:
+    now = time.time()
+    return {
+        "id": "default",
+        "name": "My smart preset",
+        "goal": "balanced",
+        "compatibility": "modern",
+        "hardware": "auto",
+        "audio_strategy": "copy",
+        "audio_languages": SMART_LANGUAGES.copy(),
+        "subtitle_languages": SMART_LANGUAGES.copy(),
+        "preserve_audio": True,
+        "preserve_subtitles": True,
+        "automation_enabled": False,
+        "minimum_feedback": 3,
+        "confidence_threshold": 0.72,
+        "created_at": now,
+        "updated_at": now,
+    }
+
+
+def normalize_profile(values: dict | None, existing: dict | None = None) -> dict:
+    base = default_profile()
+    if isinstance(existing, dict):
+        base.update(existing)
+    values = values if isinstance(values, dict) else {}
+    name = " ".join(str(values.get("name", base["name"]) or "").split())[:80]
+    legacy_preserve_audio = _truthy(
+        values.get("preserve_audio"), base.get("preserve_audio", True)
+    )
+    legacy_strategy = "copy" if legacy_preserve_audio else "eac3_surround"
+    if "audio_strategy" in values:
+        requested_audio_strategy = values.get("audio_strategy")
+    elif "preserve_audio" in values:
+        requested_audio_strategy = legacy_strategy
+    else:
+        requested_audio_strategy = base.get("audio_strategy", "copy")
+    base.update(
+        {
+            "id": "default",
+            "name": name or "My smart preset",
+            "goal": _choice(values.get("goal", base["goal"]), GOALS, "balanced"),
+            "compatibility": _choice(
+                values.get("compatibility", base["compatibility"]), COMPATIBILITY, "modern"
+            ),
+            "hardware": _choice(values.get("hardware", base["hardware"]), HARDWARE, "auto"),
+            "audio_strategy": _choice(
+                requested_audio_strategy,
+                AUDIO_STRATEGIES,
+                legacy_strategy,
+            ),
+            # Smart/automatic presets always retain every English and Spanish
+            # audio and subtitle track.  Keep the legacy booleans in the
+            # persisted shape so older clients remain compatible.
+            "audio_languages": SMART_LANGUAGES.copy(),
+            "subtitle_languages": SMART_LANGUAGES.copy(),
+            "preserve_audio": True,
+            "preserve_subtitles": True,
+            "automation_enabled": _truthy(
+                values.get("automation_enabled"), base["automation_enabled"]
+            ),
+            "minimum_feedback": int(
+                round(_bounded(values.get("minimum_feedback"), base["minimum_feedback"], 3, 20))
+            ),
+            "confidence_threshold": round(
+                _bounded(values.get("confidence_threshold"), base["confidence_threshold"], 0.55, 0.95), 2
+            ),
+            "created_at": float(base.get("created_at") or time.time()),
+            "updated_at": time.time(),
+        }
+    )
+    return base
+
+
+def _empty_state() -> dict:
+    return {"version": SMART_PRESET_VERSION, "profile": default_profile(), "feedback": []}
+
+
+def load_state() -> dict:
+    with SMART_LOCK:
+        try:
+            with open(SMART_PRESETS_FILE, "r", encoding="utf-8") as handle:
+                raw = json.load(handle)
+        except FileNotFoundError:
+            return _empty_state()
+        except Exception:
+            return _empty_state()
+
+        state = raw if isinstance(raw, dict) else {}
+        profile = normalize_profile(state.get("profile"), state.get("profile"))
+        rows = []
+        for row in state.get("feedback") if isinstance(state.get("feedback"), list) else []:
+            if not isinstance(row, dict):
+                continue
+            if str(row.get("verdict") or "") not in {"approve", "reject"}:
+                continue
+            rows.append(row)
+        return {
+            "version": SMART_PRESET_VERSION,
+            "profile": profile,
+            "feedback": rows[-SMART_FEEDBACK_LIMIT:],
+        }
+
+
+def _save_state_unlocked(state: dict) -> None:
+    os.makedirs(DATA_DIR, exist_ok=True)
+    fd, tmp_path = tempfile.mkstemp(prefix="smart_presets_", suffix=".tmp", dir=DATA_DIR)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(state, handle, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_path, SMART_PRESETS_FILE)
+    finally:
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except OSError:
+            pass
+
+
+def save_profile(values: dict | None) -> dict:
+    with SMART_LOCK:
+        state = load_state()
+        profile = normalize_profile(values, state.get("profile"))
+        state["profile"] = profile
+        _save_state_unlocked(state)
+        return profile
+
+
+def resolution_bucket(width, height) -> str:
+    try:
+        width_i, height_i = int(width or 0), int(height or 0)
+    except (TypeError, ValueError):
+        width_i, height_i = 0, 0
+    if height_i >= 1800 or width_i >= 3200:
+        return "4k"
+    if height_i >= 900 or width_i >= 1600:
+        return "1080p"
+    return "sd_hd"
+
+
+def feedback_context(plan: dict, candidate_id: str = "manual") -> dict:
+    probe = plan.get("probe") if isinstance(plan.get("probe"), dict) else {}
+    options = plan.get("options") if isinstance(plan.get("options"), dict) else {}
+    estimates = plan.get("estimates") if isinstance(plan.get("estimates"), dict) else {}
+    inputs = plan.get("inputs") if isinstance(plan.get("inputs"), dict) else {}
+    output = estimates.get("output_resolution") if isinstance(estimates.get("output_resolution"), dict) else {}
+    source_bytes = max(1, int(probe.get("source_size_bytes") or 1))
+    target_bytes = max(1.0, float(inputs.get("target_mb") or 0.0) * 1024.0 * 1024.0)
+    return {
+        "candidate_id": str(candidate_id or "manual")[:40],
+        "source": {
+            "kind": str(probe.get("source_type") or "unknown")[:20],
+            "hdr": bool(probe.get("is_hdr")),
+            "resolution": resolution_bucket(probe.get("width"), probe.get("height")),
+        },
+        "features": {
+            "goal": str(options.get("ai_goal") or "balanced")[:20],
+            "codec": str(options.get("video_codec") or "")[:20],
+            "encoder_family": str(options.get("encoder_family") or "")[:20],
+            "quality": str(options.get("quality") or "")[:20],
+            "speed": str(options.get("encoder_speed") or "")[:20],
+            "output_resolution": resolution_bucket(output.get("width"), output.get("height")),
+            "target_ratio": round(target_bytes / float(source_bytes), 4),
+        },
+        "plan": {
+            "preset": str(plan.get("preset") or "")[:20],
+            "target_mb": round(float(inputs.get("target_mb") or 0.0), 2),
+            "video_bitrate_kbps": round(float(estimates.get("video_bitrate_kbps") or 0.0), 1),
+            "encoder": str(estimates.get("encoder") or "")[:40],
+            "quality_code": str(estimates.get("quality_code") or "")[:20],
+        },
+    }
+
+
+def _similarity(left: dict, right: dict) -> float:
+    left_source = left.get("source") if isinstance(left.get("source"), dict) else {}
+    right_source = right.get("source") if isinstance(right.get("source"), dict) else {}
+    left_features = left.get("features") if isinstance(left.get("features"), dict) else {}
+    right_features = right.get("features") if isinstance(right.get("features"), dict) else {}
+
+    score = 0.12
+    if left_source.get("kind") == right_source.get("kind"):
+        score += 0.14
+    if bool(left_source.get("hdr")) == bool(right_source.get("hdr")):
+        score += 0.14
+    if left_source.get("resolution") == right_source.get("resolution"):
+        score += 0.14
+    for key, weight in (
+        ("codec", 0.12),
+        ("encoder_family", 0.08),
+        ("quality", 0.07),
+        ("output_resolution", 0.08),
+    ):
+        if left_features.get(key) == right_features.get(key):
+            score += weight
+    try:
+        ratio_delta = abs(float(left_features.get("target_ratio") or 0) - float(right_features.get("target_ratio") or 0))
+        score += 0.11 * math.exp(-ratio_delta * 7.0)
+    except (TypeError, ValueError):
+        pass
+    return max(0.05, min(1.0, score))
+
+
+def candidate_learning(context: dict, state: dict | None = None) -> dict:
+    state = state if isinstance(state, dict) else load_state()
+    positive = 0.0
+    negative = 0.0
+    related = 0
+    for row in state.get("feedback") or []:
+        saved_context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        weight = _similarity(context, saved_context)
+        if weight < 0.24:
+            continue
+        related += 1
+        if row.get("verdict") == "approve":
+            positive += weight
+        else:
+            negative += weight
+    evidence = positive + negative
+    acceptance = (1.0 + positive) / (2.0 + evidence)
+    confidence = min(1.0, evidence / max(1.0, float(state.get("profile", {}).get("minimum_feedback") or 3)))
+    return {
+        "acceptance": round(acceptance, 3),
+        "confidence": round(confidence, 3),
+        "weighted_evidence": round(evidence, 2),
+        "related_reviews": related,
+    }
+
+
+def learning_status(state: dict | None = None) -> dict:
+    state = state if isinstance(state, dict) else load_state()
+    profile = state.get("profile") if isinstance(state.get("profile"), dict) else default_profile()
+    rows = state.get("feedback") if isinstance(state.get("feedback"), list) else []
+    approvals = sum(1 for row in rows if row.get("verdict") == "approve")
+    rejections = sum(1 for row in rows if row.get("verdict") == "reject")
+    count = approvals + rejections
+    posterior = (1.0 + approvals) / (2.0 + count)
+    evidence_confidence = min(1.0, count / max(1.0, float(profile.get("minimum_feedback") or 3)))
+    ready = bool(
+        profile.get("automation_enabled")
+        and count >= int(profile.get("minimum_feedback") or 3)
+        and approvals >= 2
+        and posterior >= float(profile.get("confidence_threshold") or 0.72)
+    )
+    needed = max(0, int(profile.get("minimum_feedback") or 3) - count)
+    return {
+        "feedback_count": count,
+        "approvals": approvals,
+        "rejections": rejections,
+        "approval_probability": round(posterior, 3),
+        "evidence_confidence": round(evidence_confidence, 3),
+        "automation_enabled": bool(profile.get("automation_enabled")),
+        "automation_ready": ready,
+        "reviews_needed": needed,
+        "message": (
+            "Learned automation is ready for familiar sources."
+            if ready
+            else (
+                f"Review {needed} more accurate preview{'s' if needed != 1 else ''} to unlock automation."
+                if needed
+                else "More consistent approvals are needed before automation unlocks."
+            )
+        ),
+    }
+
+
+def record_feedback(context: dict, verdict: str, reason: str = "") -> dict:
+    verdict = str(verdict or "").strip().lower()
+    if verdict not in {"approve", "reject"}:
+        raise ValueError("verdict must be approve or reject")
+    reason = str(reason or ("looks_good" if verdict == "approve" else "other")).strip().lower()
+    allowed_reasons = {"looks_good", "quality", "size", "speed", "compatibility", "other"}
+    if reason not in allowed_reasons:
+        reason = "other"
+    if not isinstance(context, dict) or not isinstance(context.get("features"), dict):
+        raise ValueError("invalid preview feedback context")
+
+    with SMART_LOCK:
+        state = load_state()
+        row = {
+            "id": uuid.uuid4().hex,
+            "profile_id": "default",
+            "verdict": verdict,
+            "reason": reason,
+            "context": context,
+            "created_at": time.time(),
+        }
+        state["feedback"] = (state.get("feedback") or [])[-(SMART_FEEDBACK_LIMIT - 1):] + [row]
+        _save_state_unlocked(state)
+        return {"feedback": row, "learning": learning_status(state)}
+
+
+def public_state() -> dict:
+    state = load_state()
+    recent = []
+    for row in reversed(state.get("feedback") or []):
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        source = context.get("source") if isinstance(context.get("source"), dict) else {}
+        plan = context.get("plan") if isinstance(context.get("plan"), dict) else {}
+        recent.append(
+            {
+                "id": row.get("id"),
+                "verdict": row.get("verdict"),
+                "reason": row.get("reason"),
+                "created_at": row.get("created_at"),
+                "source": source,
+                "plan": plan,
+            }
+        )
+        if len(recent) >= 8:
+            break
+    return {"profile": state["profile"], "learning": learning_status(state), "recent_feedback": recent}

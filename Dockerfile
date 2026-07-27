@@ -187,7 +187,7 @@ RUN chmod +x /worker/encode-one.sh
 # -------------------------------
 # Python dependencies
 # -------------------------------
-RUN pip install --no-cache-dir flask
+RUN pip install --no-cache-dir flask gunicorn
 
 # -------------------------------
 # QSV diagnostics helper
@@ -230,12 +230,16 @@ ENV LIBVA_DRIVER_NAME=iHD
 ENV MFX_IMPL_HARDWARE=1
 
 ENV PYTHONPATH=/app
-ENV FLASK_ENV=development
-ENV FLASK_DEBUG=1
+ENV FLASK_ENV=production
+ENV FLASK_DEBUG=0
 ENV PYTHONUNBUFFERED=1
 
 # -------------------------------
 # Expose port & start app
 # -------------------------------
 EXPOSE 8080
-CMD ["python", "-m", "webui.app"]
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4)" || exit 1
+# One process owns the durable queue and background schedulers. Gunicorn's
+# threads provide concurrent HTTP handling without starting duplicate workers.
+CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=8", "--timeout=300", "--graceful-timeout=30", "--access-logfile=-", "--error-logfile=-", "webui.app:create_app()"]

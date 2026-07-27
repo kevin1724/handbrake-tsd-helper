@@ -758,6 +758,128 @@
       background: #000;
     }
 
+    .smart-preset-card {
+      display: grid;
+      gap: 14px;
+      margin-bottom: 14px;
+      border-color: rgba(52, 211, 153, 0.3);
+      background: linear-gradient(135deg, rgba(52, 211, 153, 0.07), rgba(22, 199, 214, 0.035));
+    }
+
+    .smart-preset-head,
+    .smart-learning-row,
+    .smart-feedback-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .smart-preset-head h2,
+    .smart-feedback-head h3 {
+      margin: 0;
+    }
+
+    .smart-preset-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+      gap: 10px;
+    }
+
+    .smart-toggle {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      min-height: 42px;
+      padding: 8px 10px;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 8px;
+      background: rgba(0,0,0,0.14);
+    }
+
+    .smart-learning-meter {
+      flex: 1 1 240px;
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.09);
+    }
+
+    .smart-learning-meter div {
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #16c7d6, #34d399);
+      transition: width 180ms ease;
+    }
+
+    .smart-candidates {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(225px, 1fr));
+      gap: 10px;
+    }
+
+    .smart-candidate {
+      display: grid;
+      gap: 8px;
+      padding: 12px;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 10px;
+      background: rgba(6, 11, 17, 0.62);
+    }
+
+    .smart-candidate.is-recommended {
+      border-color: rgba(52, 211, 153, 0.55);
+      box-shadow: inset 0 0 0 1px rgba(52, 211, 153, 0.12);
+    }
+
+    .smart-candidate.is-active {
+      outline: 2px solid rgba(22, 199, 214, 0.7);
+    }
+
+    .smart-candidate-title {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 8px;
+    }
+
+    .smart-candidate-score {
+      color: #86efc2;
+      font-weight: 850;
+    }
+
+    .smart-candidate-meta {
+      color: rgba(229,229,229,0.72);
+      line-height: 1.45;
+    }
+
+    .smart-feedback-panel {
+      display: none;
+      gap: 10px;
+      margin-top: 12px;
+      padding: 12px;
+      border: 1px solid rgba(52, 211, 153, 0.35);
+      border-radius: 10px;
+      background: rgba(52, 211, 153, 0.07);
+    }
+
+    .smart-feedback-panel.is-ready {
+      display: grid;
+    }
+
+    .smart-feedback-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .smart-feedback-actions button[data-verdict="approve"] {
+      border-color: rgba(52, 211, 153, 0.48);
+      color: #a7f3d0;
+    }
+
     @media (max-width: 860px) {
       .wizard-mode-card {
         grid-template-columns: 1fr;
@@ -829,7 +951,7 @@
       </span>
     </a>
     <div class="nav-links">
-      <a href="/" class="nav-link nav-jobs">Jobs</a>
+      <a href="/" class="nav-link nav-jobs">Dashboard</a>
       <a href="/size_wizard" class="nav-link nav-wizard nav-link-active">Size Wizard</a>
       <a href="/beta" class="nav-link nav-library">Library</a>
       <a href="/settings" class="nav-link nav-settings">Settings</a>
@@ -852,6 +974,67 @@
         <button id="simpleModeBtn" type="button" data-mode="simple" class="is-active">Simple Mode</button>
         <button id="advancedModeBtn" type="button" data-mode="advanced">Advanced Mode</button>
       </div>
+    </section>
+
+    <section class="section-card smart-preset-card" aria-labelledby="smartPresetHeading">
+      <div class="smart-preset-head">
+        <div>
+          <h2 id="smartPresetHeading">Smart Presets</h2>
+          <div class="small">Tell it what matters, compare a real preview, and it will learn the plans you accept.</div>
+        </div>
+        <span id="smartReadyPill" class="ai-model-chip">Learning</span>
+      </div>
+
+      <div class="smart-preset-grid">
+        <div class="wizard-field">
+          <label for="smartGoal">Optimize for</label>
+          <select id="smartGoal">
+            <option value="balanced">Balanced</option>
+            <option value="quality">Fine detail</option>
+            <option value="small">Storage savings</option>
+            <option value="speed">Encode speed</option>
+            <option value="archive">Long-term archive</option>
+          </select>
+        </div>
+        <div class="wizard-field">
+          <label for="smartCompatibility">Playback compatibility</label>
+          <select id="smartCompatibility">
+            <option value="broad">Broad / older devices</option>
+            <option value="modern" selected>Modern TVs and phones</option>
+            <option value="maximum">Newest / maximum compression</option>
+          </select>
+        </div>
+        <div class="wizard-field">
+          <label for="smartHardware">Encoder hardware</label>
+          <select id="smartHardware">
+            <option value="auto">Choose automatically</option>
+            <option value="software">CPU quality / efficiency</option>
+            <option value="qsv">Intel QSV speed</option>
+          </select>
+        </div>
+        <div class="wizard-field">
+          <label for="smartAudioStrategy">Audio handling</label>
+          <select id="smartAudioStrategy">
+            <option value="copy" selected>Original passthrough (exact quality)</option>
+            <option value="eac3_surround">Smaller E-AC3 5.1 (640 kbps)</option>
+          </select>
+          <div class="help-text">Passthrough is exact. E-AC3 saves space and keeps surround sound.</div>
+        </div>
+        <div class="smart-toggle">
+          <span>Always keep all matching<br><strong>English + Spanish audio and subtitles</strong></span>
+        </div>
+        <label class="smart-toggle"><input id="smartAutomation" type="checkbox"> Auto-pick after learning</label>
+      </div>
+
+      <div class="smart-learning-row">
+        <div class="smart-learning-meter" aria-hidden="true"><div id="smartLearningFill"></div></div>
+        <strong id="smartLearningSummary">Loading learning history…</strong>
+      </div>
+      <div class="wizard-actions">
+        <button id="smartBuildBtn" type="button" class="primary-btn">Build Smart Presets</button>
+        <span id="smartPresetStatus" class="small status-text"></span>
+      </div>
+      <div id="smartCandidates" class="smart-candidates" aria-live="polite"></div>
     </section>
 
     <section class="section-card advanced-only">
@@ -1298,9 +1481,10 @@
               <select id="audioMode">
                 <option value="auto">AAC auto</option>
                 <option value="aac">AAC custom bitrate</option>
+                <option value="eac3">E-AC3 5.1 surround (640 kbps)</option>
                 <option value="copy" selected>Copy source audio</option>
               </select>
-              <div class="help-text">Copy preserves the original audio format and is safest for quality.</div>
+              <div class="help-text">Copy preserves the original format exactly. E-AC3 is the smaller surround-safe choice.</div>
             </div>
 
             <div class="wizard-field">
@@ -1492,7 +1676,7 @@
       </aside>
     </div>
 
-    <section class="section-card advanced-only">
+    <section class="section-card">
       <details class="advanced-section" open>
         <summary>
           <span class="advanced-summary-copy">
@@ -1547,6 +1731,20 @@
         <video id="accurateVideo" controls playsinline></video>
         <div id="accurateVideoHint" class="small status-text"></div>
       </div>
+      <div id="smartFeedbackPanel" class="smart-feedback-panel">
+        <div class="smart-feedback-head">
+          <h3>Teach Smart Presets</h3>
+          <span id="smartFeedbackStatus" class="small status-text">Review the exact result above.</span>
+        </div>
+        <div class="small">Approve it, or tell the learner what should change. Feedback is stored locally and only applies to similar sources.</div>
+        <div class="smart-feedback-actions">
+          <button type="button" class="ghost-btn" data-smart-feedback="looks_good" data-verdict="approve">Looks good</button>
+          <button type="button" class="ghost-btn" data-smart-feedback="quality" data-verdict="reject">Needs more quality</button>
+          <button type="button" class="ghost-btn" data-smart-feedback="size" data-verdict="reject">Should be smaller</button>
+          <button type="button" class="ghost-btn" data-smart-feedback="speed" data-verdict="reject">Too slow</button>
+          <button type="button" class="ghost-btn" data-smart-feedback="compatibility" data-verdict="reject">Playback concern</button>
+        </div>
+      </div>
         </div>
       </details>
     </section>
@@ -1575,6 +1773,7 @@
       encoder_speed: "auto",
       resolution_mode: "auto",
       audio_mode: "copy",
+      smart_audio_strategy: "",
       audio_bitrate: "auto",
       audio_tracks: "all",
       subtitle_mode: "all",
@@ -1638,6 +1837,12 @@
     let activePresetId = "";
     let lastPlanData = null;
     let lastPlanPayload = null;
+    let smartProfile = null;
+    let smartLearning = null;
+    let smartCandidates = [];
+    let activeSmartCandidateId = "";
+    let smartFeedbackToken = "";
+    let smartBuildBusy = false;
     let aiChatBusy = false;
     let aiChatHasConversation = false;
     let imgFetchController = null;
@@ -1973,7 +2178,10 @@
 
     function audioSummaryText(payload) {
       const tracks = payload.ai_mode ? payload.ai_audio_scope : payload.audio_tracks;
-      const mode = payload.audio_mode === "copy" || payload.ai_copy_audio ? "copy audio" : "convert to AAC";
+      const strategy = payload.smart_audio_strategy || "";
+      const mode = strategy === "eac3_surround" || payload.audio_mode === "eac3"
+        ? "E-AC3 5.1 at 640 kbps"
+        : (payload.audio_mode === "copy" || payload.ai_copy_audio ? "copy original audio" : "convert to AAC");
       const trackText = tracks === "all" ? "all matching tracks" : "first matching track";
       return `${mode}, ${trackText}, ${languageText(payload.audio_languages)}`;
     }
@@ -2001,7 +2209,9 @@
       const subtitleScope = payload.ai_mode ? payload.ai_subtitle_scope : payload.subtitle_mode;
       const audioScope = payload.ai_mode ? payload.ai_audio_scope : payload.audio_tracks;
 
-      if (payload.audio_mode !== "copy" && !payload.ai_copy_audio) {
+      if (payload.smart_audio_strategy === "eac3_surround" || payload.audio_mode === "eac3") {
+        warnings.push("Audio will be converted to E-AC3 5.1 at 640 kbps to save space while retaining surround playback.");
+      } else if (payload.audio_mode !== "copy" && !payload.ai_copy_audio) {
         warnings.push("Audio may be converted instead of copied.");
       }
       if (audioScope === "first") {
@@ -2234,6 +2444,7 @@
         encoder_speed: el("encoderSpeed").value,
         resolution_mode: el("resolutionMode").value,
         audio_mode: el("audioMode").value,
+        smart_audio_strategy: activeSmartCandidateId ? (smartProfile?.audio_strategy || "copy") : "",
         audio_bitrate: el("audioBitrate").value,
         audio_tracks: el("audioTracks").value,
         subtitle_mode: el("subtitleMode").value,
@@ -2242,7 +2453,9 @@
         deinterlace: el("deinterlace").value,
         crop_mode: el("cropMode").value,
         two_pass: el("twoPass").checked,
-        accurate_preview_layout: el("accuratePreviewLayout")?.value || "side_by_side"
+        accurate_preview_layout: el("accuratePreviewLayout")?.value || "side_by_side",
+        smart_profile_id: smartProfile?.id || "default",
+        smart_candidate_id: activeSmartCandidateId || "manual"
       };
     }
 
@@ -2251,6 +2464,8 @@
       delete copy.src;
       delete copy.preview_id;
       delete copy.accurate_preview_layout;
+      delete copy.smart_profile_id;
+      delete copy.smart_candidate_id;
       return copy;
     }
 
@@ -2344,7 +2559,7 @@
       el("encoderFamily").disabled = isAv1;
 
       const audioMode = el("audioMode").value;
-      el("audioBitrate").disabled = audioMode === "copy";
+      el("audioBitrate").disabled = audioMode === "copy" || audioMode === "eac3";
 
       const sameRate = el("framerateMode").value === "same";
       el("framerate").disabled = sameRate;
@@ -2352,6 +2567,190 @@
       const isQsv = el("encoderFamily").value === "qsv";
       if (isQsv) el("twoPass").checked = false;
       el("twoPass").disabled = isQsv;
+    }
+
+    function smartProfileFromControls() {
+      return {
+        id: "default",
+        name: "My smart preset",
+        goal: el("smartGoal")?.value || "balanced",
+        compatibility: el("smartCompatibility")?.value || "modern",
+        hardware: el("smartHardware")?.value || "auto",
+        audio_strategy: el("smartAudioStrategy")?.value || "copy",
+        audio_languages: ["eng", "spa"],
+        subtitle_languages: ["eng", "spa"],
+        preserve_audio: true,
+        preserve_subtitles: true,
+        automation_enabled: Boolean(el("smartAutomation")?.checked),
+        minimum_feedback: smartProfile?.minimum_feedback || 3,
+        confidence_threshold: smartProfile?.confidence_threshold || 0.72
+      };
+    }
+
+    function applySmartProfile(profile = {}) {
+      smartProfile = profile;
+      setValue("smartGoal", profile.goal || "balanced");
+      setValue("smartCompatibility", profile.compatibility || "modern");
+      setValue("smartHardware", profile.hardware || "auto");
+      setValue("smartAudioStrategy", profile.audio_strategy || (profile.preserve_audio === false ? "eac3_surround" : "copy"));
+      setChecked("smartAutomation", profile.automation_enabled === true);
+    }
+
+    function renderSmartLearning(learning = {}) {
+      smartLearning = learning;
+      const needed = Number(learning.reviews_needed || 0);
+      const minimum = Number(smartProfile?.minimum_feedback || 3);
+      const count = Number(learning.feedback_count || 0);
+      const progress = learning.automation_ready ? 100 : Math.min(100, Math.round((count / Math.max(1, minimum)) * 100));
+      if (el("smartLearningFill")) el("smartLearningFill").style.width = `${progress}%`;
+      if (el("smartLearningSummary")) {
+        el("smartLearningSummary").textContent = learning.automation_ready
+          ? `Ready · ${count} reviewed previews · ${Math.round(Number(learning.approval_probability || 0) * 100)}% learned acceptance`
+          : (learning.message || `${needed} more reviews needed`);
+      }
+      const pill = el("smartReadyPill");
+      if (pill) {
+        pill.textContent = learning.automation_ready ? "Auto ready" : (learning.automation_enabled ? "Learning" : "Recommend only");
+        pill.title = learning.automation_ready
+          ? "Autopilot and Smart mode may now choose a learned preset automatically."
+          : "Automatic selection stays locked until enough consistent accurate-preview feedback is recorded.";
+      }
+    }
+
+    function applySmartCandidate(candidate, { automatic = false } = {}) {
+      if (!candidate) return;
+      activeSmartCandidateId = candidate.id || "manual";
+      applyWizardOptions(candidate.options || {});
+      renderSmartCandidates();
+      setStatus(
+        "smartPresetStatus",
+        automatic ? `Auto-picked ${candidate.name} from learned preferences.` : `${candidate.name} applied. Run Accurate Preview, then review it.`,
+        "ok"
+      );
+    }
+
+    function renderSmartCandidates() {
+      const wrap = el("smartCandidates");
+      if (!wrap) return;
+      wrap.replaceChildren();
+      smartCandidates.forEach((candidate) => {
+        const card = document.createElement("article");
+        card.className = `smart-candidate${candidate.recommended ? " is-recommended" : ""}${candidate.id === activeSmartCandidateId ? " is-active" : ""}`;
+
+        const title = document.createElement("div");
+        title.className = "smart-candidate-title";
+        const strong = document.createElement("strong");
+        strong.textContent = `${candidate.name}${candidate.recommended ? " · Recommended" : ""}`;
+        const score = document.createElement("span");
+        score.className = "smart-candidate-score";
+        score.textContent = `${candidate.score_percent || 0}% fit`;
+        title.append(strong, score);
+
+        const summary = document.createElement("div");
+        summary.className = "small";
+        summary.textContent = candidate.summary || "";
+        const meta = document.createElement("div");
+        meta.className = "smart-candidate-meta small";
+        const plan = candidate.plan || {};
+        const output = plan.output_resolution || {};
+        meta.textContent = `${fmtMb(plan.target_mb)} · ${plan.encoder_label || plan.encoder || "encoder"} · ${output.width || "?"}x${output.height || "?"} · ${plan.eta_human || "ETA unknown"}`;
+        const learned = document.createElement("div");
+        learned.className = "small status-text";
+        const reviews = Number(candidate.learned?.related_reviews || 0);
+        learned.textContent = reviews
+          ? `Learned acceptance ${Math.round(Number(candidate.learned?.acceptance || 0) * 100)}% from ${reviews} related review${reviews === 1 ? "" : "s"}.`
+          : "No similar reviews yet; ranked from your goals and source analysis.";
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = candidate.recommended ? "primary-btn" : "ghost-btn";
+        button.textContent = candidate.id === activeSmartCandidateId ? "Applied" : "Apply for Preview";
+        button.disabled = candidate.id === activeSmartCandidateId;
+        button.addEventListener("click", () => applySmartCandidate(candidate));
+        card.append(title, summary, meta, learned, button);
+        wrap.appendChild(card);
+      });
+    }
+
+    async function saveSmartProfile() {
+      const res = await fetchWithTimeout("/api/smart_presets/profile", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ profile: smartProfileFromControls() })
+      }, 12000);
+      const data = await readJson(res);
+      if (!res.ok) throw new Error(data.error || "Could not save smart preset goals");
+      applySmartProfile(data.profile || {});
+      renderSmartLearning(data.learning || {});
+      return data;
+    }
+
+    async function buildSmartPresets({ automatic = false } = {}) {
+      if (smartBuildBusy) return;
+      const payload = currentPayload();
+      if (!payload.src) {
+        setStatus("smartPresetStatus", "Pick a source file first.", "error");
+        return;
+      }
+      smartBuildBusy = true;
+      el("smartBuildBtn").disabled = true;
+      setStatus("smartPresetStatus", automatic ? "Learning from this source…" : "Building three safe candidates…");
+      try {
+        await saveSmartProfile();
+        const res = await fetchWithTimeout("/api/smart_presets/recommend", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        }, 70000);
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(data.error || "Smart preset planning failed");
+        smartCandidates = Array.isArray(data.candidates) ? data.candidates : [];
+        renderSmartLearning(data.learning || {});
+        const recommended = smartCandidates.find((row) => row.id === data.recommended_id) || smartCandidates[0];
+        if (recommended) applySmartCandidate(recommended, { automatic: automatic && data.auto_apply === true });
+        else setStatus("smartPresetStatus", "No usable candidate was generated.", "error");
+      } catch (error) {
+        setStatus("smartPresetStatus", error.message || "Smart preset planning failed", "error");
+      } finally {
+        smartBuildBusy = false;
+        el("smartBuildBtn").disabled = false;
+      }
+    }
+
+    async function loadSmartPresets() {
+      try {
+        const res = await fetchWithTimeout("/api/smart_presets", { cache: "no-store" }, 10000);
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(data.error || "Smart preset profile failed to load");
+        applySmartProfile(data.profile || {});
+        renderSmartLearning(data.learning || {});
+        if (data.profile?.automation_enabled && el("src").value) {
+          setTimeout(() => buildSmartPresets({ automatic: true }), 250);
+        }
+      } catch (error) {
+        setStatus("smartPresetStatus", error.message || "Smart preset profile failed to load", "error");
+      }
+    }
+
+    async function submitSmartFeedback(verdict, reason) {
+      if (!smartFeedbackToken) return;
+      const buttons = el("smartFeedbackPanel")?.querySelectorAll("button") || [];
+      buttons.forEach((button) => { button.disabled = true; });
+      setStatus("smartFeedbackStatus", "Saving feedback…");
+      try {
+        const res = await fetchWithTimeout("/api/smart_presets/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token: smartFeedbackToken, verdict, reason })
+        }, 12000);
+        const data = await readJson(res);
+        if (!res.ok) throw new Error(data.error || "Feedback could not be saved");
+        smartFeedbackToken = "";
+        renderSmartLearning(data.learning || {});
+        setStatus("smartFeedbackStatus", verdict === "approve" ? "Approved — this plan now influences similar jobs." : "Saved — the next recommendation will adjust.", "ok");
+      } catch (error) {
+        setStatus("smartFeedbackStatus", error.message || "Feedback could not be saved", "error");
+        buttons.forEach((button) => { button.disabled = false; });
+      }
     }
 
     function renderWizardPresets() {
@@ -2660,6 +3059,7 @@
       el("imgStatus").textContent = "";
       el("compareWrap").style.display = "none";
       el("accurateVideoWrap").style.display = "none";
+      el("smartFeedbackPanel")?.classList.remove("is-ready");
       hideAccurateProgress();
     }
 
@@ -2806,6 +3206,13 @@
           : (data.clip_layout === "side_by_side" ? "Full side-by-side: left original / right transcoded" : "Transcoded clip");
         vhint.textContent = `${layout} | ${secs} ${ts} | ${data.encoder_label || data.encoder || "encoder"}`.trim();
       }
+      smartFeedbackToken = data.smart_feedback_token || "";
+      const feedback = el("smartFeedbackPanel");
+      if (feedback) {
+        feedback.classList.toggle("is-ready", Boolean(smartFeedbackToken));
+        feedback.querySelectorAll("button").forEach((button) => { button.disabled = false; });
+      }
+      setStatus("smartFeedbackStatus", smartFeedbackToken ? "Review the exact result above." : "");
     }
 
     function cancelPreviewOnServer() {
@@ -2944,6 +3351,8 @@
       }
 
       setPreviewBusy("genAccurateBtn", true, "Accurate Preview", "Cancel Accurate Preview");
+      smartFeedbackToken = "";
+      el("smartFeedbackPanel")?.classList.remove("is-ready");
       status.textContent = "Starting accurate preview...";
       vwrap.style.display = "none";
       video.removeAttribute("src");
@@ -3117,6 +3526,11 @@
       el("deletePresetBtn").addEventListener("click", deleteWizardPreset);
       el("queueBtn").addEventListener("click", queueWizard);
       el("simpleQueueBtn").addEventListener("click", queueWizard);
+      el("smartBuildBtn").addEventListener("click", () => buildSmartPresets());
+      el("smartFeedbackPanel").addEventListener("click", (event) => {
+        const button = event.target.closest("[data-smart-feedback]");
+        if (button) submitSmartFeedback(button.dataset.verdict || "reject", button.dataset.smartFeedback || "other");
+      });
       el("genFastBtn").addEventListener("click", (e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -3182,6 +3596,7 @@
       updateControlStates();
       updateSimpleUi();
       loadWizardPresets();
+      loadSmartPresets();
       loadAiModelStatus();
       schedulePreview();
     }

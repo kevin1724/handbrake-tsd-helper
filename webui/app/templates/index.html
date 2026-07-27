@@ -16,7 +16,7 @@
       </span>
     </a>
     <div class="nav-links">
-      <a href="/" class="nav-link nav-jobs nav-link-active">Jobs</a>
+      <a href="/" class="nav-link nav-jobs nav-link-active">Dashboard</a>
       <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
       <a href="/beta" class="nav-link nav-library">Library</a>
       <a href="/settings" class="nav-link nav-settings">Settings</a>
@@ -30,10 +30,33 @@
   <main class="app-page jobs-shell">
     <header class="page-hero">
       <div>
-        <h1>Jobs</h1>
-        <p class="page-subtitle">Browse media, queue one-shot encodes, batch folders, and watch the queue move.</p>
+        <h1>Operations Dashboard</h1>
+        <p class="page-subtitle">See what the system is doing, why it made each automation decision, and what needs attention.</p>
       </div>
     </header>
+
+    <section class="section-card operations-control-card">
+      <div class="section-heading-row">
+        <div>
+          <div class="eyebrow">Release 2.0 control center</div>
+          <h2>Autopilot Operations</h2>
+          <div id="operationsStatusLine" class="small">Loading system readiness…</div>
+        </div>
+        <div class="button-row">
+          <a href="/settings/automation" class="button-link ghost-btn">Configure</a>
+          <button id="runDashboardAutopilotBtn" type="button">Run cycle now</button>
+        </div>
+      </div>
+      <div class="operations-metrics">
+        <div class="operations-score"><strong id="operationsReadinessScore">—</strong><span>readiness</span></div>
+        <div><span>Autopilot</span><strong id="operationsAutopilotMode">Loading</strong></div>
+        <div><span>Next scan</span><strong id="operationsNextScan">—</strong></div>
+        <div><span>Eligible now</span><strong id="operationsEligible">0</strong></div>
+        <div><span>Workers online</span><strong id="operationsNodes">0 / 0</strong></div>
+        <div><span>Potential savings</span><strong id="operationsSavings">—</strong></div>
+      </div>
+      <div id="operationsRecommendation" class="operations-recommendation small">Autopilot is checking the current configuration.</div>
+    </section>
 
     <section class="section-card browser-card">
       <div class="section-heading-row">
@@ -110,6 +133,7 @@
           <div class="field-stack">
             <label for="presetSelect">Preset mode</label>
             <select id="presetSelect">
+              <option value="smart">Smart learned preset</option>
               <option value="auto">Auto by filename (1080p vs 2160p/4K)</option>
               <option value="1080">Force 1080p preset</option>
               <option value="4k">Force 4K preset</option>
@@ -246,6 +270,7 @@ let currentJobId = null;
 let statusTimer = null;
 let jobsTimer = null;
 let linkedNodesTimer = null;
+let operationsTimer = null;
 
 // --------------------------
 // Jobs page view mode
@@ -384,6 +409,61 @@ function formatFileDate(ts) {
   if (!Number.isFinite(n) || n <= 0) return '';
   const d = new Date(n * 1000);
   return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString();
+}
+
+function formatOperationsTime(ts) {
+  const value = Number(ts || 0);
+  if (!Number.isFinite(value) || value <= 0) return 'Not scheduled';
+  const date = new Date(value * 1000);
+  return Number.isNaN(date.getTime()) ? 'Not scheduled' : date.toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+function renderOperationsStatus(data) {
+  const autopilot = data?.autopilot || {};
+  const readiness = data?.readiness || {};
+  const scan = data?.scan || {};
+  const nodes = Array.isArray(data?.nodes) ? data.nodes : [];
+  const mode = autopilot.enabled ? (autopilot.mode || 'observe') : 'disabled';
+  setTextIfPresent('operationsReadinessScore', `${readiness.score || 0}%`);
+  setTextIfPresent('operationsAutopilotMode', mode === 'manage' ? 'Managing' : (mode === 'observe' ? 'Observing' : 'Disabled'));
+  setTextIfPresent('operationsNextScan', autopilot.enabled ? formatOperationsTime(scan.next_scan_at) : 'Disabled');
+  setTextIfPresent('operationsEligible', String(autopilot.eligible || 0));
+  setTextIfPresent('operationsNodes', `${nodes.filter(node => node.online).length} / ${nodes.length}`);
+  setTextIfPresent('operationsSavings', formatFileBytes(autopilot.estimated_selected_savings_bytes) || 'Learning');
+  setTextIfPresent('operationsStatusLine', scan.running
+    ? 'A library decision cycle is running now.'
+    : `${readiness.ready ? 'Core checks are ready' : 'Setup needs attention'} · last cycle ${scan.last_status || 'idle'}`);
+  const recommendation = (readiness.recommendations || [])[0];
+  setTextIfPresent('operationsRecommendation', recommendation || 'No critical setup issue detected. Review Autopilot decisions before switching from Observe to Manage.');
+}
+
+async function refreshOperationsStatus() {
+  try {
+    const res = await fetch('/api/autopilot/status');
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Operations status unavailable');
+    renderOperationsStatus(data);
+  } catch (err) {
+    setTextIfPresent('operationsStatusLine', err.message || 'Operations status unavailable');
+  }
+}
+
+async function runDashboardAutopilot() {
+  const button = document.getElementById('runDashboardAutopilotBtn');
+  try {
+    if (button) { button.disabled = true; button.textContent = 'Scanning…'; }
+    const res = await fetch('/api/autopilot/run', { method: 'POST' });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || 'Autopilot cycle failed');
+    renderOperationsStatus(data);
+    refreshJobs();
+    refreshJobsSummary();
+    if (window.appToast) appToast('Autopilot decision cycle complete.', 'success');
+  } catch (err) {
+    if (window.appToast) appToast(err.message || 'Autopilot cycle failed.', 'error');
+  } finally {
+    if (button) { button.disabled = false; button.textContent = 'Run cycle now'; }
+  }
 }
 
 // --------------------------
@@ -1464,6 +1544,7 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('clearErrorStatusBtn').onclick = clearErrorStatus;
   document.getElementById('clearErrorStatusTopBtn').onclick = clearErrorStatus;
   document.getElementById('refreshLinkedNodesBtn').onclick = refreshLinkedNodesStatus;
+  document.getElementById('runDashboardAutopilotBtn').onclick = runDashboardAutopilot;
 
   document.getElementById('searchBtn').onclick = searchMedia;
   document.getElementById('searchInput').addEventListener('keypress', (e) => {
@@ -1489,6 +1570,7 @@ document.addEventListener('DOMContentLoaded', () => {
   refreshJobsSummary();
   refreshQueueState();
   refreshLinkedNodesStatus();
+  refreshOperationsStatus();
 
   jobsTimer = setInterval(() => {
     refreshJobs();
@@ -1496,6 +1578,7 @@ document.addEventListener('DOMContentLoaded', () => {
     refreshQueueState();
   }, 5000);
   linkedNodesTimer = setInterval(refreshLinkedNodesStatus, 10000);
+  operationsTimer = setInterval(refreshOperationsStatus, 30000);
 });
 </script>
 </body>
