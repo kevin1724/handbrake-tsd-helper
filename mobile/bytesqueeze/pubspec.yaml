@@ -1,0 +1,40 @@
+name: bytesqueeze
+description: Cross-platform remote control for HandBrake TSD Helper.
+publish_to: none
+version: 0.1.0+1
+
+environment:
+  sdk: ">=3.5.0 <4.0.0"
+
+dependencies:
+  flutter:
+    sdk: flutter
+  cupertino_icons: ^1.0.8
+  flutter_secure_storage: ^10.3.1
+  http: ^1.3.0
+  shared_preferences: ^2.5.3
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+  flutter_lints: ^5.0.0
+  flutter_launcher_icons: ^0.14.3
+
+# Flutter's current AGP 9 template temporarily opts out of built-in Kotlin.
+# Keep the endorsed Android path provider on the final pre-JNI implementation
+# until that template/plugin transition is complete upstream.
+dependency_overrides:
+  path_provider_android: 2.2.23
+
+flutter:
+  uses-material-design: true
+  assets:
+    - assets/branding/bytesqueeze_icon.png
+
+flutter_launcher_icons:
+  android: true
+  ios: true
+  image_path: assets/branding/bytesqueeze_icon.png
+  min_sdk_android: 24
+  remove_alpha_ios: true
+  background_color_ios: "#06122D"

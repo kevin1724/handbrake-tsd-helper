@@ -22,7 +22,8 @@ Completed output files are tagged with `-TSD`, short for "Transcoded", so the ap
 - Remote-transfer mode for workers that do not have media drives mounted
 - Bounded Autopilot with observe/manage modes, schedules, queue caps, and explained decisions
 - Transactional node protocol v2 with safe pairing retries, automatic session recovery, and diagnostics
-- Versioned mobile API foundation with hashed tokens, refresh, scopes, and device revocation
+- ByteSqueeze Android companion with secure pairing, poster library, remote job controls, automation, and node health
+- Versioned mobile API with hashed tokens, refresh, read/control scopes, and device revocation
 - Safer cleanup behavior for failed or canceled jobs
 
 ## Release 2.0 Refresh
@@ -36,6 +37,18 @@ The 2.0 control center is designed for set-it-up-and-let-it-run operation withou
 - **Production runtime** uses a single Gunicorn process with threaded HTTP handling so queue and scheduler ownership stays deterministic.
 
 Autopilot is disabled and set to Observe by default. Start with a few manual test encodes so prediction history can learn your presets and hardware.
+
+## ByteSqueeze Mobile
+
+ByteSqueeze is the Android-first Flutter companion for managing a TSD controller from a phone. It can browse movie and show posters, track shows, queue server-side Smart Preset jobs, manage active jobs, tune Autopilot, review learned preset decisions, and monitor workers, storage savings, and events. All transcoding remains on the Docker controller and its workers.
+
+The same Flutter project includes an iOS target so networking, secure pairing, application state, responsive navigation, and screens can be carried into an iPhone release without a second implementation.
+
+- Source: [`mobile/bytesqueeze`](mobile/bytesqueeze)
+- Product and mobile API notes: [`docs/BYTESQUEEZE.md`](docs/BYTESQUEEZE.md)
+- Pairing: open **Settings → Automation & Apps** and generate a one-time read or control code
+
+LAN HTTP is supported for home-server use. Use a trusted HTTPS reverse proxy when connecting from outside the home network; do not expose the controller directly to the public internet.
 
 ## Why Use It
 

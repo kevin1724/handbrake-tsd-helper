@@ -76,6 +76,64 @@ class ApiRouteSmokeTests(unittest.TestCase):
         control = self.client.post("/api/mobile/v1/queue", json={"paused": True}, headers=headers)
         self.assertEqual(control.status_code, 403)
 
+    def test_bytesqueeze_dashboard_library_and_control_surface(self):
+        pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "control"})
+        self.assertEqual(pairing_response.status_code, 200)
+        code = pairing_response.get_json()["pairing"]["code"]
+        paired = self.client.post(
+            "/api/mobile/v1/pair",
+            json={"code": code, "device_id": "bytesqueeze-phone", "device_name": "ByteSqueeze", "platform": "android"},
+        )
+        self.assertEqual(paired.status_code, 200)
+        headers = {"Authorization": f"Bearer {paired.get_json()['access_token']}"}
+        library = {
+            "movies": [
+                {
+                    "id": "movie-1",
+                    "title": "Example Movie",
+                    "poster_url": "https://image.tmdb.org/t/p/w342/example.jpg",
+                    "paths": [],
+                }
+            ],
+            "shows": [{"id": "show-1", "title": "Example Show", "poster_url": ""}],
+            "scanned_at": 123.0,
+        }
+
+        with patch("webui.app.routes._beta_load_library_cache", return_value=library):
+            dashboard = self.client.get("/api/mobile/v1/dashboard", headers=headers)
+            mobile_library = self.client.get("/api/mobile/v1/library", headers=headers)
+
+        self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
+        dashboard_payload = dashboard.get_json()
+        self.assertEqual(dashboard_payload["library"]["movies"], 1)
+        self.assertIn("automation", dashboard_payload)
+        self.assertIn("storage", dashboard_payload)
+
+        self.assertEqual(mobile_library.status_code, 200, mobile_library.get_data(as_text=True))
+        library_payload = mobile_library.get_json()["library"]
+        self.assertEqual(library_payload["movies"][0]["title"], "Example Movie")
+        self.assertTrue(library_payload["movies"][0]["poster_url"].endswith("example.jpg"))
+
+        automation = self.client.get("/api/mobile/v1/automation", headers=headers)
+        self.assertEqual(automation.status_code, 200, automation.get_data(as_text=True))
+        self.assertIn("autopilot_enabled", automation.get_json()["settings"])
+
+        automation_update = self.client.post(
+            "/api/mobile/v1/automation",
+            json={"action": "save", "autopilot_enabled": True, "autopilot_mode": "observe"},
+            headers=headers,
+        )
+        self.assertEqual(automation_update.status_code, 200, automation_update.get_data(as_text=True))
+        self.assertTrue(automation_update.get_json()["settings"]["autopilot_enabled"])
+
+        storage = self.client.get("/api/mobile/v1/storage", headers=headers)
+        self.assertEqual(storage.status_code, 200, storage.get_data(as_text=True))
+        self.assertIn("summary", storage.get_json())
+
+        smart = self.client.get("/api/mobile/v1/smart_presets", headers=headers)
+        self.assertEqual(smart.status_code, 200, smart.get_data(as_text=True))
+        self.assertIn("profile", smart.get_json())
+
     def test_smart_presets_generate_candidates_and_unlock_after_feedback(self):
         try:
             os.remove(SMART_PRESETS_FILE)
