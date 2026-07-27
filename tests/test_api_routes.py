@@ -21,6 +21,7 @@ os.environ["FLASK_DEBUG"] = "0"
 os.environ["FLASK_ENV"] = "production"
 
 from webui.app import create_app  # noqa: E402
+from webui.app import config as app_config  # noqa: E402
 from webui.app.smart_presets import (  # noqa: E402
     SMART_PRESETS_FILE,
     feedback_context,
@@ -31,12 +32,22 @@ from webui.app.smart_presets import (  # noqa: E402
 class ApiRouteSmokeTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        # Pytest imports every test module before running the suite. Another
+        # module may therefore import app config before this file establishes
+        # its isolated media root. Update the shared lists in place so aliases
+        # already imported by routes/jobs see the test root too.
+        cls.original_roots = list(app_config.ROOTS)
+        cls.original_allowed_prefixes = list(app_config.ALLOWED_PREFIXES)
+        app_config.ROOTS[:] = [(TEST_MEDIA, "Test media")]
+        app_config.ALLOWED_PREFIXES[:] = [TEST_MEDIA]
         cls.app = create_app()
         cls.app.config.update(TESTING=True)
         cls.client = cls.app.test_client()
 
     @classmethod
     def tearDownClass(cls):
+        app_config.ROOTS[:] = cls.original_roots
+        app_config.ALLOWED_PREFIXES[:] = cls.original_allowed_prefixes
         shutil.rmtree(TEST_ROOT, ignore_errors=True)
 
     def test_release_discovery_and_automation_page(self):
@@ -55,7 +66,14 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "2.1.0")
+        self.assertEqual(status.get_json()["release"], "2.2.0")
+
+        library_page = self.client.get("/")
+        self.assertEqual(library_page.status_code, 200)
+        self.assertIn(b"Your complete media catalog", library_page.data)
+        dashboard_page = self.client.get("/dashboard")
+        self.assertEqual(dashboard_page.status_code, 200)
+        self.assertIn(b"Operations Dashboard", dashboard_page.data)
 
     def test_mobile_bearer_flow_and_scope_enforcement(self):
         pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "read"})

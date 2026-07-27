@@ -1,12 +1,10 @@
-version: "3.8"
-
 services:
   # ====================================================
   # 1) HandBrake TSD Helper Web UI (Flask app + queue)
   # ====================================================
   hb-web:
-    build:
-      context: .                      # folder containing Dockerfile + webui/
+    image: kevina1724/handbrake-tsd-helper:main
+    pull_policy: always
     container_name: hb-web
     restart: unless-stopped
 
@@ -19,7 +17,6 @@ services:
       - HB_PRESET_DIR=/presets        # preset folder inside container
       - LIBVA_DRIVER_NAME=iHD
     volumes:
-      - ./webui:/app/webui 
       # ✅ Media mount points
 
       - /mnt/nas/PLEX_MEDIA:/media/PLEX_MEDIA
@@ -31,9 +28,6 @@ services:
 
       # ✅ Override/edit HandBrake presets without rebuilding image
       - ./presets:/presets
-
-      # ✅ Worker shell script that runs HandBrakeCLI
-      - ./worker:/worker
 
     devices:
       - /dev/dri:/dev/dri

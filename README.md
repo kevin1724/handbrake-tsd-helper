@@ -90,7 +90,7 @@ services:
 Start the app:
 
 ```bash
-docker compose up -d --build
+docker compose up -d
 ```
 
 Open the web UI:
@@ -114,7 +114,7 @@ Recommended first setup:
 
 ### Dashboard
 
-The Dashboard is the main operations and encode view.
+The Library is the default page. Open `/dashboard` for the operations and encode view.
 
 - Review Autopilot readiness, schedule, worker capacity, and potential savings
 - Run a bounded decision cycle and jump to its policy settings
@@ -258,13 +258,18 @@ observe decisions, teach Smart Presets with preview feedback, set guardrails,
 then enable Manage mode. The Safe starter, Balanced, and Hands-off policy
 profiles provide editable starting points.
 
-## Multi-Node Encoding
+## Headless Worker Encoding
 
-HandBrake TSD Helper can link multiple app containers together.
+The recommended worker is a separate, headless container. It has no media
+browser, library scanner, settings website, or mapped media drives. The main
+controller sends one temporary job at a time to the worker's `/work` drive and
+receives the verified result when the encode finishes.
 
-- One node acts as the controller
-- Other nodes act as workers
-- Workers pair with one-time codes
+- The main container owns the media library and queue
+- Workers only expose authenticated node/health APIs
+- The pairing code is printed in `docker logs`
+- `/work` is the worker's only required mount
+- Remote transfer is selected automatically; path mappings are unnecessary
 - Pairing is idempotently recoverable for the same controller when a network response is lost
 - Node state writes are serialized and atomic, with backup recovery
 - Protocol discovery negotiates capabilities while remaining compatible with older workers
@@ -276,6 +281,28 @@ HandBrake TSD Helper can link multiple app containers together.
 The controller can send jobs to the local node, the best available worker, or a selected worker.
 
 Use `GET /api/nodes/diagnostics` to inspect protocol, monitor health, heartbeat failures, and linked-node totals.
+
+### Start and pair a worker
+
+On the worker machine, copy `docker-compose.worker.yml`, choose the host folder
+that should hold the current encode, and start it:
+
+```bash
+TSD_WORKER_WORK_DIR=/path/to/fast/transcode-drive docker compose -f docker-compose.worker.yml up -d
+docker logs bytesqueeze-worker
+```
+
+The log contains a banner like:
+
+```text
+ByteSqueeze headless worker is ready
+Pairing code:  ABCDE-FGHJK
+```
+
+On the main server, open **Settings → Linked Workers**, enter the worker URL
+(for example `http://192.168.1.50:8082`) and that code, then select **Pair and
+verify**. The controller records its reachable URL, negotiates the protocol,
+forces remote-transfer mode, and immediately verifies the secure connection.
 
 ## ByteSqueeze Android Companion
 
@@ -292,27 +319,10 @@ encode.
 
 Access and refresh tokens are returned only to the client and stored on the server as hashes. Keep the web UI and mobile API on a trusted LAN or behind your own authenticated reverse proxy; the main web UI does not yet provide user accounts.
 
-### Worker Modes
-
-**Local mounted media mode**
-
-Use this when the worker can access the same media through its own mounted paths.
-
-```text
-Controller path: /media/Movies
-Worker path:     /mnt/media/Movies
-```
-
-**Auto local then remote**
-
-Use this when some paths are mounted on the worker and some are not. The app tries path mapping first, then falls back to remote transfer.
-
-**Remote transfer mode**
-
-Use this when the worker cannot access the media drive.
+### Transfer lifecycle
 
 1. The controller grants temporary authenticated file access.
-2. The worker downloads the source file to local temp storage.
+2. The worker downloads the source file under `/work/jobs`.
 3. The worker encodes locally.
 4. The worker uploads the finished `-TSD` file back.
 5. The controller verifies the output.
@@ -320,6 +330,9 @@ Use this when the worker cannot access the media drive.
 7. Temporary files are cleaned up.
 
 If the controller is offline when the worker finishes, the worker keeps the finished output and waits to upload it later.
+
+Full controller containers can still act as legacy mounted-media workers, but
+that advanced mode is no longer required for the normal setup.
 
 ## Intel QSV / Quick Sync
 
@@ -379,6 +392,30 @@ docker run -d \
 
 The `latest` image is published automatically from `main`. Version tags such as
 `v1.2.3` also publish `1.2.3` and `1.2` tags.
+
+The encoding-only worker has its own public Docker Hub image:
+
+[kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
+
+`latest` follows the main branch. Versioned releases also publish tags such as
+`2.2.0` and `2.2`:
+
+```bash
+docker pull kevina1724/handbrake-tsd-worker:latest
+```
+
+It needs one writable mount and no media mounts:
+
+```bash
+docker run -d \
+  --name bytesqueeze-worker \
+  -p 8082:8080 \
+  -e TSD_WORKER_NAME="Garage Worker" \
+  -v /path/to/fast/transcode-drive:/work \
+  kevina1724/handbrake-tsd-worker:latest
+
+docker logs bytesqueeze-worker
+```
 
 ## Runtime Data
 
@@ -463,11 +500,16 @@ Confirm `/dev/dri` exists in the container and that the host iGPU is enabled.
 
 ### Worker pairing fails
 
-Check that the worker URL is reachable from the controller, generate a fresh pairing code, and confirm both nodes show the expected role in Settings.
+Run `docker logs bytesqueeze-worker`, use the newest code, and confirm the URL
+is reachable from the controller. Pairing codes are one-use and expire after an
+hour. Restarting the worker prints a fresh code without deleting an existing
+trusted controller.
 
 ### Worker cannot access a media path
 
-Use Auto local then remote or Remote transfer mode. Set a worker temp folder if the default data folder is too small.
+The headless worker never accesses controller media paths. Confirm the worker
+has enough free space in `/work` for the source and temporary output and that
+the controller URL is reachable from the worker.
 
 ### Job looks stuck
 

@@ -432,21 +432,49 @@ def _maybe_update_output_estimate(job: dict, out_path: str, progress: float) -> 
     return True
 
 
+def _normalize_encoding_policy(policy: dict | None = None) -> dict:
+    """Return only the worker-safe settings that can affect an encode."""
+    source = policy if isinstance(policy, dict) else {}
+    if not source:
+        try:
+            source = load_settings()
+        except Exception:
+            source = {}
+
+    try:
+        hb_threads = max(0, min(256, int(source.get("hb_threads") or 0)))
+    except (TypeError, ValueError):
+        hb_threads = 0
+    try:
+        stop_percent = float(source.get("auto_stop_large_output_percent") or 90.0)
+    except (TypeError, ValueError):
+        stop_percent = 90.0
+
+    return {
+        "hb_threads": hb_threads,
+        "auto_stop_large_output_enabled": bool(source.get("auto_stop_large_output_enabled", False)),
+        "auto_stop_large_output_percent": round(max(1.0, min(500.0, stop_percent)), 1),
+    }
+
+
+def _job_encoding_policy(job: dict | None) -> dict:
+    job = job if isinstance(job, dict) else {}
+    stored = job.get("encoding_policy")
+    return _normalize_encoding_policy(stored if isinstance(stored, dict) else None)
+
+
 def _estimated_output_stop_guard(job: dict) -> dict | None:
     """Return stop details when a reliable checkpoint crosses the configured limit."""
     if job.get("auto_stop_triggered"):
         return None
-    try:
-        settings = load_settings()
-    except Exception:
-        return None
-    if not settings.get("auto_stop_large_output_enabled", False):
+    policy = _job_encoding_policy(job)
+    if not policy.get("auto_stop_large_output_enabled", False):
         return None
     try:
         checked_progress = float(job.get("estimated_out_checked_progress") or 0.0)
         estimated = int(job.get("estimated_out_bytes") or 0)
         source = int(job.get("src_bytes") or 0)
-        threshold = float(settings.get("auto_stop_large_output_percent") or 90.0)
+        threshold = float(policy.get("auto_stop_large_output_percent") or 90.0)
     except (TypeError, ValueError):
         return None
     # The 2% checkpoint is useful for display, but too noisy for termination.
@@ -824,6 +852,7 @@ def save_jobs():
                 "mode": j.get("mode", "local"),
                 "transfer": j.get("transfer") if isinstance(j.get("transfer"), dict) else None,
                 "preset_bundle": _normalize_preset_bundle(j.get("preset_bundle")),
+                "encoding_policy": _normalize_encoding_policy(j.get("encoding_policy")),
                 "encode_method": j.get("encode_method"),
                 "encoder": j.get("encoder"),
                 "video_codec": j.get("video_codec"),
@@ -924,6 +953,7 @@ def load_jobs():
                 "mode": j.get("mode", "local"),
                 "transfer": j.get("transfer") if isinstance(j.get("transfer"), dict) else None,
                 "preset_bundle": _normalize_preset_bundle(j.get("preset_bundle")),
+                "encoding_policy": _normalize_encoding_policy(j.get("encoding_policy")),
                 "encode_method": method.get("encode_method"),
                 "encoder": method.get("encoder"),
                 "video_codec": method.get("video_codec"),
@@ -1157,7 +1187,7 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
     return count
 
 
-def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args: str = "", preset_bundle: dict | None = None, encode_metadata: dict | None = None) -> tuple[str, bool]:
+def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args: str = "", preset_bundle: dict | None = None, encode_metadata: dict | None = None, encoding_policy: dict | None = None) -> tuple[str, bool]:
     """
     Queue a job whose source is downloaded from a paired controller/storage node.
 
@@ -1198,6 +1228,7 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "mode": "remote_transfer",
         "transfer": clean_transfer,
         "preset_bundle": _normalize_preset_bundle(preset_bundle),
+        "encoding_policy": _normalize_encoding_policy(encoding_policy),
         "encode_method": method.get("encode_method"),
         "encoder": method.get("encoder"),
         "video_codec": method.get("video_codec"),
@@ -1493,11 +1524,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     # Settings page stores hb_threads in settings.json.
     # If hb_threads > 0, we pass it down as HB_THREADS so encode-one.sh
     # can include "--encopts threads=<N>" when calling HandBrakeCLI.
-    try:
-        hb_threads_val = load_settings().get("hb_threads", 0)
-        hb_threads = int(hb_threads_val or 0)
-    except (TypeError, ValueError):
-        hb_threads = 0
+    hb_threads = int(_job_encoding_policy(job).get("hb_threads") or 0)
 
     if hb_threads > 0:
         env["HB_THREADS"] = str(hb_threads)

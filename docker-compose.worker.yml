@@ -1,0 +1,21 @@
+services:
+  bytesqueeze-worker:
+    image: kevina1724/handbrake-tsd-worker:latest
+    pull_policy: always
+    container_name: bytesqueeze-worker
+    restart: unless-stopped
+    ports:
+      - "${TSD_WORKER_PORT:-8082}:8080"
+    environment:
+      TZ: ${TZ:-America/Los_Angeles}
+      TSD_WORKER_NAME: ${TSD_WORKER_NAME:-ByteSqueeze Worker}
+      PYTHONDONTWRITEBYTECODE: "1"
+    volumes:
+      - type: bind
+        source: ${TSD_WORKER_WORK_DIR:-./worker-work}
+        target: /work
+
+    # Optional Intel Quick Sync support on Linux. Uncomment when /dev/dri is
+    # available on the worker host.
+    # devices:
+    #   - /dev/dri:/dev/dri

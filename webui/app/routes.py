@@ -4380,7 +4380,7 @@ def _autopilot_status_payload() -> dict:
             "estimated_selected_savings_bytes": 0,
         }
     return {
-        "release": "2.1.0",
+        "release": "2.2.0",
         "autopilot": autopilot,
         "readiness": _autopilot_readiness(settings),
         "scan": scan,
@@ -4636,6 +4636,8 @@ def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
             "jobs": data.get("jobs") if isinstance(data.get("jobs"), list) else [],
             "prediction_profile": data.get("prediction_profile") if isinstance(data.get("prediction_profile"), dict) else {},
             "remote_temp_dir": str(data.get("remote_transfer_temp_dir") or row.get("remote_temp_dir") or "").strip()[:500],
+            "worker_mode": str(data.get("worker_mode") or row.get("worker_mode") or "full").strip().lower(),
+            "requires_remote_transfer": bool(data.get("requires_remote_transfer") or row.get("requires_remote_transfer")),
         })
         if reported_controller_url:
             row["controller_url"] = reported_controller_url
@@ -5333,9 +5335,9 @@ def register_routes(app):
 
     # ------------- UI -------------
 
-    @app.route("/")
+    @app.route("/dashboard")
     def index():
-        """Render the main single-page web UI."""
+        """Render the operations and queue dashboard."""
         preset_files = list_preset_files()
         settings = load_settings()
         return render_template(
@@ -5351,9 +5353,10 @@ def register_routes(app):
         """Render the Size Wizard page (prefill via query string)."""
         return render_template("size_wizard.html")
 
+    @app.route("/")
     @app.route("/beta")
     def beta_page():
-        """Render the experimental media organizer page."""
+        """Render the primary media library experience."""
         settings = load_settings()
         return render_template(
             "beta.html",
@@ -5699,7 +5702,7 @@ def register_routes(app):
         return jsonify(
             ok=healthy,
             status="healthy" if healthy else "degraded",
-            release="2.0.0",
+            release="2.2.0",
             storage=storage,
             queue={"paused": get_queue_state(), "summary": get_job_summary()},
             schedulers={"node_monitor": monitor, "autopilot": _beta_load_autoscan_status(load_settings())},
@@ -5781,7 +5784,7 @@ def register_routes(app):
         shows = library.get("shows") if isinstance(library.get("shows"), list) else []
         return jsonify(
             ok=True,
-            release="2.0.0",
+            release="2.2.0",
             device=device,
             queue={"paused": get_queue_state(), "summary": get_job_summary()},
             active_jobs=active_jobs[:8],
@@ -6322,6 +6325,7 @@ def register_routes(app):
                 extra_args=str(job.get("extra_args") or ""),
                 preset_bundle=job.get("preset_bundle"),
                 encode_metadata=job.get("encode_metadata") if isinstance(job.get("encode_metadata"), dict) else None,
+                encoding_policy=job.get("encoding_policy") if isinstance(job.get("encoding_policy"), dict) else None,
             )
             count += 1 if created else 0
 
@@ -6417,14 +6421,16 @@ def register_routes(app):
     @app.route("/api/nodes/pair", methods=["POST"])
     def nodes_pair_api():
         data = request.get_json(force=True) or {}
+        worker_url = data.get("url") or ""
+        controller_url = _controller_base_url(data.get("controller_url") or request.host_url, worker_url)
         try:
             node = pair_worker(
-                data.get("url") or "",
+                worker_url,
                 data.get("code") or "",
                 name=data.get("name") or "",
                 path_mappings=data.get("path_mappings") or [],
-                transfer_mode=data.get("transfer_mode") or "local",
-                controller_url=data.get("controller_url") or "",
+                transfer_mode=data.get("transfer_mode") or "remote",
+                controller_url=controller_url,
                 remote_temp_dir="",
             )
         except Exception as e:
@@ -6432,8 +6438,10 @@ def register_routes(app):
         private = get_node_private(node.get("id") or "")
         if private:
             node = public_node(_refresh_linked_node(private))
+        verified = bool(node.get("online"))
+        warning = "" if verified else (node.get("last_error") or "Paired, but the first worker status check did not complete.")
         log_event("node_paired", f"Paired worker node: {node.get('name') or node.get('url')}", level="info")
-        return jsonify(ok=True, node=node)
+        return jsonify(ok=True, node=node, verified=verified, warning=warning)
 
     @app.route("/api/nodes/<node_id>/refresh", methods=["POST"])
     def nodes_refresh_api(node_id):
@@ -6468,8 +6476,12 @@ def register_routes(app):
         if not row:
             return jsonify(error="node not found"), 404
         data = request.get_json(force=True) or {}
-        row["path_mappings"] = normalize_path_mappings(data.get("path_mappings") or [])
-        row["transfer_mode"] = normalize_transfer_mode(data.get("transfer_mode") or row.get("transfer_mode") or "local")
+        if row.get("requires_remote_transfer") or row.get("worker_mode") == "headless":
+            row["path_mappings"] = []
+            row["transfer_mode"] = "remote"
+        else:
+            row["path_mappings"] = normalize_path_mappings(data.get("path_mappings") or [])
+            row["transfer_mode"] = normalize_transfer_mode(data.get("transfer_mode") or row.get("transfer_mode") or "local")
         row["controller_url"] = _controller_base_url(row.get("controller_url") or "", row.get("url") or "")
         save_node(row)
         return jsonify(ok=True, node=public_node(row))
@@ -6550,6 +6562,12 @@ def register_routes(app):
             save_node(selected)
         jobs_payload = []
         skipped = []
+        controller_settings = load_settings()
+        worker_encoding_policy = {
+            "hb_threads": controller_settings.get("hb_threads", 0),
+            "auto_stop_large_output_enabled": controller_settings.get("auto_stop_large_output_enabled", False),
+            "auto_stop_large_output_percent": controller_settings.get("auto_stop_large_output_percent", 90),
+        }
 
         def build_remote_job_payload(src: str, plan: dict) -> tuple[dict | None, str | None]:
             try:
@@ -6584,6 +6602,7 @@ def register_routes(app):
                     "preset_bundle": plan.get("preset_bundle"),
                     "extra_args": str(plan.get("extra_args") or ""),
                     "encode_metadata": encode_metadata,
+                    "encoding_policy": worker_encoding_policy,
                     "transfer": transfer_payload,
                 }, None
             except Exception as e:
@@ -6632,6 +6651,7 @@ def register_routes(app):
                 "preset_bundle": plan.get("preset_bundle"),
                 "extra_args": plan.get("extra_args") or "",
                 "encode_metadata": plan.get("encode_metadata") or {},
+                "encoding_policy": worker_encoding_policy,
             })
 
         if not jobs_payload:

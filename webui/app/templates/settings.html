@@ -226,9 +226,9 @@
       </span>
     </a>
     <div class="nav-links">
-      <a href="/" class="nav-link nav-jobs">Dashboard</a>
+      <a href="/dashboard" class="nav-link nav-jobs">Dashboard</a>
       <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
-      <a href="/beta" class="nav-link nav-library">Library</a>
+      <a href="/" class="nav-link nav-library">Library</a>
       <a href="/settings" class="nav-link nav-settings nav-link-active">Settings</a>
     </div>
     <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>
@@ -645,9 +645,9 @@
   <div class="section-card settings-wide node-settings-section">
     <div class="section-heading-row">
       <div>
-        <h2>Linked Nodes</h2>
+        <h2>Linked Workers</h2>
         <p class="small">
-          Pair worker nodes, map controller paths to worker paths, and dispatch jobs to local or remote queues.
+          Add headless encoding workers with the URL and one-time code shown in their Docker logs. The controller transfers each job automatically, so workers do not need your media drives.
         </p>
       </div>
       <button id="nodeTutorialBtn" class="node-info-button" type="button" aria-label="Open node linking tutorial">i</button>
@@ -662,40 +662,35 @@
 
         <div class="node-tutorial-grid">
           <div class="node-tutorial-card">
-            <h3>1. Create a worker code</h3>
+            <h3>1. Start the worker</h3>
             <ol>
-              <li>Open Settings on the worker node.</li>
-              <li>Click <strong>Generate pairing code</strong>.</li>
-              <li>Leave the worker running while you pair it from the controller.</li>
+              <li>Run <code>docker compose -f docker-compose.worker.yml up -d</code>.</li>
+              <li>Run <code>docker logs bytesqueeze-worker</code>.</li>
+              <li>Copy the large one-time pairing code from the log banner.</li>
             </ol>
           </div>
 
           <div class="node-tutorial-card">
             <h3>2. Pair from the controller</h3>
             <ol>
-              <li>Enter the worker URL, such as <code>http://192.168.1.50:8081</code>.</li>
-              <li>Paste the pairing code and add a friendly name.</li>
-              <li>Click <strong>Pair worker</strong>, then <strong>Refresh linked nodes</strong>.</li>
+              <li>Enter the worker URL, such as <code>http://192.168.1.50:8082</code>.</li>
+              <li>Paste the code and optionally give the worker a friendly name.</li>
+              <li>Click <strong>Pair and verify</strong>. The controller immediately tests the secure session.</li>
             </ol>
           </div>
 
           <div class="node-tutorial-card">
-            <h3>3. Choose the media mode</h3>
-            <p><strong>Auto local then remote</strong> tries path mapping first, then uses remote transfer if no mapping matches.</p>
-            <p><strong>Local mounted media mode</strong> is best when the worker can see the media folders directly.</p>
-            <div class="node-tutorial-code">
-              <code>/media/Movies =&gt; /mnt/media/Movies</code>
-              <code>/media/Shows =&gt; /storage/Shows</code>
-            </div>
-            <p><strong>Remote transfer mode</strong> downloads a temporary copy to the worker temp folder, encodes it, uploads the finished <code>-TSD</code> file, and the controller verifies it before replacing anything.</p>
+            <h3>3. One work drive</h3>
+            <p>The worker has one mount: <code>/work</code>. Pairing state and the current temporary encode live there.</p>
+            <p>The controller streams the source to that drive, the worker encodes locally, and the finished <code>-TSD</code> file is uploaded and verified before temporary files are removed.</p>
           </div>
 
           <div class="node-tutorial-card">
             <h3>4. Send jobs</h3>
             <ol>
-              <li>Use Beta to select Local queue, Best worker, or a specific worker.</li>
+              <li>Use Library to select Local queue, Best worker, or a specific worker.</li>
               <li>The controller sends the selected preset JSON to the worker with each node job.</li>
-              <li>Pairing codes are one-use and expire quickly; node secrets and transfer links are not shown in logs.</li>
+              <li>No media paths, folder mappings, or preset folders are needed on the worker.</li>
             </ol>
           </div>
         </div>
@@ -723,41 +718,38 @@
     </div>
 
     <div class="node-link-grid">
-      <div class="node-link-panel">
-        <h3>Worker pairing code</h3>
-        <div class="row button-row">
-          <button id="generatePairingCodeBtn" type="button">Generate pairing code</button>
-          <span id="pairingCodeStatus" class="small"></span>
-        </div>
-        <div id="pairingCodeBox" class="pairing-code-box">No active code</div>
-      </div>
-
-      <div class="node-link-panel">
-        <h3>Pair a worker</h3>
-        <div class="row">
-          <input id="pairWorkerUrlInput" type="text" placeholder="http://worker-ip:8081" style="width:100%;">
+      <div class="node-link-panel worker-quick-pair">
+        <div class="section-heading-row">
+          <div>
+            <h3>Pair a headless worker</h3>
+            <p class="small">Only two things are required: the worker address and the code from <code>docker logs bytesqueeze-worker</code>.</p>
+          </div>
+          <span class="node-pill node-pill-idle">Remote transfer</span>
         </div>
         <div class="row">
-          <input id="pairWorkerCodeInput" type="text" placeholder="Pairing code" style="width:100%;">
+          <input id="pairWorkerUrlInput" type="url" placeholder="http://worker-ip:8082" autocomplete="url" style="width:100%;">
         </div>
         <div class="row">
-          <input id="pairWorkerNameInput" type="text" placeholder="Friendly name" style="width:100%;">
+          <input id="pairWorkerCodeInput" type="text" placeholder="XXXXX-XXXXX" autocomplete="one-time-code" autocapitalize="characters" spellcheck="false" maxlength="11" style="width:100%;">
         </div>
         <div class="row">
-          <select id="pairWorkerTransferModeSelect" style="width:100%;">
-            <option value="auto" selected>Auto local then remote</option>
-            <option value="local">Local mounted media mode</option>
-            <option value="remote">Remote transfer mode</option>
-          </select>
-        </div>
-        <div class="row">
-          <textarea id="pairWorkerMappingsInput" rows="3" placeholder="/media/Shows => /mnt/media/Shows&#10;/media/Movies => /storage/Movies" style="width:100%;"></textarea>
+          <input id="pairWorkerNameInput" type="text" placeholder="Friendly name (optional)" style="width:100%;">
         </div>
         <div class="row button-row">
-          <button id="pairWorkerBtn" type="button">Pair worker</button>
+          <button id="pairWorkerBtn" type="button">Pair and verify</button>
           <span id="pairWorkerStatus" class="small"></span>
         </div>
       </div>
+
+      <details class="node-link-panel node-advanced-pairing">
+        <summary><strong>Advanced: let this controller act as a worker</strong></summary>
+        <p class="small">Full controller containers can still be paired by another controller. Generate a code here only for that legacy/full-node setup.</p>
+        <div class="row button-row">
+          <button id="generatePairingCodeBtn" type="button">Generate controller-worker code</button>
+          <span id="pairingCodeStatus" class="small"></span>
+        </div>
+        <div id="pairingCodeBox" class="pairing-code-box">No active code</div>
+      </details>
     </div>
 
     <div class="row button-row" style="margin-top:14px;">
@@ -2508,6 +2500,7 @@
       }
 
       nodes.forEach(node => {
+        const headless = node.worker_mode === "headless" || node.requires_remote_transfer === true;
         const row = document.createElement("article");
         row.className = `linked-node-row ${node.online ? "node-online" : "node-offline"}`;
 
@@ -2523,6 +2516,12 @@
         pill.className = `node-pill node-pill-${nodeStatusClass(nodeState)}`;
         pill.textContent = nodeState;
         header.appendChild(title);
+        if (headless) {
+          const workerType = document.createElement("span");
+          workerType.className = "node-pill node-pill-idle";
+          workerType.textContent = "headless";
+          header.appendChild(workerType);
+        }
         header.appendChild(pill);
         main.appendChild(header);
 
@@ -2557,11 +2556,14 @@
         modeRow.className = "node-mode-row";
         const modeSelect = document.createElement("select");
         modeSelect.className = "node-transfer-mode-select";
-        [
+        const modeOptions = headless ? [
+          ["remote", "Remote transfer (automatic)"]
+        ] : [
           ["auto", "Auto local then remote"],
           ["local", "Local mounted media mode"],
           ["remote", "Remote transfer mode"]
-        ].forEach(([value, label]) => {
+        ];
+        modeOptions.forEach(([value, label]) => {
           const opt = document.createElement("option");
           opt.value = value;
           opt.textContent = label;
@@ -2570,7 +2572,9 @@
         });
         const transferInfo = document.createElement("div");
         transferInfo.className = "node-transfer-readonly";
-        transferInfo.textContent = `Remote transfer: controller ${node.controller_url || "auto"} / worker temp ${node.remote_temp_dir || "worker default"}`;
+        transferInfo.textContent = headless
+          ? `No media mounts required / work drive ${node.remote_temp_dir || "/work/jobs"} / controller ${node.controller_url || "auto"}`
+          : `Remote transfer: controller ${node.controller_url || "auto"} / worker temp ${node.remote_temp_dir || "worker default"}`;
         modeRow.appendChild(modeSelect);
         modeRow.appendChild(transferInfo);
         main.appendChild(modeRow);
@@ -2581,17 +2585,18 @@
         textarea.value = pathMappingsToText(node.path_mappings);
         textarea.placeholder = "Controller path => Worker path (local mounted media mode)";
         textarea.dataset.nodeMappings = node.id || "";
-        main.appendChild(textarea);
+        if (!headless) main.appendChild(textarea);
 
         const actions = document.createElement("div");
         actions.className = "node-actions";
-        [
+        const actionRows = [
           ["Refresh", () => refreshNode(node.id)],
-          ["Save settings", () => saveNodeSettings(node.id, textarea.value, modeSelect.value)],
           ["Rotate secret", () => rotateNodeSecret(node.id)],
           ["Unlink", () => unlinkNode(node.id)],
           ["Forget local record", () => forgetNode(node.id)]
-        ].forEach(([label, handler]) => {
+        ];
+        if (!headless) actionRows.splice(1, 0, ["Save settings", () => saveNodeSettings(node.id, textarea.value, modeSelect.value)]);
+        actionRows.forEach(([label, handler]) => {
           const btn = document.createElement("button");
           btn.type = "button";
           btn.textContent = label;
@@ -2668,20 +2673,29 @@
       const url = document.getElementById("pairWorkerUrlInput")?.value || "";
       const code = document.getElementById("pairWorkerCodeInput")?.value || "";
       const name = document.getElementById("pairWorkerNameInput")?.value || "";
-      const transferMode = document.getElementById("pairWorkerTransferModeSelect")?.value || "local";
-      const mappings = parsePathMappingsText(document.getElementById("pairWorkerMappingsInput")?.value || "");
       try {
+        if (!/^https?:\/\//i.test(url.trim())) throw new Error("Enter the worker URL beginning with http:// or https://");
+        if (!/^[A-Z2-9]{5}-[A-Z2-9]{5}$/.test(code.trim().toUpperCase())) throw new Error("Enter the XXXXX-XXXXX code from the worker logs");
         if (button) button.disabled = true;
         if (status) status.textContent = "Discovering worker and pairing safely…";
         const res = await fetch("/api/nodes/pair", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ url, code, name, transfer_mode: transferMode, path_mappings: mappings })
+          body: JSON.stringify({
+            url: url.trim(),
+            code: code.trim().toUpperCase(),
+            name: name.trim(),
+            transfer_mode: "remote",
+            path_mappings: [],
+            controller_url: window.location.origin
+          })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Pairing failed");
-        if (status) status.textContent = "Paired.";
-        if (window.appToast) appToast("Worker paired.", "success");
+        if (status) status.textContent = data.verified ? "Paired and online." : (data.warning || "Paired; waiting for worker status.");
+        const codeInput = document.getElementById("pairWorkerCodeInput");
+        if (codeInput) codeInput.value = "";
+        if (window.appToast) appToast(data.verified ? "Worker paired and verified." : "Worker paired; status check is retrying.", data.verified ? "success" : "info");
         await loadNodes();
       } catch (err) {
         if (status) status.textContent = err.message || "Pairing failed";
@@ -2841,6 +2855,11 @@
       if (generatePairingCodeBtn) generatePairingCodeBtn.onclick = generatePairingCode;
       const pairWorkerBtn = document.getElementById("pairWorkerBtn");
       if (pairWorkerBtn) pairWorkerBtn.onclick = pairWorker;
+      const pairWorkerCodeInput = document.getElementById("pairWorkerCodeInput");
+      if (pairWorkerCodeInput) pairWorkerCodeInput.addEventListener("input", () => {
+        const raw = pairWorkerCodeInput.value.toUpperCase().replace(/[^A-Z2-9]/g, "").slice(0, 10);
+        pairWorkerCodeInput.value = raw.length > 5 ? `${raw.slice(0, 5)}-${raw.slice(5)}` : raw;
+      });
       const refreshNodesBtn = document.getElementById("refreshNodesBtn");
       if (refreshNodesBtn) refreshNodesBtn.onclick = refreshAllNodes;
       const nodeTutorialBtn = document.getElementById("nodeTutorialBtn");

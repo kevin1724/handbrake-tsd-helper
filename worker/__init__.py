@@ -1,0 +1,2 @@
+"""Headless ByteSqueeze worker service."""
+

@@ -2,7 +2,7 @@
 <html>
 <head>
   <meta charset="utf-8">
-  <title>HandBrake TSD Helper - Beta</title>
+  <title>HandBrake TSD Helper - Library</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
   <style>
@@ -592,9 +592,9 @@
       </span>
     </a>
     <div class="nav-links">
-      <a href="/" class="nav-link nav-jobs">Dashboard</a>
+      <a href="/dashboard" class="nav-link nav-jobs">Dashboard</a>
       <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
-      <a href="/beta" class="nav-link nav-library nav-link-active">Library</a>
+      <a href="/" class="nav-link nav-library nav-link-active">Library</a>
       <a href="/settings" class="nav-link nav-settings">Settings</a>
     </div>
     <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>

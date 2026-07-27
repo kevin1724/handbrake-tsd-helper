@@ -89,7 +89,7 @@ RUN set -eux; \
     install -m 0755 build/HandBrakeCLI /usr/local/bin/HandBrakeCLI; \
     /usr/local/bin/HandBrakeCLI --version
 
-FROM ${PYTHON_IMAGE}
+FROM ${PYTHON_IMAGE} AS runtime-base
 
 # ------------------------------------------------
 # Enable contrib + non-free + non-free-firmware.
@@ -168,21 +168,7 @@ RUN set -eux; \
 
 COPY --from=handbrake-builder /usr/local/bin/HandBrakeCLI /usr/local/bin/HandBrakeCLI
 
-# -------------------------------
-# App directories
-# -------------------------------
 WORKDIR /app
-
-RUN mkdir -p /app/data /presets /worker
-
-# -------------------------------
-# Copy application code
-# -------------------------------
-COPY webui /app/webui
-COPY worker/encode-one.sh /worker/encode-one.sh
-COPY presets /presets
-
-RUN chmod +x /worker/encode-one.sh
 
 # -------------------------------
 # Python dependencies
@@ -240,6 +226,52 @@ ENV PYTHONUNBUFFERED=1
 EXPOSE 8080
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4)" || exit 1
+
+# -------------------------------
+# Headless remote-transfer worker
+# -------------------------------
+FROM runtime-base AS worker
+
+ENV TSD_WORKER_MODE=1
+ENV TSD_WORKER_NAME="ByteSqueeze Worker"
+ENV TSD_WORKER_TEMP_DIR=/work/jobs
+ENV HB_DATA_DIR=/work/state
+ENV HB_MEDIA_BASE=/no-media
+
+RUN mkdir -p /app/webui/app /app/worker /presets /worker /work/state /work/jobs
+
+# The worker image contains only the shared encode/transfer engine and the
+# minimal worker API. Controller routes, templates, static UI, Size Wizard,
+# scanners, metadata providers, Autopilot, mobile backend, and AI modules are
+# deliberately absent.
+COPY worker/runtime/webui /app/webui
+COPY webui/app/jobs.py /app/webui/app/jobs.py
+COPY webui/app/presets.py /app/webui/app/presets.py
+COPY webui/app/events.py /app/webui/app/events.py
+COPY webui/app/storage_stats.py /app/webui/app/storage_stats.py
+COPY webui/app/node_linking.py /app/webui/app/node_linking.py
+COPY worker/__init__.py worker/app.py /app/worker/
+COPY worker/encode-one.sh /worker/encode-one.sh
+COPY presets /presets
+
+RUN chmod 0755 /worker/encode-one.sh
+VOLUME ["/work"]
+
+CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=8", "--timeout=300", "--graceful-timeout=30", "--access-logfile=-", "--error-logfile=-", "worker.app:create_worker_app()"]
+
+# -------------------------------
+# Full controller + web UI
+# -------------------------------
+FROM runtime-base AS controller
+
+RUN mkdir -p /app/data /presets /worker
+
+COPY webui /app/webui
+COPY worker/encode-one.sh /worker/encode-one.sh
+COPY presets /presets
+
+RUN chmod 0755 /worker/encode-one.sh
+
 # One process owns the durable queue and background schedulers. Gunicorn's
 # threads provide concurrent HTTP handling without starting duplicate workers.
 CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=8", "--timeout=300", "--graceful-timeout=30", "--access-logfile=-", "--error-logfile=-", "webui.app:create_app()"]

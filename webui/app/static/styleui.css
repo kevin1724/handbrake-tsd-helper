@@ -2366,6 +2366,25 @@ body.settings-page .folder-add-choice {
   margin-bottom: 12px;
 }
 
+.worker-quick-pair {
+  border-color: rgba(22, 199, 214, 0.34);
+  background: linear-gradient(145deg, rgba(22, 199, 214, 0.1), rgba(8, 18, 38, 0.78));
+}
+
+.worker-quick-pair .section-heading-row h3 {
+  margin-bottom: 5px;
+}
+
+.node-advanced-pairing > summary {
+  cursor: pointer;
+  color: var(--text);
+  line-height: 1.4;
+}
+
+.node-advanced-pairing[open] > summary {
+  margin-bottom: 12px;
+}
+
 .node-status-box {
   display: grid;
   gap: 10px;

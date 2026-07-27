@@ -66,6 +66,47 @@ class NodePairingProtocolTests(unittest.TestCase):
         pairing_body = request_json.call_args_list[1].kwargs["body"]
         self.assertEqual(pairing_body["code"], "AbC_def-12")
 
+    def test_headless_discovery_requires_remote_transfer(self):
+        with mock.patch.dict(os.environ, {"TSD_WORKER_MODE": "1"}):
+            discovery = node_linking.node_discovery()
+
+        self.assertEqual(discovery["worker_mode"], "headless")
+        self.assertTrue(discovery["requires_remote_transfer"])
+        self.assertEqual(discovery["recommended_transfer_mode"], "remote")
+        self.assertIn("remote-transfer-only", discovery["capabilities"])
+
+    def test_headless_worker_forces_remote_mode_and_drops_path_mappings(self):
+        responses = [
+            {
+                "protocol_version": 2,
+                "capabilities": ["headless-worker", "remote-transfer-only"],
+                "worker_mode": "headless",
+                "requires_remote_transfer": True,
+            },
+            {
+                "token": "worker-token",
+                "recovery_token": "recovery-token",
+                "worker_id": "headless-worker",
+                "worker_name": "Garage worker",
+                "protocol_version": 2,
+                "worker_mode": "headless",
+                "requires_remote_transfer": True,
+            },
+        ]
+        with mock.patch.object(node_linking, "_request_json", side_effect=responses):
+            worker = node_linking.pair_worker(
+                "http://worker:8080",
+                "ABCDE-FGHJK",
+                transfer_mode="local",
+                path_mappings=[{"controller": "/media", "worker": "/mnt/media"}],
+                controller_url="http://controller:8080",
+            )
+
+        self.assertEqual(worker["worker_mode"], "headless")
+        self.assertTrue(worker["requires_remote_transfer"])
+        self.assertEqual(worker["transfer_mode"], "remote")
+        self.assertEqual(worker["path_mappings"], [])
+
 
 class MobilePairingProtocolTests(unittest.TestCase):
     def setUp(self):

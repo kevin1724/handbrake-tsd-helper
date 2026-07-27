@@ -154,13 +154,20 @@ def local_node_info() -> dict:
 
 def node_discovery() -> dict:
     local = local_node_info()
+    headless = str(os.environ.get("TSD_WORKER_MODE") or "").strip().lower() in {"1", "true", "yes", "on"}
+    capabilities = list(NODE_CAPABILITIES)
+    if headless:
+        capabilities.extend(["headless-worker", "remote-transfer-only"])
     return {
         "service": "handbrake-tsd-node",
         "node_id": local["id"],
         "node_name": local["name"],
         "protocol_version": NODE_PROTOCOL_VERSION,
         "state_schema_version": NODE_STATE_SCHEMA_VERSION,
-        "capabilities": list(NODE_CAPABILITIES),
+        "capabilities": capabilities,
+        "worker_mode": "headless" if headless else "full",
+        "requires_remote_transfer": headless,
+        "recommended_transfer_mode": "remote" if headless else "auto",
         "pairing": {
             "code_format": "XXXXX-XXXXX",
             "idempotent_retry_seconds": PAIRING_RETRY_GRACE_SECONDS,
@@ -404,6 +411,8 @@ def public_node(row: dict) -> dict:
         "transfer_mode": normalize_transfer_mode(row.get("transfer_mode")),
         "controller_url": row.get("controller_url") or "",
         "remote_temp_dir": row.get("remote_temp_dir") or "",
+        "worker_mode": row.get("worker_mode") or "full",
+        "requires_remote_transfer": bool(row.get("requires_remote_transfer")),
         "paired_at": row.get("paired_at") or 0,
         "paired_controllers": row.get("paired_controllers") if isinstance(row.get("paired_controllers"), list) else [],
         "jobs": row.get("jobs") if isinstance(row.get("jobs"), list) else [],
@@ -648,6 +657,9 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
         raise RuntimeError("pairing response missing worker token")
 
     stored_controller_url = str(data.get("controller_url") or controller_url or "").strip().rstrip("/")
+    requires_remote_transfer = bool(data.get("requires_remote_transfer") or discovery.get("requires_remote_transfer"))
+    selected_transfer_mode = "remote" if requires_remote_transfer else normalize_transfer_mode(transfer_mode)
+    worker_mode = str(data.get("worker_mode") or discovery.get("worker_mode") or "full").strip().lower()
     row = {
         "id": worker_id,
         "name": str(name or data.get("worker_name") or "Worker")[:80],
@@ -663,10 +675,12 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
         "status": "paired",
         "summary": {},
         "last_error": "",
-        "path_mappings": normalize_path_mappings(path_mappings or []),
-        "transfer_mode": normalize_transfer_mode(transfer_mode),
+        "path_mappings": [] if requires_remote_transfer else normalize_path_mappings(path_mappings or []),
+        "transfer_mode": selected_transfer_mode,
         "controller_url": stored_controller_url,
         "remote_temp_dir": str(remote_temp_dir or "").strip()[:500],
+        "worker_mode": worker_mode,
+        "requires_remote_transfer": requires_remote_transfer,
         "protocol_version": max(1, _safe_int(data.get("protocol_version"), discovery.get("protocol_version") or 1)),
         "capabilities": data.get("capabilities") if isinstance(data.get("capabilities"), list) else (
             discovery.get("capabilities") if isinstance(discovery.get("capabilities"), list) else []

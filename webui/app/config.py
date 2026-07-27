@@ -165,11 +165,11 @@ PRESET_DIR = os.environ.get("HB_PRESET_DIR", "/presets")
 # -----------------------------
 DEFAULT_PRESET_CONFIG = {
     "1080": {
-        "file": "/presets/full1080.json",
-        "name": "Plex-1080p-fullsize",
+        "file": os.path.join(PRESET_DIR, "Plex-AV1-Source-Dimensions-CFR-CRF24-ENG-SPA.json"),
+        "name": "Plex-AV1-Source-Dimensions-CFR-CRF24",
     },
     "4k": {
-        "file": "/presets/4k.json",
-        "name": "4kPlex",
+        "file": os.path.join(PRESET_DIR, "Plex-AV1-4K-Source-Dimensions-CFR-CRF28-ENG-SPA.json"),
+        "name": "Plex-AV1-4K-Source-Dimensions-CFR-CRF28-ENG-SPA",
     },
 }

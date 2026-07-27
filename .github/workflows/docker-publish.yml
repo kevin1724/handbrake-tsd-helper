@@ -17,6 +17,7 @@ concurrency:
 
 env:
   IMAGE_NAME: kevina1724/handbrake-tsd-helper
+  WORKER_IMAGE_NAME: kevina1724/handbrake-tsd-worker
 
 jobs:
   publish:
@@ -55,6 +56,7 @@ jobs:
         uses: docker/build-push-action@v7
         with:
           context: .
+          target: controller
           platforms: linux/amd64
           push: true
           tags: ${{ steps.meta.outputs.tags }}
@@ -62,5 +64,34 @@ jobs:
           annotations: ${{ steps.meta.outputs.annotations }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          provenance: mode=max
+          sbom: true
+
+      - name: Generate worker image metadata
+        id: worker-meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.WORKER_IMAGE_NAME }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=main,enable={{is_default_branch}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=ByteSqueeze Headless Worker
+            org.opencontainers.image.description=Transfer-only HandBrake worker for a ByteSqueeze controller
+
+      - name: Build and push headless worker image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          target: worker
+          platforms: linux/amd64
+          push: true
+          tags: ${{ steps.worker-meta.outputs.tags }}
+          labels: ${{ steps.worker-meta.outputs.labels }}
+          annotations: ${{ steps.worker-meta.outputs.annotations }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max,scope=worker
           provenance: mode=max
           sbom: true
