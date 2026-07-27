@@ -3,6 +3,7 @@ import os
 import shutil
 import tempfile
 import unittest
+from datetime import datetime, timedelta
 from unittest.mock import patch
 
 
@@ -54,7 +55,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "2.0.0")
+        self.assertEqual(status.get_json()["release"], "2.1.0")
 
     def test_mobile_bearer_flow_and_scope_enforcement(self):
         pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "read"})
@@ -133,6 +134,85 @@ class ApiRouteSmokeTests(unittest.TestCase):
         smart = self.client.get("/api/mobile/v1/smart_presets", headers=headers)
         self.assertEqual(smart.status_code, 200, smart.get_data(as_text=True))
         self.assertIn("profile", smart.get_json())
+
+        node_target_path = os.path.join(TEST_MEDIA, "Node.Target.Movie.1080p.mkv")
+        with open(node_target_path, "wb") as handle:
+            handle.write(b"node-target")
+        node_target = self.client.post(
+            "/api/mobile/v1/library/queue",
+            json={"paths": [node_target_path], "preset": "auto", "mode": "best"},
+            headers=headers,
+        )
+        self.assertEqual(node_target.status_code, 400, node_target.get_data(as_text=True))
+        self.assertIn("no worker node available", node_target.get_data(as_text=True))
+
+    def test_keyless_calendar_and_local_sidecar_artwork(self):
+        from webui.app import media_metadata
+
+        future_date = (datetime.now() + timedelta(days=30)).date().isoformat()
+
+        show_dir = os.path.join(TEST_MEDIA, "Reference Show")
+        os.makedirs(show_dir, exist_ok=True)
+        episode_path = os.path.join(show_dir, "Reference.Show.S01E01.mkv")
+        poster_path = os.path.join(show_dir, "poster.jpg")
+        with open(episode_path, "wb") as handle:
+            handle.write(b"episode")
+        with open(poster_path, "wb") as handle:
+            handle.write(b"poster-bytes")
+
+        with patch("webui.app.media_metadata._show_remote", return_value={
+            "metadata_source": "tvmaze",
+            "tvmaze_id": 42,
+            "release_calendar": [{
+                "show_title": "Reference Show",
+                "season": 1,
+                "episode": 2,
+                "name": "Next",
+                "airdate": future_date,
+            }],
+        }):
+            metadata = media_metadata.lookup(
+                "show",
+                "Reference Show",
+                2098,
+                [episode_path],
+                refresh_hours=1,
+            )
+
+        self.assertEqual(metadata["metadata_source"], "local")
+        self.assertTrue(metadata["poster_url"].startswith("/api/media/artwork/local-"))
+        cached_name = metadata["poster_url"].rsplit("/", 1)[-1]
+        self.assertTrue(os.path.isfile(media_metadata.artwork_path(cached_name)))
+
+        pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "read"})
+        code = pairing_response.get_json()["pairing"]["code"]
+        paired = self.client.post(
+            "/api/mobile/v1/pair",
+            json={"code": code, "device_id": "calendar-phone", "device_name": "Calendar phone", "platform": "android"},
+        )
+        headers = {"Authorization": f"Bearer {paired.get_json()['access_token']}"}
+        library = {
+            "release_calendar": {
+                "generated_at": 1,
+                "provider": {"name": "TVmaze"},
+                "episodes": [{
+                    "library_show_id": "show-1",
+                    "show_title": "Reference Show",
+                    "airdate": future_date,
+                    "tracked": True,
+                    "monitor_releases": True,
+                    "poster_url": metadata["poster_url"],
+                }],
+            },
+            "movies": [],
+            "shows": [],
+        }
+        with patch("webui.app.routes._beta_load_library_cache", return_value=library):
+            response = self.client.get("/api/mobile/v1/calendar?days=730", headers=headers)
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertIn("TVmaze", response.get_data(as_text=True))
+        self.assertEqual(response.get_json()["calendar"]["count"], 1)
+        self.assertTrue(response.get_json()["calendar"]["episodes"][0]["poster_url"].startswith("http://localhost/api/media/artwork/"))
 
     def test_smart_presets_generate_candidates_and_unlock_after_feedback(self):
         try:

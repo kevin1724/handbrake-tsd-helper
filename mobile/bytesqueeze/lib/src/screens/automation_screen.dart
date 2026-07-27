@@ -25,6 +25,8 @@ class _AutomationScreenState extends State<AutomationScreen> {
   double _maxActive = 5;
   String _start = '00:00';
   String _end = '23:59';
+  bool _scanEnabled = false;
+  double _stabilityMinutes = 10;
   bool _saving = false;
 
   void _hydrate() {
@@ -42,6 +44,11 @@ class _AutomationScreenState extends State<AutomationScreen> {
         (settings['autopilot_max_active_jobs'] as num?)?.toDouble() ?? 5;
     _start = '${settings['autopilot_schedule_start'] ?? '00:00'}';
     _end = '${settings['autopilot_schedule_end'] ?? '23:59'}';
+    _scanEnabled = settings['beta_auto_scan_enabled'] == true;
+    _stabilityMinutes =
+        (settings['beta_auto_scan_file_stability_minutes'] as num?)
+                ?.toDouble() ??
+            10;
     _hydrated = true;
   }
 
@@ -72,6 +79,13 @@ class _AutomationScreenState extends State<AutomationScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
+                          const Text('GUIDED AUTOMATION',
+                              style: TextStyle(
+                                  color: ByteSqueezeColors.cyan,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w800,
+                                  letterSpacing: 1.6)),
+                          const SizedBox(height: 5),
                           Text('Automation',
                               style: Theme.of(context).textTheme.headlineLarge),
                           const SizedBox(height: 4),
@@ -93,6 +107,11 @@ class _AutomationScreenState extends State<AutomationScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
+                _AutopilotGuideCard(
+                  onProfile: _applyProfile,
+                  enabled: widget.controller.canControl,
+                ),
+                const SizedBox(height: 14),
                 SurfaceCard(
                   gradient: const LinearGradient(
                     begin: Alignment.topLeft,
@@ -221,6 +240,28 @@ class _AutomationScreenState extends State<AutomationScreen> {
                         subtitle: const Text(
                             'Evaluate episodes in mapped Shows folders.'),
                         secondary: const Icon(Icons.tv_rounded),
+                      ),
+                      SwitchListTile.adaptive(
+                        contentPadding: EdgeInsets.zero,
+                        value: _scanEnabled,
+                        onChanged: widget.controller.canControl
+                            ? (value) => setState(() => _scanEnabled = value)
+                            : null,
+                        title: const Text('Watch mapped drives'),
+                        subtitle: const Text(
+                            'Incrementally discover new and changed downloads.'),
+                        secondary: const Icon(Icons.radar_rounded),
+                      ),
+                      _SliderSetting(
+                        label: 'Download write-safety window',
+                        valueLabel: '${_stabilityMinutes.round()} min',
+                        value: _stabilityMinutes,
+                        min: 1,
+                        max: 60,
+                        divisions: 59,
+                        enabled: widget.controller.canControl,
+                        onChanged: (value) =>
+                            setState(() => _stabilityMinutes = value),
                       ),
                       _SliderSetting(
                         label: 'Minimum source size',
@@ -387,6 +428,9 @@ class _AutomationScreenState extends State<AutomationScreen> {
         'autopilot_max_active_jobs': _maxActive.round(),
         'autopilot_schedule_start': _start,
         'autopilot_schedule_end': _end,
+        'beta_auto_scan_enabled': _scanEnabled,
+        'beta_auto_scan_file_stability_enabled': true,
+        'beta_auto_scan_file_stability_minutes': _stabilityMinutes.round(),
       });
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
@@ -400,6 +444,41 @@ class _AutomationScreenState extends State<AutomationScreen> {
     }
   }
 
+  void _applyProfile(String profile) {
+    setState(() {
+      _enabled = true;
+      _scanEnabled = true;
+      _movies = true;
+      _shows = true;
+      if (profile == 'safe') {
+        _mode = 'observe';
+        _minSize = 2;
+        _minSavings = 15;
+        _batchLimit = 2;
+        _maxActive = 3;
+        _stabilityMinutes = 20;
+      } else if (profile == 'hands_off') {
+        _mode = 'manage';
+        _minSize = .5;
+        _minSavings = 8;
+        _batchLimit = 5;
+        _maxActive = 8;
+        _stabilityMinutes = 15;
+      } else {
+        _mode = 'observe';
+        _minSize = 1;
+        _minSavings = 10;
+        _batchLimit = 3;
+        _maxActive = 5;
+        _stabilityMinutes = 10;
+      }
+    });
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(
+          '${profile == 'safe' ? 'Safe starter' : profile == 'hands_off' ? 'Hands-off' : 'Balanced'} loaded. Review it, then save.'),
+    ));
+  }
+
   Future<void> _run(Future<void> Function() action, {String? success}) async {
     try {
       await action();
@@ -411,6 +490,128 @@ class _AutomationScreenState extends State<AutomationScreen> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('$error')));
     }
+  }
+}
+
+class _AutopilotGuideCard extends StatelessWidget {
+  const _AutopilotGuideCard({required this.onProfile, required this.enabled});
+
+  final ValueChanged<String> onProfile;
+  final bool enabled;
+
+  @override
+  Widget build(BuildContext context) {
+    const steps = [
+      (
+        '1',
+        'Map folders',
+        'Tell ByteSqueeze exactly where Movies and Shows live.'
+      ),
+      ('2', 'Observe', 'Run a cycle. Nothing is queued in Observe mode.'),
+      (
+        '3',
+        'Teach',
+        'Approve a few Size Wizard previews to train Smart Presets.'
+      ),
+      (
+        '4',
+        'Guardrails',
+        'Set write safety, savings, schedule, and queue limits.'
+      ),
+      (
+        '5',
+        'Manage',
+        'Allow bounded queueing only after the decisions look right.'
+      ),
+    ];
+    return SurfaceCard(
+      gradient: const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFF13385A), Color(0xFF09182D)],
+      ),
+      borderColor: ByteSqueezeColors.cyan.withValues(alpha: .38),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.route_rounded, color: ByteSqueezeColors.cyan),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text('How Autopilot works',
+                    style: Theme.of(context).textTheme.titleLarge),
+              ),
+              const StatusPill(label: '5 steps', color: ByteSqueezeColors.cyan),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ...steps.map((step) => Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    CircleAvatar(
+                      radius: 14,
+                      backgroundColor:
+                          ByteSqueezeColors.cyan.withValues(alpha: .16),
+                      child: Text(step.$1,
+                          style: const TextStyle(
+                              color: ByteSqueezeColors.cyan,
+                              fontSize: 12,
+                              fontWeight: FontWeight.w800)),
+                    ),
+                    const SizedBox(width: 10),
+                    Expanded(
+                      child: RichText(
+                        text: TextSpan(
+                          style: DefaultTextStyle.of(context).style,
+                          children: [
+                            TextSpan(
+                                text: '${step.$2}  ',
+                                style: const TextStyle(
+                                    fontWeight: FontWeight.w800)),
+                            TextSpan(
+                                text: step.$3,
+                                style: const TextStyle(
+                                    color: ByteSqueezeColors.muted)),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
+              )),
+          const Divider(),
+          const Text('Pick a starting policy',
+              style: TextStyle(fontWeight: FontWeight.w800)),
+          const SizedBox(height: 9),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              ActionChip(
+                  avatar: const Icon(Icons.shield_outlined, size: 18),
+                  label: const Text('Safe starter'),
+                  onPressed: enabled ? () => onProfile('safe') : null),
+              ActionChip(
+                  avatar: const Icon(Icons.balance_rounded, size: 18),
+                  label: const Text('Balanced'),
+                  onPressed: enabled ? () => onProfile('balanced') : null),
+              ActionChip(
+                  avatar: const Icon(Icons.auto_awesome_rounded, size: 18),
+                  label: const Text('Hands-off'),
+                  onPressed: enabled ? () => onProfile('hands_off') : null),
+            ],
+          ),
+          const SizedBox(height: 10),
+          const Text(
+            'Observe never queues. Manage still waits for complete files and keeps the existing output verification and source protection.',
+            style: TextStyle(color: ByteSqueezeColors.muted, fontSize: 12),
+          ),
+        ],
+      ),
+    );
   }
 }
 

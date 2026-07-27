@@ -44,6 +44,7 @@ import threading
 import secrets
 import shutil
 import socket
+from datetime import datetime, timedelta
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urlencode
 from urllib.request import Request, urlopen
@@ -123,6 +124,7 @@ from .smart_presets import (
 
 from .events import load_events, clear_events, log_event
 from .storage_stats import get_summary as get_storage_summary, list_encodes as list_storage_encodes, clear_stats as clear_storage_stats, record_encode
+from .media_metadata import artwork_path as media_artwork_path, enrich_library as enrich_media_library
 from .node_linking import (
     accept_pairing,
     create_transfer_grant,
@@ -3079,6 +3081,9 @@ def _beta_empty_library(settings=None) -> dict:
             "limited": False,
         },
         "tmdb_configured": bool(_beta_tmdb_config(settings)),
+        "metadata": {"keyless": bool(settings.get("metadata_no_key_enabled", True)), "providers": []},
+        "release_calendar": {"generated_at": 0, "episodes": []},
+        "catalog": {"total_titles": 0, "movies": 0, "shows": 0, "episodes": 0},
         "movies": [],
         "shows": [],
     }
@@ -3151,8 +3156,11 @@ def _beta_load_tracking() -> dict:
             "title": str(row.get("title") or "Unknown Title"),
             "year": row.get("year"),
             "tmdb_id": row.get("tmdb_id"),
+            "tvmaze_id": row.get("tvmaze_id"),
             "poster_url": str(row.get("poster_url") or ""),
             "tracked": bool(row.get("tracked", True)),
+            "monitor_releases": bool(row.get("monitor_releases", True)),
+            "auto_queue": bool(row.get("auto_queue", True)),
             "known_paths": known_paths,
             "created_at": float(row.get("created_at") or 0),
             "updated_at": float(row.get("updated_at") or 0),
@@ -3190,12 +3198,16 @@ def _beta_apply_tracking(data: dict, tracking: dict | None = None) -> dict:
         new_paths = sorted(path for path in paths if path not in known)
 
         show["tracked"] = is_tracked
+        show["monitor_releases"] = bool(row.get("monitor_releases", True)) if row else False
+        show["auto_queue_downloads"] = bool(row.get("auto_queue", True)) if row else False
         show["tracking"] = {
             "tracked": is_tracked,
             "known_episode_count": len(paths & known),
             "new_episode_count": len(new_paths) if is_tracked else 0,
             "new_paths": new_paths if is_tracked else [],
             "updated_at": row.get("updated_at") if row else 0,
+            "monitor_releases": bool(row.get("monitor_releases", True)) if row else False,
+            "auto_queue": bool(row.get("auto_queue", True)) if row else False,
         }
         if is_tracked:
             tracked_count += 1
@@ -3206,6 +3218,13 @@ def _beta_apply_tracking(data: dict, tracking: dict | None = None) -> dict:
         "new_episode_count": pending_count,
         "updated_at": float(tracking.get("updated_at") or 0),
     }
+    calendar = data.get("release_calendar") if isinstance(data.get("release_calendar"), dict) else {}
+    for episode in calendar.get("episodes") or []:
+        if not isinstance(episode, dict):
+            continue
+        row = tracked_rows.get(str(episode.get("library_show_id") or "")) or {}
+        episode["tracked"] = bool(row.get("tracked"))
+        episode["monitor_releases"] = bool(row.get("monitor_releases", True)) if row else False
     return data
 
 
@@ -3224,7 +3243,7 @@ def _beta_auto_queue_tracked_episodes(data: dict, tracking: dict) -> dict:
             continue
         show_id = _beta_show_tracking_key(show)
         row = tracked_rows.get(show_id)
-        if not isinstance(row, dict) or not row.get("tracked"):
+        if not isinstance(row, dict) or not row.get("tracked") or not row.get("auto_queue", True):
             continue
 
         current_paths = _beta_show_paths(show)
@@ -3259,6 +3278,7 @@ def _beta_auto_queue_tracked_episodes(data: dict, tracking: dict) -> dict:
         row["title"] = show.get("title") or row.get("title") or "Unknown Title"
         row["year"] = show.get("year")
         row["tmdb_id"] = show.get("tmdb_id") or row.get("tmdb_id")
+        row["tvmaze_id"] = show.get("tvmaze_id") or row.get("tvmaze_id")
         row["poster_url"] = show.get("poster_url") or row.get("poster_url") or ""
         row["updated_at"] = time.time()
         changed = True
@@ -3286,7 +3306,7 @@ def _beta_load_library_cache(settings=None) -> dict:
     data.setdefault("shows", [])
     data.setdefault("stats", {})
     data["tmdb_configured"] = bool(_beta_tmdb_config(settings))
-    return _beta_apply_tracking(_beta_refresh_predictions(data), _beta_load_tracking())
+    return _beta_apply_tracking(_beta_refresh_predictions(_beta_finalize_catalog(data)), _beta_load_tracking())
 
 
 def _beta_save_library_cache(data: dict) -> None:
@@ -3360,6 +3380,10 @@ def _beta_parse_media(src_path: str) -> dict:
         size_bytes = int(os.path.getsize(src_path))
     except Exception:
         size_bytes = 0
+    try:
+        modified_at = float(os.path.getmtime(src_path))
+    except Exception:
+        modified_at = 0.0
 
     hdr_reason = _hdr_filename_reason(src_path)
     return {
@@ -3373,6 +3397,7 @@ def _beta_parse_media(src_path: str) -> dict:
         "path": src_path,
         "folder": os.path.dirname(src_path),
         "size_bytes": size_bytes,
+        "modified_at": modified_at,
         "is_hdr": bool(hdr_reason),
         "hdr_reason": hdr_reason,
         "detected_reason": source_type.get("reason") or "filename",
@@ -3511,6 +3536,49 @@ def _beta_tmdb_season_art(tmdb_id, seasons: list[int], settings=None) -> dict:
     return art
 
 
+def _beta_finalize_catalog(data: dict) -> dict:
+    """Add compact catalog views used by the web and mobile home screens."""
+    movies = [row for row in data.get("movies") or [] if isinstance(row, dict)]
+    shows = [row for row in data.get("shows") or [] if isinstance(row, dict)]
+    for show in shows:
+        show["modified_at"] = max(
+            [float(ep.get("modified_at") or 0) for ep in show.get("files") or [] if isinstance(ep, dict)] or [0.0]
+        )
+    recent = sorted(
+        [*movies, *shows],
+        key=lambda row: float(row.get("modified_at") or 0),
+        reverse=True,
+    )[:24]
+    episodes = sum(int(row.get("episode_count") or 0) for row in shows)
+    data["catalog"] = {
+        "total_titles": len(movies) + len(shows),
+        "movies": len(movies),
+        "shows": len(shows),
+        "episodes": episodes,
+        "complete": not bool((data.get("stats") or {}).get("limited")),
+        "recently_added": recent,
+    }
+    return data
+
+
+def _beta_enrich_metadata(data: dict, settings: dict, *, enabled: bool = True) -> dict:
+    """Apply the no-key metadata pipeline and optional legacy TMDb fallback."""
+    if enabled or settings.get("episode_release_monitor_enabled", True):
+        data = enrich_media_library(data, settings)
+
+    if enabled and _beta_tmdb_config(settings):
+        for show in data.get("shows") or []:
+            if not isinstance(show, dict) or show.get("poster_url"):
+                continue
+            show.update(_beta_tmdb_search("show", show.get("title"), show.get("year"), settings))
+            show["season_art"] = _beta_tmdb_season_art(show.get("tmdb_id"), show.get("seasons") or [], settings)
+        for movie in data.get("movies") or []:
+            if isinstance(movie, dict) and not movie.get("poster_url"):
+                movie.update(_beta_tmdb_search("movie", movie.get("title"), movie.get("year"), settings))
+
+    return _beta_finalize_catalog(data)
+
+
 def _beta_scan_library(root_path: str, *, recursive: bool, posters: bool, settings: dict, root_kind: str = "") -> dict:
     movies = []
     shows = {}
@@ -3565,18 +3633,10 @@ def _beta_scan_library(root_path: str, *, recursive: bool, posters: bool, settin
         group["season_count"] = len(seasons)
         group["seasons"] = seasons
         group["files"].sort(key=lambda ep: (ep.get("season") or 0, ep.get("episode") or 0, ep["filename"].lower()))
-        if posters:
-            group.update(_beta_tmdb_search("show", group["title"], group.get("year"), settings))
-            group["season_art"] = _beta_tmdb_season_art(group.get("tmdb_id"), seasons, settings)
-
-    if posters:
-        for item in movies:
-            item.update(_beta_tmdb_search("movie", item["title"], item.get("year"), settings))
-
     movies.sort(key=lambda item: ((item.get("title") or "").lower(), item.get("year") or 0))
     show_rows = sorted(shows.values(), key=lambda item: ((item.get("title") or "").lower(), item.get("year") or 0))
 
-    return {
+    data = {
         "scope": "root",
         "root": root_path,
         "roots": [next((row for row in _beta_mapped_roots(settings) if row["path"] == root_path), {"path": root_path, "label": root_path})],
@@ -3593,6 +3653,7 @@ def _beta_scan_library(root_path: str, *, recursive: bool, posters: bool, settin
         "movies": movies,
         "shows": show_rows,
     }
+    return _beta_enrich_metadata(data, settings, enabled=True) if posters else _beta_finalize_catalog(data)
 
 
 def _beta_merge_show_group(groups: dict, incoming: dict) -> None:
@@ -3726,13 +3787,14 @@ def _beta_scan_all_libraries(*, recursive: bool, posters: bool, settings: dict) 
         scan = _beta_scan_library(
             root_path,
             recursive=recursive,
-            posters=posters,
+            posters=False,
             settings=settings,
             root_kind=row.get("kind") or "",
         )
         scans.append(scan)
 
-    return _beta_combine_library_scans(scans, recursive=recursive, settings=settings)
+    data = _beta_combine_library_scans(scans, recursive=recursive, settings=settings)
+    return _beta_enrich_metadata(data, settings, enabled=posters)
 
 
 def _beta_empty_scan_index() -> dict:
@@ -3838,7 +3900,14 @@ def _beta_cached_art_maps() -> tuple[dict, dict]:
             str(item.get("path") or ""),
             f"{str(item.get('title') or '').lower()}::{item.get('year') or ''}",
         }
-        art = {k: item.get(k) for k in ("poster_url", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error") if item.get(k)}
+        art = {
+            k: item.get(k)
+            for k in (
+                "poster_url", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error",
+                "metadata_source", "metadata_provider", "metadata_url", "summary", "genres", "release_date",
+            )
+            if item.get(k)
+        }
         for key in keys:
             if key and art:
                 movies[key] = art
@@ -3850,7 +3919,15 @@ def _beta_cached_art_maps() -> tuple[dict, dict]:
             str(item.get("id") or ""),
             f"{str(item.get('title') or '').lower()}::{item.get('year') or ''}",
         }
-        art = {k: item.get(k) for k in ("poster_url", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error", "season_art") if item.get(k)}
+        art = {
+            k: item.get(k)
+            for k in (
+                "poster_url", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error", "season_art",
+                "metadata_source", "metadata_provider", "metadata_url", "summary", "genres", "tvmaze_id",
+                "show_status", "network", "next_episode", "release_calendar",
+            )
+            if item.get(k)
+        }
         for key in keys:
             if key and art:
                 shows[key] = art
@@ -3952,7 +4029,7 @@ def _beta_library_from_scan_index(index: dict, *, settings: dict, recursive: boo
         "movies": movies,
         "shows": show_rows,
     }
-    return _beta_apply_cached_art(data)
+    return _beta_finalize_catalog(_beta_apply_cached_art(data))
 
 
 def _beta_active_job_paths() -> set[str]:
@@ -4303,13 +4380,71 @@ def _autopilot_status_payload() -> dict:
             "estimated_selected_savings_bytes": 0,
         }
     return {
-        "release": "2.0.0",
+        "release": "2.1.0",
         "autopilot": autopilot,
         "readiness": _autopilot_readiness(settings),
         "scan": scan,
         "queue": {"paused": get_queue_state(), "summary": get_job_summary()},
         "nodes": list_nodes_public(),
+        "guide": {
+            "steps": [
+                {"id": "folders", "title": "Map your library", "detail": "Choose the exact Movies and Shows folders ByteSqueeze may watch."},
+                {"id": "observe", "title": "Start in Observe", "detail": "Run a cycle and review every eligible, waiting, and skipped decision without queueing anything."},
+                {"id": "preview", "title": "Teach Smart Presets", "detail": "Approve or reject a few Size Wizard previews so automation learns your quality and size comfort zone."},
+                {"id": "limits", "title": "Set guardrails", "detail": "Choose a file-stability window, minimum savings, schedule, and queue capacity."},
+                {"id": "manage", "title": "Turn on Manage", "detail": "Only then may Autopilot queue stable work inside the limits you selected."},
+            ],
+            "safety": "Observe never queues. Manage never bypasses file stability, output verification, or source-file protection.",
+        },
+        "policy_profiles": [
+            {"id": "safe", "name": "Safe starter", "description": "Observe only with a 20-minute write window and small batches.", "settings": {"autopilot_enabled": True, "autopilot_mode": "observe", "autopilot_min_size_gb": 2, "autopilot_min_savings_percent": 15, "autopilot_batch_limit": 2, "autopilot_max_active_jobs": 3, "beta_auto_scan_enabled": True, "beta_auto_scan_file_stability_enabled": True, "beta_auto_scan_file_stability_minutes": 20}},
+            {"id": "balanced", "name": "Balanced", "description": "Observe first, moderate savings threshold, and up to five active jobs.", "settings": {"autopilot_enabled": True, "autopilot_mode": "observe", "autopilot_min_size_gb": 1, "autopilot_min_savings_percent": 10, "autopilot_batch_limit": 3, "autopilot_max_active_jobs": 5, "beta_auto_scan_enabled": True, "beta_auto_scan_file_stability_enabled": True, "beta_auto_scan_file_stability_minutes": 10}},
+            {"id": "hands_off", "name": "Hands-off", "description": "Manage mode for users who have already reviewed Smart Preset previews.", "settings": {"autopilot_enabled": True, "autopilot_mode": "manage", "autopilot_min_size_gb": 0.5, "autopilot_min_savings_percent": 8, "autopilot_batch_limit": 5, "autopilot_max_active_jobs": 8, "beta_auto_scan_enabled": True, "beta_auto_scan_file_stability_enabled": True, "beta_auto_scan_file_stability_minutes": 15}},
+        ],
     }
+
+
+def _beta_calendar_payload(data: dict, *, tracked_only: bool = False, days: int = 120) -> dict:
+    calendar = data.get("release_calendar") if isinstance(data.get("release_calendar"), dict) else {}
+    episodes = [row.copy() for row in calendar.get("episodes") or [] if isinstance(row, dict)]
+    if tracked_only:
+        episodes = [row for row in episodes if row.get("tracked") and row.get("monitor_releases", True)]
+    today = datetime.now().date()
+    cutoff = today + timedelta(days=max(1, min(730, int(days or 120))))
+    filtered = []
+    for row in episodes:
+        try:
+            airdate = datetime.strptime(str(row.get("airdate") or ""), "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        if today <= airdate <= cutoff:
+            filtered.append(row)
+    grouped = {}
+    for row in filtered:
+        grouped.setdefault(str(row.get("airdate") or ""), []).append(row)
+    return {
+        "generated_at": calendar.get("generated_at") or 0,
+        "provider": calendar.get("provider") or {"name": "TVmaze", "url": "https://www.tvmaze.com/"},
+        "tracked_only": tracked_only,
+        "days": [{"date": date, "episodes": rows} for date, rows in sorted(grouped.items())],
+        "episodes": filtered,
+        "count": len(filtered),
+    }
+
+
+def _absolute_media_urls(value, base_url: str):
+    """Make cached artwork routes usable by a paired phone."""
+    if isinstance(value, list):
+        return [_absolute_media_urls(row, base_url) for row in value]
+    if not isinstance(value, dict):
+        return value
+    out = {}
+    for key, row in value.items():
+        if key in {"poster_url", "image_url"} and isinstance(row, str) and row.startswith("/"):
+            out[key] = f"{base_url.rstrip('/')}{row}"
+        else:
+            out[key] = _absolute_media_urls(row, base_url)
+    return out
 
 
 def _beta_encoding_is_running() -> bool:
@@ -4365,6 +4500,7 @@ def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = Fals
 
         index, scan_summary = _beta_update_scan_index(settings)
         data = _beta_library_from_scan_index(index, settings=settings, recursive=True)
+        data = _beta_enrich_metadata(data, settings, enabled=True)
         data = _beta_refresh_predictions(data)
         tracking = _beta_load_tracking()
         data = _beta_apply_tracking(data, tracking)
@@ -4770,6 +4906,48 @@ def _node_preset_bundle(preset_key: str) -> dict | None:
             extra={"preset": key},
         )
         return None
+
+
+def _node_queue_plan(src: str, requested_preset: str) -> dict:
+    requested = str(requested_preset or "auto").strip().lower()
+    if requested == "smart":
+        recommendation = _smart_recommendation({"src": src, "preset": "auto"})
+        plan = recommendation.get("selected_plan") or {}
+        options = plan.get("options") if isinstance(plan.get("options"), dict) else {}
+        estimates = plan.get("estimates") if isinstance(plan.get("estimates"), dict) else {}
+        effective = str(plan.get("preset") or guess_preset_from_filename(os.path.basename(src)))
+        return {
+            "preset": effective,
+            "preset_bundle": _node_preset_bundle(effective),
+            "extra_args": " ".join(str(arg) for arg in plan.get("extra_args") or []),
+            "encode_metadata": {
+                "encode_method": estimates.get("encoder"),
+                "encoder": estimates.get("encoder"),
+                "video_codec": options.get("video_codec"),
+                "encoder_family": options.get("encoder_family"),
+                "bit_depth": options.get("bit_depth"),
+                "audio_strategy": options.get("smart_audio_strategy") or options.get("audio_mode"),
+                "audio_languages": options.get("audio_languages"),
+                "subtitle_languages": options.get("subtitle_languages"),
+                "smart_preset": True,
+                "smart_candidate_id": recommendation.get("recommended_id"),
+            },
+        }
+    effective = guess_preset_from_filename(os.path.basename(src)) if requested == "auto" else requested
+    if effective not in {"1080", "4k"}:
+        effective = guess_preset_from_filename(os.path.basename(src))
+    return {
+        "preset": effective,
+        "preset_bundle": _node_preset_bundle(effective),
+        "extra_args": "",
+        "encode_metadata": {
+            "encode_method": f"preset:{effective}",
+            "encoder": "",
+            "video_codec": "",
+            "encoder_family": "preset",
+            "bit_depth": "",
+        },
+    }
 
 
 def _transfer_output_path_for_src(src: str) -> str:
@@ -5234,6 +5412,23 @@ def register_routes(app):
         """Return the last saved Beta library scan without touching the filesystem tree."""
         return jsonify(_beta_load_library_cache(load_settings()))
 
+    @app.route("/api/library/calendar")
+    def library_calendar_api():
+        data = _beta_load_library_cache(load_settings())
+        tracked_only = str(request.args.get("tracked", "0")).lower() in {"1", "true", "yes"}
+        try:
+            days = int(request.args.get("days") or 120)
+        except (TypeError, ValueError):
+            days = 120
+        return jsonify(ok=True, calendar=_beta_calendar_payload(data, tracked_only=tracked_only, days=days))
+
+    @app.route("/api/media/artwork/<filename>")
+    def media_artwork_api(filename):
+        path = media_artwork_path(filename)
+        if not path:
+            abort(404)
+        return send_file(path, conditional=True, max_age=86400)
+
     @app.route("/api/beta/auto_scan/status")
     def beta_auto_scan_status_api():
         """Return Beta auto-scan settings and the last scan status."""
@@ -5283,12 +5478,16 @@ def register_routes(app):
         if tracked:
             existing = shows.get(show_id) if isinstance(shows.get(show_id), dict) else {}
             shows[show_id] = {
+                **existing,
                 "id": show_id,
                 "title": title,
                 "year": data.get("year"),
                 "tmdb_id": data.get("tmdb_id"),
+                "tvmaze_id": data.get("tvmaze_id"),
                 "poster_url": str(data.get("poster_url") or ""),
                 "tracked": True,
+                "monitor_releases": bool(data.get("monitor_releases", existing.get("monitor_releases", True))),
+                "auto_queue": bool(data.get("auto_queue", existing.get("auto_queue", True))),
                 "known_paths": paths,
                 "created_at": float(existing.get("created_at") or now),
                 "updated_at": now,
@@ -5663,7 +5862,20 @@ def register_routes(app):
             {"label": row.get("label") or row.get("kind") or "Media", "kind": row.get("kind") or ""}
             for row in _beta_mapped_roots(settings)
         ]
-        return jsonify(ok=True, library=data)
+        return jsonify(ok=True, library=_absolute_media_urls(data, request.host_url))
+
+    @app.route("/api/mobile/v1/calendar")
+    def mobile_calendar_api():
+        if not _authenticated_mobile("read"):
+            return jsonify(error="unauthorized mobile device"), 401
+        try:
+            days = int(request.args.get("days") or 120)
+        except (TypeError, ValueError):
+            days = 120
+        tracked_only = str(request.args.get("tracked", "0")).lower() in {"1", "true", "yes"}
+        data = _beta_load_library_cache(load_settings())
+        calendar = _beta_calendar_payload(data, tracked_only=tracked_only, days=days)
+        return jsonify(ok=True, calendar=_absolute_media_urls(calendar, request.host_url))
 
     @app.route("/api/mobile/v1/library/refresh", methods=["POST"])
     def mobile_library_refresh_api():
@@ -5672,7 +5884,8 @@ def register_routes(app):
             return jsonify(error="control permission required"), 403
         status = _beta_run_incremental_auto_scan(reason="bytesqueeze", force=True)
         log_event("mobile_library_refresh", f"{device.get('name')} refreshed the media library.", level="info")
-        return jsonify(ok=True, status=status, library=_beta_load_library_cache(load_settings()))
+        library = _beta_load_library_cache(load_settings())
+        return jsonify(ok=True, status=status, library=_absolute_media_urls(library, request.host_url))
 
     @app.route("/api/mobile/v1/library/queue", methods=["POST"])
     def mobile_library_queue_api():
@@ -5688,6 +5901,11 @@ def register_routes(app):
         preset = str(data.get("preset") or "smart").strip().lower()
         if preset not in {"auto", "1080", "4k", "smart"}:
             return jsonify(error="invalid preset"), 400
+        dispatch_mode = str(data.get("mode") or "local").strip().lower()
+        if dispatch_mode in {"best", "node"}:
+            return nodes_dispatch_api()
+        if dispatch_mode != "local":
+            return jsonify(error="mode must be local, best, or node"), 400
 
         seen = set()
         queueable = []
@@ -5750,8 +5968,11 @@ def register_routes(app):
                 "title": str(data.get("title") or "Unknown Title").strip()[:160],
                 "year": data.get("year"),
                 "tmdb_id": data.get("tmdb_id"),
+                "tvmaze_id": data.get("tvmaze_id"),
                 "poster_url": str(data.get("poster_url") or ""),
                 "tracked": True,
+                "monitor_releases": bool(data.get("monitor_releases", existing.get("monitor_releases", True))),
+                "auto_queue": bool(data.get("auto_queue", existing.get("auto_queue", True))),
                 "known_paths": _beta_clean_path_list(data.get("paths")),
                 "created_at": float(existing.get("created_at") or time.time()),
                 "updated_at": time.time(),
@@ -6330,17 +6551,12 @@ def register_routes(app):
         jobs_payload = []
         skipped = []
 
-        def build_remote_job_payload(src: str, effective_preset: str, preset_bundle: dict | None) -> tuple[dict | None, str | None]:
+        def build_remote_job_payload(src: str, plan: dict) -> tuple[dict | None, str | None]:
             try:
                 source_size = int(os.path.getsize(src))
                 grant = create_transfer_grant(src, selected.get("id") or "", source_size=source_size)
-                encode_metadata = {
-                    "encode_method": f"preset:{effective_preset}",
-                    "encoder": "",
-                    "video_codec": "",
-                    "encoder_family": "preset",
-                    "bit_depth": "",
-                }
+                effective_preset = plan.get("preset") or "1080"
+                encode_metadata = plan.get("encode_metadata") if isinstance(plan.get("encode_metadata"), dict) else {}
                 transfer_row = get_transfer(grant["id"]) or {}
                 transfer_row["preset"] = effective_preset
                 transfer_row["controller_url"] = controller_url
@@ -6365,7 +6581,8 @@ def register_routes(app):
                 return {
                     "src": src,
                     "preset": effective_preset,
-                    "preset_bundle": preset_bundle,
+                    "preset_bundle": plan.get("preset_bundle"),
+                    "extra_args": str(plan.get("extra_args") or ""),
                     "encode_metadata": encode_metadata,
                     "transfer": transfer_payload,
                 }, None
@@ -6389,13 +6606,16 @@ def register_routes(app):
                 skipped.append({"path": src, "reason": "already tagged -TSD"})
                 continue
 
-            effective_preset = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
-            preset_bundle = _node_preset_bundle(effective_preset)
+            try:
+                plan = _node_queue_plan(src, preset)
+            except Exception as exc:
+                skipped.append({"path": src, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
+                continue
             worker_path = translate_path(src, selected.get("path_mappings") or [])
             use_remote = selected_mode == "remote" or (selected_mode == "auto" and not worker_path)
 
             if use_remote:
-                remote_payload, remote_error = build_remote_job_payload(src, effective_preset, preset_bundle)
+                remote_payload, remote_error = build_remote_job_payload(src, plan)
                 if remote_payload:
                     jobs_payload.append(remote_payload)
                 else:
@@ -6405,7 +6625,14 @@ def register_routes(app):
             if not worker_path:
                 skipped.append({"path": src, "reason": "no path mapping for worker"})
                 continue
-            jobs_payload.append({"src": worker_path, "original_path": src, "preset": effective_preset, "preset_bundle": preset_bundle})
+            jobs_payload.append({
+                "src": worker_path,
+                "original_path": src,
+                "preset": plan.get("preset"),
+                "preset_bundle": plan.get("preset_bundle"),
+                "extra_args": plan.get("extra_args") or "",
+                "encode_metadata": plan.get("encode_metadata") or {},
+            })
 
         if not jobs_payload:
             return jsonify(error="no worker-queueable files", skipped=skipped), 400
@@ -6438,9 +6665,12 @@ def register_routes(app):
                 if not is_allowed_path(original_path) or not os.path.isfile(original_path):
                     remaining_result_skipped.append(item)
                     continue
-                effective_preset = guess_preset_from_filename(os.path.basename(original_path)) if preset == "auto" else preset
-                preset_bundle = _node_preset_bundle(effective_preset)
-                remote_payload, remote_error = build_remote_job_payload(original_path, effective_preset, preset_bundle)
+                try:
+                    retry_plan = _node_queue_plan(original_path, preset)
+                except Exception as exc:
+                    remaining_result_skipped.append({"path": original_path, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
+                    continue
+                remote_payload, remote_error = build_remote_job_payload(original_path, retry_plan)
                 if remote_payload:
                     retry_payload.append(remote_payload)
                     retried_paths.add(original_path)

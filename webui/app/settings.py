@@ -40,8 +40,14 @@ DEFAULT_SETTINGS = {
     # drag_drop = grab rows and reorder visually
     "queue_ui_mode": "buttons",
 
-    # Poster metadata for the beta library page.
-    # TMDb is free for non-commercial use with attribution; blank disables lookups.
+    # Keyless catalog metadata is enabled by default. Local sidecar artwork wins,
+    # then TVmaze supplies show art/schedules and Apple Search supplies movie art.
+    "metadata_no_key_enabled": True,
+    "metadata_country": "US",
+    "episode_release_monitor_enabled": True,
+    "episode_release_refresh_hours": 12,
+
+    # Optional legacy TMDb fallback for users who already configured it.
     "tmdb_api_key": "",
     "tmdb_bearer_token": "",
 
@@ -293,6 +299,28 @@ def _save_settings_unlocked(new_values: dict) -> dict:
     for key in ("tmdb_api_key", "tmdb_bearer_token"):
         value = new_values.get(key, base.get(key, ""))
         base[key] = str(value or "").strip()
+
+    base["metadata_no_key_enabled"] = bool(
+        new_values.get("metadata_no_key_enabled", base.get("metadata_no_key_enabled", True))
+    )
+    base["episode_release_monitor_enabled"] = bool(
+        new_values.get(
+            "episode_release_monitor_enabled",
+            base.get("episode_release_monitor_enabled", True),
+        )
+    )
+    country = str(new_values.get("metadata_country", base.get("metadata_country", "US")) or "US").strip().upper()
+    base["metadata_country"] = country[:2] if len(country) >= 2 else "US"
+    base["episode_release_refresh_hours"] = _bounded_number(
+        new_values.get(
+            "episode_release_refresh_hours",
+            base.get("episode_release_refresh_hours", 12),
+        ),
+        12,
+        1,
+        168,
+        integer=True,
+    )
 
     # ------------------------------------------------------------------
     # Beta media folder mapping

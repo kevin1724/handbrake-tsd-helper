@@ -286,11 +286,26 @@
   <div class="section-card settings-wide automation-settings-section autopilot-card">
     <div class="section-heading-row">
       <div>
-        <div class="eyebrow">Release 2.0</div>
+        <div class="eyebrow">Guided setup</div>
         <h2>Autopilot</h2>
         <p class="small">Continuously discovers stable media, explains its decisions, and—only in Manage mode—fills a bounded number of queue slots.</p>
       </div>
       <div id="autopilotStatePill" class="node-pill node-pill-paired">Observe</div>
+    </div>
+
+    <div class="autopilot-guide" aria-label="Autopilot tutorial">
+      <div><span>1</span><strong>Map folders</strong><small>Pick the exact Movies and Shows folders to watch.</small></div>
+      <div><span>2</span><strong>Observe</strong><small>Preview decisions without adding a single job.</small></div>
+      <div><span>3</span><strong>Teach presets</strong><small>Approve Size Wizard previews so Smart Presets learn.</small></div>
+      <div><span>4</span><strong>Set limits</strong><small>Choose stability, savings, capacity, and schedule.</small></div>
+      <div><span>5</span><strong>Manage</strong><small>Enable unattended queueing only when you are ready.</small></div>
+    </div>
+
+    <div class="autopilot-profile-row">
+      <button type="button" class="ghost-btn autopilot-profile" data-profile="safe">Safe starter</button>
+      <button type="button" class="ghost-btn autopilot-profile" data-profile="balanced">Balanced</button>
+      <button type="button" class="ghost-btn autopilot-profile" data-profile="hands_off">Hands-off</button>
+      <span class="small">Choose a starting policy, then fine-tune it below.</span>
     </div>
 
     <div class="autopilot-settings-grid">
@@ -351,9 +366,9 @@
   <div class="section-card settings-wide automation-settings-section mobile-access-card">
     <div class="section-heading-row">
       <div>
-        <div class="eyebrow">Android backend preview</div>
+        <div class="eyebrow">ByteSqueeze companion</div>
         <h2>Companion app access</h2>
-        <p class="small">The versioned API is ready for a future Android client. No Android app is included in this release.</p>
+        <p class="small">Pair the ByteSqueeze Android app for secure remote library, calendar, queue, node, and Autopilot control.</p>
       </div>
       <span class="node-pill node-pill-idle">API v1</span>
     </div>
@@ -547,14 +562,37 @@
     <div id="autoScanStatusBox" class="node-status-box small">Loading auto-scan status...</div>
   </div>
 
-  <!-- ============================================================
-       Poster metadata
-       ------------------------------------------------------------ -->
+  <!-- Keyless media metadata -->
   <div class="section-card beta-settings-section">
-    <h2>Poster metadata</h2>
+    <div class="section-heading-row">
+      <div>
+        <div class="eyebrow">No account required</div>
+        <h2>Artwork &amp; episode releases</h2>
+      </div>
+      <span class="node-pill node-pill-paired">Keyless</span>
+    </div>
     <p class="small">
-      Optional TMDb credentials for the Beta page. Blank fields keep poster lookup off and use local placeholders.
+      ByteSqueeze first uses poster.jpg, folder.jpg, or cover.jpg beside your media. It then uses TVmaze for show artwork and release dates, and Apple Search for movie artwork. Results are cached by the Docker server.
     </p>
+
+    <div class="row">
+      <label class="beta-toggle"><input id="metadataNoKeyEnabled" type="checkbox"> Enable keyless metadata and artwork</label>
+      <label class="beta-toggle"><input id="episodeReleaseMonitorEnabled" type="checkbox"> Track upcoming TV episodes</label>
+    </div>
+
+    <div class="row inline-input-group">
+      <label for="metadataCountryInput"><strong>Catalog country</strong></label>
+      <input id="metadataCountryInput" type="text" maxlength="2" style="width:80px; text-transform:uppercase;">
+      <label for="episodeRefreshHoursInput"><strong>Refresh releases every</strong></label>
+      <input id="episodeRefreshHoursInput" type="number" min="1" max="168" style="width:90px;">
+      <span class="small">hours</span>
+    </div>
+
+    <p class="small">TV metadata is provided by <a href="https://www.tvmaze.com/" target="_blank" rel="noreferrer">TVmaze</a> under CC BY-SA. Movie artwork may be provided by Apple Search.</p>
+
+    <details class="settings-details">
+      <summary>Optional legacy TMDb fallback</summary>
+      <p class="small">Existing TMDb credentials can remain as a last fallback, but they are no longer required.</p>
 
     <div class="row">
       <label for="tmdbApiKeyInput"><strong>TMDb API key</strong>:</label>
@@ -569,6 +607,7 @@
     <p class="small">
       This product uses the TMDb API but is not endorsed or certified by TMDb.
     </p>
+    </details>
 
     <div class="row" style="margin-top:12px;">
       <button id="savePosterSettingsBtn">Save poster settings</button>
@@ -1454,6 +1493,25 @@
       };
     }
 
+    function applyAutopilotProfile(profile) {
+      const profiles = {
+        safe: { mode: "observe", minSize: 2, savings: 15, batch: 2, active: 3, stability: 20 },
+        balanced: { mode: "observe", minSize: 1, savings: 10, batch: 3, active: 5, stability: 10 },
+        hands_off: { mode: "manage", minSize: 0.5, savings: 8, batch: 5, active: 8, stability: 15 }
+      };
+      const selected = profiles[profile] || profiles.balanced;
+      document.getElementById("autopilotEnabled").checked = true;
+      document.getElementById("autopilotMode").value = selected.mode;
+      document.getElementById("autopilotMinSize").value = selected.minSize;
+      document.getElementById("autopilotMinSavings").value = selected.savings;
+      document.getElementById("autopilotBatchLimit").value = selected.batch;
+      document.getElementById("autopilotMaxActive").value = selected.active;
+      document.getElementById("betaAutoScanEnabled").checked = true;
+      document.getElementById("betaFileStabilityEnabled").checked = true;
+      document.getElementById("betaFileStabilityMinutes").value = selected.stability;
+      if (window.appToast) appToast(`${profile === "hands_off" ? "Hands-off" : profile === "safe" ? "Safe starter" : "Balanced"} policy loaded. Review it, then save.`, "success");
+    }
+
     // -------------------------------
     // Init encoding settings
     // -------------------------------
@@ -1472,6 +1530,15 @@
 
       const tmdbBearerTokenInput = document.getElementById("tmdbBearerTokenInput");
       if (tmdbBearerTokenInput) tmdbBearerTokenInput.value = initialSettings?.tmdb_bearer_token || "";
+
+      const metadataNoKeyEnabled = document.getElementById("metadataNoKeyEnabled");
+      if (metadataNoKeyEnabled) metadataNoKeyEnabled.checked = initialSettings?.metadata_no_key_enabled !== false;
+      const episodeReleaseMonitorEnabled = document.getElementById("episodeReleaseMonitorEnabled");
+      if (episodeReleaseMonitorEnabled) episodeReleaseMonitorEnabled.checked = initialSettings?.episode_release_monitor_enabled !== false;
+      const metadataCountryInput = document.getElementById("metadataCountryInput");
+      if (metadataCountryInput) metadataCountryInput.value = initialSettings?.metadata_country || "US";
+      const episodeRefreshHoursInput = document.getElementById("episodeRefreshHoursInput");
+      if (episodeRefreshHoursInput) episodeRefreshHoursInput.value = safeNumber(initialSettings?.episode_release_refresh_hours, 12, 1, 168);
 
       const remoteTransferTempDirInput = document.getElementById("remoteTransferTempDirInput");
       if (remoteTransferTempDirInput) remoteTransferTempDirInput.value = initialSettings?.remote_transfer_temp_dir || "";
@@ -1529,6 +1596,10 @@
       const queueUiMode = document.getElementById("queueUiModeSelect")?.value || "buttons";
       const tmdbApiKey = document.getElementById("tmdbApiKeyInput")?.value || "";
       const tmdbBearerToken = document.getElementById("tmdbBearerTokenInput")?.value || "";
+      const metadataNoKeyEnabled = document.getElementById("metadataNoKeyEnabled")?.checked !== false;
+      const episodeReleaseMonitorEnabled = document.getElementById("episodeReleaseMonitorEnabled")?.checked !== false;
+      const metadataCountry = (document.getElementById("metadataCountryInput")?.value || "US").trim().toUpperCase();
+      const episodeReleaseRefreshHours = safeNumber(document.getElementById("episodeRefreshHoursInput")?.value, 12, 1, 168);
       const remoteTransferTempDir = document.getElementById("remoteTransferTempDirInput")?.value || "";
       const qsvDeviceAvailable = Boolean(document.getElementById("qsvDeviceAvailableInput")?.checked);
       const autoStopLargeOutputEnabled = Boolean(document.getElementById("autoStopLargeOutputEnabled")?.checked);
@@ -1552,6 +1623,10 @@
             queue_ui_mode: queueUiMode,
             tmdb_api_key: tmdbApiKey,
             tmdb_bearer_token: tmdbBearerToken,
+            metadata_no_key_enabled: metadataNoKeyEnabled,
+            episode_release_monitor_enabled: episodeReleaseMonitorEnabled,
+            metadata_country: metadataCountry,
+            episode_release_refresh_hours: episodeReleaseRefreshHours,
             remote_transfer_temp_dir: remoteTransferTempDir,
             beta_media_folders: getBetaMediaFoldersForSave(),
             ...getAutoScanSettingsForSave(),
@@ -2752,6 +2827,9 @@
       if (runAutopilotBtn) runAutopilotBtn.onclick = runAutopilot;
       const refreshAutopilotBtn = document.getElementById("refreshAutopilotBtn");
       if (refreshAutopilotBtn) refreshAutopilotBtn.onclick = loadAutopilotStatus;
+      document.querySelectorAll(".autopilot-profile").forEach(button => {
+        button.onclick = () => applyAutopilotProfile(button.dataset.profile || "balanced");
+      });
       const generateMobilePairingBtn = document.getElementById("generateMobilePairingBtn");
       if (generateMobilePairingBtn) generateMobilePairingBtn.onclick = generateMobilePairing;
       const refreshMobileDevicesBtn = document.getElementById("refreshMobileDevicesBtn");

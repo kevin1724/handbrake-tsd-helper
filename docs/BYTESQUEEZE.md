@@ -20,14 +20,14 @@ jobs, tune automation, and watch node and storage health.
 
 1. **Home** — queue health, active work, Autopilot, nodes, library totals,
    reclaimed storage, and recent events.
-2. **Library** — searchable Movies and Shows poster views, show tracking,
-   seasons/episodes, and remote Smart Preset queueing.
-3. **Jobs** — active progress and ETA, queue pause/resume, reordering,
+2. **Library** — searchable Movies and Shows poster rails, a complete catalog,
+   show monitoring, seasons/episodes, and node-aware Smart Preset queueing.
+3. **Calendar** — upcoming episodes from TVmaze, tracked-show filtering, and a
+   clear explanation of when downloaded files become eligible for auto-queue.
+4. **Jobs** — active progress and ETA, queue pause/resume, reordering,
    cancellation, and history.
-4. **Automation** — Autopilot observe/manage controls, media eligibility,
-   schedule and limits, readiness, run-now, and Smart Preset learning status.
-5. **More** — nodes, storage history, event log, connection details, and
-   device sign-out.
+5. **Server** — worker/storage/event/connection controls plus a guided
+   Autopilot workspace with policy profiles and Smart Preset learning status.
 
 Wide screens use a navigation rail while phones use bottom navigation. This
 keeps tablets and a future iPad build useful without creating a second UI.
@@ -77,6 +77,8 @@ ByteSqueeze uses bearer-authenticated routes under `/api/mobile/v1`:
 - dashboard and server status
 - jobs, queue state, job actions, and history cleanup
 - poster-rich library cache, refresh, queueing, and show tracking
+- release calendar and keyless metadata attribution
+- explicit local, best-worker, or selected-worker queue targets
 - Autopilot status, policy updates, and run-now
 - Smart Preset profile and learning state
 - nodes, storage statistics, and events

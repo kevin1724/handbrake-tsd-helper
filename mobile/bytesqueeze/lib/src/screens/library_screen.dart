@@ -57,6 +57,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.start,
                           children: [
+                            const Text('YOUR MEDIA',
+                                style: TextStyle(
+                                    color: ByteSqueezeColors.cyan,
+                                    fontSize: 11,
+                                    fontWeight: FontWeight.w800,
+                                    letterSpacing: 1.6)),
+                            const SizedBox(height: 5),
                             Text('Library',
                                 style:
                                     Theme.of(context).textTheme.headlineLarge),
@@ -133,6 +140,33 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       ),
                     ),
                   ],
+                  if (query.isEmpty && items.isNotEmpty) ...[
+                    SectionHeader(
+                      title: _shows ? 'Tracked shows' : 'Recently added',
+                      subtitle: _shows
+                          ? 'Favorites with release and download monitoring'
+                          : 'Latest files discovered on mapped drives',
+                    ),
+                    _MediaRail(
+                      items: (_shows
+                              ? all
+                                  .where((item) => item['tracked'] == true)
+                                  .toList()
+                              : asList(asMap(widget.controller
+                                      .library['catalog'])['recently_added'])
+                                  .map(asMap)
+                                  .where((item) => item['type'] == 'movie')
+                                  .toList())
+                          .take(12)
+                          .toList(),
+                      isShow: _shows,
+                      onTap: _openDetails,
+                    ),
+                    const SectionHeader(
+                      title: 'Complete catalog',
+                      subtitle: 'Every title currently found on mapped drives',
+                    ),
+                  ],
                   const SizedBox(height: 16),
                   if (items.isEmpty)
                     EmptyState(
@@ -201,6 +235,64 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('$error')));
     }
+  }
+}
+
+class _MediaRail extends StatelessWidget {
+  const _MediaRail({
+    required this.items,
+    required this.isShow,
+    required this.onTap,
+  });
+
+  final List<Map<String, dynamic>> items;
+  final bool isShow;
+  final ValueChanged<Map<String, dynamic>> onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    if (items.isEmpty) {
+      return SurfaceCard(
+        child: Text(
+          isShow
+              ? 'Track shows to keep favorites and upcoming episodes here.'
+              : 'Newly discovered movies appear here after the next scan.',
+          style: const TextStyle(color: ByteSqueezeColors.muted),
+        ),
+      );
+    }
+    return SizedBox(
+      height: 222,
+      child: ListView.separated(
+        scrollDirection: Axis.horizontal,
+        itemCount: items.length,
+        separatorBuilder: (_, __) => const SizedBox(width: 11),
+        itemBuilder: (context, index) {
+          final item = items[index];
+          return SizedBox(
+            width: 126,
+            child: InkWell(
+              onTap: () => onTap(item),
+              borderRadius: BorderRadius.circular(16),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Expanded(child: PosterArt(item: item, borderRadius: 16)),
+                  const SizedBox(height: 7),
+                  Text('${item['title'] ?? 'Unknown'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w700)),
+                  Text('${item['year'] ?? ''}',
+                      style: const TextStyle(
+                          color: ByteSqueezeColors.muted, fontSize: 11.5)),
+                ],
+              ),
+            ),
+          );
+        },
+      ),
+    );
   }
 }
 
@@ -279,6 +371,7 @@ class _MediaDetails extends StatefulWidget {
 
 class _MediaDetailsState extends State<_MediaDetails> {
   bool _working = false;
+  String _queueTarget = 'local:';
 
   List<String> get _paths {
     if (widget.isShow) {
@@ -299,13 +392,22 @@ class _MediaDetailsState extends State<_MediaDetails> {
   Future<void> _queue(String preset) async {
     setState(() => _working = true);
     try {
-      await widget.controller.queuePaths(_paths, preset: preset);
+      final parts = _queueTarget.split(':');
+      final mode = parts.first;
+      final nodeId = parts.length > 1 ? parts.sublist(1).join(':') : '';
+      await widget.controller.queuePaths(
+        _paths,
+        preset: preset,
+        mode: mode,
+        nodeId: nodeId,
+      );
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
       Navigator.pop(context);
       messenger.showSnackBar(
         SnackBar(
-          content: Text('${widget.item['title']} queued on the TSD server.'),
+          content:
+              Text('${widget.item['title']} queued for ${_targetLabel()}.'),
         ),
       );
     } catch (error) {
@@ -315,6 +417,19 @@ class _MediaDetailsState extends State<_MediaDetails> {
     } finally {
       if (mounted) setState(() => _working = false);
     }
+  }
+
+  String _targetLabel() {
+    if (_queueTarget == 'local:') return 'this server';
+    if (_queueTarget == 'best:') return 'the best available node';
+    final id = _queueTarget.substring('node:'.length);
+    for (final value in asList(widget.controller.nodes['nodes'])) {
+      final node = asMap(value);
+      if ('${node['id'] ?? ''}' == id) {
+        return '${node['name'] ?? 'the selected node'}';
+      }
+    }
+    return 'the selected node';
   }
 
   Future<void> _track(bool value) async {
@@ -394,15 +509,88 @@ class _MediaDetailsState extends State<_MediaDetails> {
                 title: const Text('Track new episodes',
                     style: TextStyle(fontWeight: FontWeight.w700)),
                 subtitle: const Text(
-                    'Let TSD detect and queue stable additions automatically.'),
+                    'Add release dates to Calendar and watch mapped drives for new files.'),
                 secondary: const Icon(Icons.notifications_active_outlined,
                     color: ByteSqueezeColors.cyan),
               ),
             ),
+            if (widget.item['tracked'] == true)
+              SurfaceCard(
+                padding:
+                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                child: Column(
+                  children: [
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      value: widget.item['monitor_releases'] != false,
+                      onChanged: widget.controller.canControl
+                          ? (value) async {
+                              setState(() =>
+                                  widget.item['monitor_releases'] = value);
+                              await widget.controller
+                                  .trackShow(widget.item, true);
+                            }
+                          : null,
+                      title: const Text('Upcoming episode calendar'),
+                      subtitle:
+                          const Text('Show known release dates from TVmaze.'),
+                      secondary: const Icon(Icons.calendar_month_outlined),
+                    ),
+                    const Divider(height: 1),
+                    SwitchListTile.adaptive(
+                      contentPadding: EdgeInsets.zero,
+                      value: widget.item['auto_queue_downloads'] != false,
+                      onChanged: widget.controller.canControl
+                          ? (value) async {
+                              setState(() =>
+                                  widget.item['auto_queue_downloads'] = value);
+                              await widget.controller
+                                  .trackShow(widget.item, true);
+                            }
+                          : null,
+                      title: const Text('Auto-queue finished downloads'),
+                      subtitle: const Text(
+                          'Wait until a new file stops changing, then queue it.'),
+                      secondary: const Icon(Icons.download_done_rounded),
+                    ),
+                  ],
+                ),
+              ),
           ],
           const SectionHeader(
               title: 'Remote encode',
               subtitle: 'The Docker server performs all encoding work'),
+          DropdownButtonFormField<String>(
+            initialValue: _queueTarget,
+            decoration: const InputDecoration(
+              labelText: 'Encoding node',
+              prefixIcon: Icon(Icons.hub_outlined),
+            ),
+            items: [
+              const DropdownMenuItem(
+                value: 'local:',
+                child: Text('This server (local)'),
+              ),
+              if (asList(widget.controller.nodes['nodes'])
+                  .map(asMap)
+                  .any((row) => row['online'] == true))
+                const DropdownMenuItem(
+                  value: 'best:',
+                  child: Text('Best available node'),
+                ),
+              ...asList(widget.controller.nodes['nodes'])
+                  .map(asMap)
+                  .where((row) => row['online'] == true)
+                  .map((row) => DropdownMenuItem(
+                        value: 'node:${row['id']}',
+                        child: Text('${row['name'] ?? 'Worker node'}'),
+                      )),
+            ],
+            onChanged: _working
+                ? null
+                : (value) => setState(() => _queueTarget = value ?? 'local:'),
+          ),
+          const SizedBox(height: 12),
           Row(
             children: [
               Expanded(

@@ -97,7 +97,7 @@ class DashboardScreen extends StatelessWidget {
                       ? 'The queue is clear'
                       : 'Live work from the Docker controller',
                   trailing: TextButton(
-                      onPressed: () => controller.selectTab(2),
+                      onPressed: () => controller.selectTab(3),
                       child: const Text('View jobs')),
                 ),
                 if (activeJobs.isEmpty)
@@ -141,7 +141,7 @@ class DashboardScreen extends StatelessWidget {
                       label: const Text('Browse library'),
                     ),
                     FilledButton.tonalIcon(
-                      onPressed: () => controller.selectTab(3),
+                      onPressed: () => controller.selectTab(4),
                       icon: const Icon(Icons.auto_awesome_rounded),
                       label: const Text('Open Autopilot'),
                     ),

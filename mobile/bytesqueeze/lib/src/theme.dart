@@ -91,11 +91,12 @@ abstract final class ByteSqueezeTheme {
             const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
       ),
       navigationBarTheme: const NavigationBarThemeData(
-        backgroundColor: Color(0xF20A162D),
-        indicatorColor: Color(0x33258BFF),
+        backgroundColor: Color(0xF20A1427),
+        indicatorColor: Color(0xFF164D7E),
+        indicatorShape: StadiumBorder(),
         labelTextStyle: WidgetStatePropertyAll(
             TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
-        height: 72,
+        height: 74,
       ),
       navigationRailTheme: const NavigationRailThemeData(
         backgroundColor: Color(0xFF071329),

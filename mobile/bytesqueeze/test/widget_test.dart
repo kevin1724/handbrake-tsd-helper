@@ -8,9 +8,10 @@ void main() {
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
     await tester.pumpAndSettle();
 
-    expect(find.text('ByteSqueeze'), findsOneWidget);
+    expect(find.text('ByteSqueeze'), findsNothing);
     expect(find.text('Your media pipeline is under control.'), findsOneWidget);
     expect(find.text('Library'), findsOneWidget);
-    expect(find.text('Automation'), findsOneWidget);
+    expect(find.text('Calendar'), findsOneWidget);
+    expect(find.text('Server'), findsWidgets);
   });
 }

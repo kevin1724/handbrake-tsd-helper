@@ -23,7 +23,14 @@ class MoreScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              Text('More', style: Theme.of(context).textTheme.headlineLarge),
+              const Text('SERVER',
+                  style: TextStyle(
+                      color: ByteSqueezeColors.cyan,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w800,
+                      letterSpacing: 1.6)),
+              const SizedBox(height: 5),
+              Text('Server', style: Theme.of(context).textTheme.headlineLarge),
               const SizedBox(height: 4),
               const Text('Workers, storage, activity, and this connection',
                   style: TextStyle(color: ByteSqueezeColors.muted)),
@@ -121,11 +128,11 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.info_outline_rounded,
                       color: ByteSqueezeColors.muted,
                       title: 'About',
-                      subtitle: 'ByteSqueeze 0.1.0 · TSD mobile API v1',
+                      subtitle: 'ByteSqueeze 0.2.0 · TSD mobile API v1',
                       onTap: () => showAboutDialog(
                         context: context,
                         applicationName: 'ByteSqueeze',
-                        applicationVersion: '0.1.0',
+                        applicationVersion: '0.2.0',
                         applicationIcon: ClipRRect(
                           borderRadius: BorderRadius.circular(18),
                           child: Image.asset(

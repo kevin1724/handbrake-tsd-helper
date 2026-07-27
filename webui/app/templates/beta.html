@@ -544,6 +544,42 @@
         justify-content: flex-start;
       }
     }
+
+    .release-strip {
+      display: grid;
+      grid-auto-flow: column;
+      grid-auto-columns: minmax(260px, 330px);
+      gap: 12px;
+      overflow-x: auto;
+      padding: 4px 2px 12px;
+      scrollbar-width: thin;
+    }
+
+    .release-card {
+      display: grid;
+      grid-template-columns: 70px 1fr;
+      gap: 12px;
+      min-height: 112px;
+      padding: 12px;
+      border: 1px solid rgba(22, 199, 214, 0.2);
+      border-radius: 16px;
+      background: linear-gradient(145deg, rgba(22, 199, 214, 0.08), rgba(255, 255, 255, 0.025));
+    }
+
+    .release-card img,
+    .release-card-placeholder {
+      width: 70px;
+      height: 94px;
+      border-radius: 11px;
+      object-fit: cover;
+      background: rgba(255, 255, 255, 0.05);
+    }
+
+    .release-card strong,
+    .release-card span,
+    .release-card small { display: block; }
+    .release-card span { margin-top: 4px; color: var(--blue); font-weight: 750; }
+    .release-card small { margin-top: 6px; color: var(--muted); line-height: 1.35; }
   </style>
 </head>
 <body class="beta-page">
@@ -568,7 +604,7 @@
     <header class="page-hero">
       <div>
         <h1>Library</h1>
-        <p class="page-subtitle">Scan mapped movie and show folders, find space savings, and queue encodes fast.</p>
+        <p class="page-subtitle">Your complete media catalog, upcoming episode calendar, space-saving guidance, and node-aware queue.</p>
       </div>
     </header>
 
@@ -581,7 +617,7 @@
 
         <label class="beta-toggle">
           <input id="posterToggle" type="checkbox" checked>
-          Posters
+          Artwork &amp; releases
         </label>
 
         <button id="scanBtn" type="button">Refresh Scan</button>
@@ -647,6 +683,17 @@
       </div>
 
       <div id="tmdbNotice" class="beta-attribution"></div>
+    </section>
+
+    <section class="section-card">
+      <div class="beta-column-header">
+        <div>
+          <div class="eyebrow">Release calendar</div>
+          <h2>Coming up</h2>
+        </div>
+        <a href="https://www.tvmaze.com/" target="_blank" rel="noreferrer" class="small">TV data by TVmaze</a>
+      </div>
+      <div id="releaseStrip" class="release-strip"></div>
     </section>
 
     <section class="beta-layout">
@@ -1639,8 +1686,49 @@
       if (!movies.length) renderEmpty(el("moviesGrid"), "No movies found.");
       if (!shows.length) renderEmpty(el("showsGrid"), "No shows found.");
 
+      renderReleaseCalendar();
+
       el("movieCount").textContent = `${movies.length} shown`;
       el("showCount").textContent = `${shows.length} shown`;
+    }
+
+    function renderReleaseCalendar() {
+      const strip = el("releaseStrip");
+      if (!strip) return;
+      strip.innerHTML = "";
+      const episodes = Array.isArray(libraryData.release_calendar?.episodes)
+        ? libraryData.release_calendar.episodes.slice(0, 18)
+        : [];
+      episodes.forEach(episode => {
+        const card = document.createElement("article");
+        card.className = "release-card";
+        if (episode.poster_url) {
+          const image = document.createElement("img");
+          image.src = episode.poster_url;
+          image.alt = `${episode.show_title || "Show"} poster`;
+          card.appendChild(image);
+        } else {
+          const placeholder = document.createElement("div");
+          placeholder.className = "release-card-placeholder";
+          card.appendChild(placeholder);
+        }
+        const copy = document.createElement("div");
+        const title = document.createElement("strong");
+        title.textContent = episode.show_title || "Unknown show";
+        const number = document.createElement("span");
+        number.textContent = `S${String(episode.season || 0).padStart(2, "0")}E${String(episode.episode || 0).padStart(2, "0")} · ${episode.name || "New episode"}`;
+        const date = document.createElement("small");
+        date.textContent = episode.airdate ? new Date(`${episode.airdate}T12:00:00`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" }) : "Date not announced";
+        copy.append(title, number, date);
+        card.appendChild(copy);
+        strip.appendChild(card);
+      });
+      if (!episodes.length) {
+        const empty = document.createElement("div");
+        empty.className = "beta-empty";
+        empty.textContent = "Track shows and refresh the catalog to see upcoming episodes.";
+        strip.appendChild(empty);
+      }
     }
 
     function renderStats(stats = {}, tracking = {}) {
@@ -1666,11 +1754,12 @@
       const scannedAt = fmtDateTime(data.generated_at);
       const scanText = scannedAt ? ` Last scan: ${scannedAt}.` : " No saved scan yet.";
       const problemText = posterProblemText(data);
-      if (data.tmdb_configured) {
-        el("tmdbNotice").textContent = "This product uses the TMDb API but is not endorsed or certified by TMDb." + scanText + problemText;
-      } else {
-        el("tmdbNotice").textContent = "Poster lookup is off. Add TMDb credentials in Settings for live posters." + scanText;
-      }
+      const keyless = data.metadata?.keyless !== false;
+      const sourceText = keyless
+        ? "Keyless artwork is on: local sidecars first, then TVmaze for shows and Apple Search for movies."
+        : "Keyless artwork is disabled in Library Settings.";
+      const tmdbText = data.tmdb_configured ? " TMDb remains enabled as a fallback." : "";
+      el("tmdbNotice").textContent = sourceText + tmdbText + scanText + problemText;
     }
 
     function applyCachedScope(data = {}) {

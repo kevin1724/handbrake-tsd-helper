@@ -105,8 +105,8 @@ Recommended first setup:
 2. Select your CPU profile.
 3. Confirm or upload your HandBrake presets.
 4. Map movie and show folders.
-5. Add TMDb credentials if you want posters.
-6. Run a Library scan.
+5. Leave keyless artwork enabled (local sidecars, TVmaze, and Apple Search require no API key).
+6. Run a Library scan and track the shows you want in the release calendar.
 7. Queue a few test encodes.
 8. Open **Settings → Automation & Apps**, review readiness, and enable Autopilot in Observe mode.
 
@@ -177,11 +177,13 @@ The Library page scans the movie and show folders you map in Settings.
 - Cached scans
 - Movie poster grid
 - Show cards with seasons and episodes
-- Optional TMDb posters
+- Keyless artwork: local `poster.jpg`/`folder.jpg`/`cover.jpg`, TVmaze show art, and Apple movie art
+- Upcoming episode calendar for tracked and untracked library shows
+- Complete title catalog plus recently added rails
 - Sort by likely storage savings
 - Filter by title, quality, type, and status
 - Queue movies, episodes, seasons, shows, or selected batches
-- Track shows and auto-queue new stable episodes
+- Track show release dates and optionally auto-queue new episodes after their downloaded files become stable
 - Send jobs to local encoding or linked workers
 
 The scanner ignores files that already contain `-TSD`.
@@ -195,7 +197,7 @@ Settings are split into cleaner sections:
 - CPU profile
 - Intel QSV availability
 - Library folder mapping
-- Poster metadata
+- Keyless artwork and episode-release metadata (optional TMDb fallback remains available)
 - Auto scan
 - Autopilot policy and decision status
 - Companion-app access and device revocation
@@ -251,6 +253,11 @@ Autopilot reuses the incremental Library index and existing file-safety checks. 
 
 Autopilot does not weaken the existing output verification or original-file protections.
 
+The web and mobile setup tutorial recommends a five-step path: map folders,
+observe decisions, teach Smart Presets with preview feedback, set guardrails,
+then enable Manage mode. The Safe starter, Balanced, and Hands-off policy
+profiles provide editable starting points.
+
 ## Multi-Node Encoding
 
 HandBrake TSD Helper can link multiple app containers together.
@@ -270,15 +277,17 @@ The controller can send jobs to the local node, the best available worker, or a 
 
 Use `GET /api/nodes/diagnostics` to inspect protocol, monitor health, heartbeat failures, and linked-node totals.
 
-## Android Companion API Foundation
+## ByteSqueeze Android Companion
 
-Release 2.0 includes the backend contract for a future Android companion app; it does **not** include the Android app itself.
+ByteSqueeze ships from the shared Flutter project in `mobile/bytesqueeze`. The
+phone is a remote control only; Docker controllers and workers perform every
+encode.
 
 - Discovery: `GET /api/mobile/v1/discovery`
 - Pairing: `POST /api/mobile/v1/pair`
 - Token rotation: `POST /api/mobile/v1/token/refresh`
-- Read endpoints for status, jobs, nodes, and events
-- Scoped queue pause/resume for devices granted control permission
+- Read endpoints for status, jobs, nodes, events, library, and release calendar
+- Scoped queue, node-target, show-monitoring, and Autopilot controls
 - Browser-admin controls for creating pairing codes and revoking devices
 
 Access and refresh tokens are returned only to the client and stored on the server as hashes. Keep the web UI and mobile API on a trusted LAN or behind your own authenticated reverse proxy; the main web UI does not yet provide user accounts.
@@ -438,7 +447,9 @@ Open Settings and map at least one movie folder or show folder.
 
 ### Posters do not show
 
-Add TMDb credentials in Settings, save, then refresh the Library scan.
+Make sure keyless metadata is enabled, then refresh the Library. ByteSqueeze
+prefers `poster.jpg`, `folder.jpg`, or `cover.jpg` beside the media before
+trying TVmaze/Apple. Existing TMDb credentials are only an optional fallback.
 
 ### QSV does not show up
 

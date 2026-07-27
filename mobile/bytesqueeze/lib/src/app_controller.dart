@@ -22,6 +22,7 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic> dashboard = {};
   Map<String, dynamic> jobs = {};
   Map<String, dynamic> library = {};
+  Map<String, dynamic> calendar = {};
   Map<String, dynamic> automation = {};
   Map<String, dynamic> nodes = {};
   Map<String, dynamic> storage = {};
@@ -78,6 +79,7 @@ class AppController extends ChangeNotifier {
     dashboard = DemoData.dashboard;
     jobs = DemoData.jobs;
     library = DemoData.library;
+    calendar = DemoData.calendar;
     automation = DemoData.automation;
     nodes = DemoData.nodes;
     storage = DemoData.storage;
@@ -95,6 +97,7 @@ class AppController extends ChangeNotifier {
     dashboard = {};
     jobs = {};
     library = {};
+    calendar = {};
     automation = {};
     nodes = {};
     storage = {};
@@ -123,6 +126,8 @@ class AppController extends ChangeNotifier {
       _load('/dashboard', (value) => dashboard = value, failures),
       _load('/jobs', (value) => jobs = value, failures),
       _load('/library', (value) => library = _map(value['library']), failures),
+      _load('/calendar?days=180', (value) => calendar = _map(value['calendar']),
+          failures),
       _load('/automation', (value) => automation = value, failures),
       _load('/nodes', (value) => nodes = value, failures),
       _load('/storage?limit=100', (value) => storage = value, failures),
@@ -217,13 +222,25 @@ class AppController extends ChangeNotifier {
     }
   }
 
-  Future<void> queuePaths(List<String> paths, {String preset = 'smart'}) async {
+  Future<void> queuePaths(
+    List<String> paths, {
+    String preset = 'smart',
+    String mode = 'local',
+    String? nodeId,
+  }) async {
     _requireControl();
     if (paths.isEmpty) {
       throw const ApiFailure('No media files are available to queue.');
     }
     if (demoMode) return;
-    await api.post('/library/queue', {'paths': paths, 'preset': preset},
+    await api.post(
+        '/library/queue',
+        {
+          'paths': paths,
+          'preset': preset,
+          'mode': mode,
+          if (nodeId != null && nodeId.isNotEmpty) 'node_id': nodeId,
+        },
         timeout: const Duration(minutes: 2));
     await refreshJobsAndDashboard();
   }
@@ -242,10 +259,18 @@ class AppController extends ChangeNotifier {
       'title': show['title'],
       'year': show['year'],
       'tmdb_id': show['tmdb_id'],
+      'tvmaze_id': show['tvmaze_id'],
       'poster_url': show['poster_url'],
       'paths': files,
       'tracked': tracked,
+      'monitor_releases': show['monitor_releases'] != false,
+      'auto_queue': show['auto_queue_downloads'] != false,
     });
+    if (!demoMode) {
+      final value = await api.get('/calendar?days=180');
+      calendar = _map(value['calendar']);
+      notifyListeners();
+    }
   }
 
   Future<void> saveAutomation(Map<String, dynamic> updates) async {

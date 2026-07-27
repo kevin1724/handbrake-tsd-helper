@@ -4,8 +4,9 @@ ByteSqueeze is the Flutter remote-control app for HandBrake TSD Helper.
 
 - Android first, with the iOS target maintained from day one
 - Secure one-time pairing and refreshable bearer sessions
-- Dashboard, library posters, shows and episodes, jobs, Autopilot, Smart
-  Presets, nodes, storage history, and events
+- Content-first dashboard with no persistent branded toolbar
+- Complete movie/show catalog, keyless artwork, upcoming episode calendar,
+  node-aware queueing, guided Autopilot, Smart Presets, storage, and events
 - All transcoding remains on the Docker-hosted TSD controller and workers
 
 ## Run

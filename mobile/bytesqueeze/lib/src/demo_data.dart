@@ -77,6 +77,15 @@ abstract final class DemoData {
   static Map<String, dynamic> get library => {
         'configured': true,
         'stats': {'movies': 8, 'shows': 5, 'episodes': 164, 'scanned': 172},
+        'catalog': {
+          'complete': true,
+          'total_titles': 13,
+          'recently_added': [
+            _movie('Dune: Part Two', 2024, 60245199872, '4K HDR', 78),
+            _movie('Oppenheimer', 2023, 71403831296, '4K HDR', 81),
+            _movie('Arrival', 2016, 31890132112, '4K HDR', 61),
+          ],
+        },
         'movies': [
           _movie('Arrival', 2016, 31890132112, '4K HDR', 61),
           _movie('Blade Runner 2049', 2017, 52122144768, '4K HDR', 72),
@@ -95,6 +104,50 @@ abstract final class DemoData {
           _show('Severance', 2022, 2, 19, true, 34),
           _show('Silo', 2023, 2, 20, false, 45),
           _show('The Last of Us', 2023, 2, 16, true, 56),
+        ],
+      };
+
+  static Map<String, dynamic> get calendar => {
+        'provider': {'name': 'TVmaze', 'url': 'https://www.tvmaze.com/'},
+        'count': 4,
+        'days': [
+          {
+            'date': '2026-07-28',
+            'episodes': [
+              {
+                'show_title': 'Foundation',
+                'season': 3,
+                'episode': 5,
+                'name': 'The Weight of Worlds',
+                'airdate': '2026-07-28',
+                'poster_url': '',
+                'tracked': true,
+              }
+            ]
+          },
+          {
+            'date': '2026-08-02',
+            'episodes': [
+              {
+                'show_title': 'Severance',
+                'season': 3,
+                'episode': 1,
+                'name': 'After Hours',
+                'airdate': '2026-08-02',
+                'poster_url': '',
+                'tracked': true,
+              },
+              {
+                'show_title': 'Silo',
+                'season': 3,
+                'episode': 2,
+                'name': 'The Descent',
+                'airdate': '2026-08-02',
+                'poster_url': '',
+                'tracked': false,
+              }
+            ]
+          },
         ],
       };
 
