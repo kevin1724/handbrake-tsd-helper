@@ -194,7 +194,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             crossAxisCount: columns,
                             mainAxisSpacing: 14,
                             crossAxisSpacing: 12,
-                            childAspectRatio: .56,
+                            childAspectRatio: .58,
                           ),
                           itemCount: items.length,
                           itemBuilder: (context, index) => _MediaTile(
@@ -308,50 +308,73 @@ class _MediaTile extends StatelessWidget {
   Widget build(BuildContext context) {
     final prediction = asMap(item['prediction']);
     final savings = (prediction['savings_percent'] as num?)?.round();
-    return InkWell(
-      onTap: onTap,
-      borderRadius: BorderRadius.circular(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Expanded(
-            child: Stack(
-              fit: StackFit.expand,
-              children: [
-                PosterArt(item: item),
-                Positioned(
-                  top: 8,
-                  right: 8,
-                  child: isShow && item['tracked'] == true
-                      ? const StatusPill(
-                          label: 'Tracked',
-                          color: ByteSqueezeColors.mint,
-                          icon: Icons.notifications_active_outlined)
-                      : savings != null
-                          ? StatusPill(
-                              label: '$savings% save',
-                              color: ByteSqueezeColors.cyan)
-                          : const SizedBox.shrink(),
-                ),
-              ],
+    return Material(
+      color: ByteSqueezeColors.surface.withValues(alpha: .72),
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(19),
+        side: const BorderSide(color: ByteSqueezeColors.line),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: onTap,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Expanded(
+              child: Stack(
+                fit: StackFit.expand,
+                children: [
+                  PosterArt(item: item, borderRadius: 0),
+                  const DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.center,
+                        end: Alignment.bottomCenter,
+                        colors: [Colors.transparent, Color(0x88030A15)],
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    top: 8,
+                    right: 8,
+                    child: isShow && item['tracked'] == true
+                        ? const StatusPill(
+                            label: 'Tracked',
+                            color: ByteSqueezeColors.mint,
+                            icon: Icons.notifications_active_outlined)
+                        : savings != null
+                            ? StatusPill(
+                                label: '$savings% save',
+                                color: ByteSqueezeColors.cyan)
+                            : const SizedBox.shrink(),
+                  ),
+                ],
+              ),
             ),
-          ),
-          const SizedBox(height: 8),
-          Text('${item['title'] ?? 'Unknown'}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: const TextStyle(fontWeight: FontWeight.w700)),
-          const SizedBox(height: 2),
-          Text(
-            isShow
-                ? '${item['season_count'] ?? 0} seasons · ${item['episode_count'] ?? 0} episodes'
-                : '${item['year'] ?? 'Unknown year'} · ${formatBytes(item['size_bytes'] ?? item['total_size_bytes'])}',
-            maxLines: 1,
-            overflow: TextOverflow.ellipsis,
-            style:
-                const TextStyle(color: ByteSqueezeColors.muted, fontSize: 11.5),
-          ),
-        ],
+            Padding(
+              padding: const EdgeInsets.fromLTRB(11, 9, 11, 10),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text('${item['title'] ?? 'Unknown'}',
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                  const SizedBox(height: 3),
+                  Text(
+                    isShow
+                        ? '${item['season_count'] ?? 0} seasons · ${item['episode_count'] ?? 0} episodes'
+                        : '${item['year'] ?? 'Unknown year'} · ${formatBytes(item['size_bytes'] ?? item['total_size_bytes'])}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                        color: ByteSqueezeColors.muted, fontSize: 11.5),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

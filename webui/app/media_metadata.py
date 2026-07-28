@@ -52,6 +52,19 @@ _SIDECAR_NAMES = (
     "cover.jpeg",
     "cover.png",
 )
+_VIDEO_EXTENSIONS = {
+    ".mkv",
+    ".mp4",
+    ".m4v",
+    ".avi",
+    ".mov",
+    ".wmv",
+    ".ts",
+    ".m2ts",
+    ".webm",
+    ".mpg",
+    ".mpeg",
+}
 
 
 def _empty_cache() -> dict:
@@ -122,30 +135,40 @@ def _http_json(url: str, *, timeout: int = 10) -> dict | list:
     return payload
 
 
-def _sidecar_directories(paths: list[str]) -> list[str]:
+def _sidecar_directories(paths: list[str], *, include_common: bool = False) -> list[str]:
+    """Find title-owned artwork folders without leaking a shared root poster."""
     directories = []
     seen = set()
+    path_directories = []
     for raw in paths or []:
         path = str(raw or "").strip()
         if not path:
             continue
         current = path if os.path.isdir(path) else os.path.dirname(path)
-        for _ in range(3):
-            if not current:
-                break
-            key = os.path.normcase(os.path.realpath(current))
-            if key not in seen:
-                seen.add(key)
-                directories.append(current)
-            parent = os.path.dirname(current)
-            if not parent or parent == current:
-                break
-            current = parent
+        if not current:
+            continue
+        path_directories.append(current)
+        key = os.path.normcase(os.path.realpath(current))
+        if key not in seen:
+            seen.add(key)
+            directories.append(current)
+    # Episodes may live in several Season folders. Their common directory is
+    # the show folder and is safe to inspect; arbitrary parents are not.
+    if include_common and len(path_directories) > 1:
+        try:
+            common = os.path.commonpath(path_directories)
+        except ValueError:
+            common = ""
+        key = os.path.normcase(os.path.realpath(common)) if common else ""
+        if common and key not in seen:
+            directories.insert(0, common)
     return directories
 
 
-def _cache_sidecar(paths: list[str]) -> dict:
-    for directory in _sidecar_directories(paths):
+def _cache_sidecar(paths: list[str], *, include_common: bool = False) -> dict:
+    for directory in _sidecar_directories(paths, include_common=include_common):
+        if not include_common and not _movie_sidecar_directory_is_dedicated(directory, paths):
+            continue
         for name in _SIDECAR_NAMES:
             source = os.path.join(directory, name)
             if not os.path.isfile(source):
@@ -169,6 +192,27 @@ def _cache_sidecar(paths: list[str]) -> dict:
             except OSError:
                 continue
     return {}
+
+
+def _movie_sidecar_directory_is_dedicated(directory: str, paths: list[str]) -> bool:
+    """Reject generic movie artwork stored beside unrelated loose movies."""
+    try:
+        video_paths = {
+            os.path.normcase(os.path.realpath(entry.path))
+            for entry in os.scandir(directory)
+            if entry.is_file() and os.path.splitext(entry.name)[1].lower() in _VIDEO_EXTENSIONS
+        }
+    except OSError:
+        return False
+
+    requested_paths = {
+        os.path.normcase(os.path.realpath(str(path)))
+        for path in paths or []
+        if path and not os.path.isdir(str(path))
+    }
+    # A title folder normally contains one movie. Multiple versions are also
+    # safe when the caller explicitly identifies all of them as the same item.
+    return len(video_paths) <= 1 or (bool(video_paths) and video_paths.issubset(requested_paths))
 
 
 def _year(value) -> int | None:
@@ -289,7 +333,7 @@ def lookup(kind: str, title: str, year=None, paths: list[str] | None = None, *, 
     """Return local or cached keyless metadata for one movie/show."""
     kind = "show" if str(kind).lower() == "show" else "movie"
     paths = paths or []
-    local = _cache_sidecar(paths)
+    local = _cache_sidecar(paths, include_common=kind == "show")
     key = _cache_key(kind, title, year)
     now = time.time()
 

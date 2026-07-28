@@ -301,6 +301,8 @@ class PosterArt extends StatelessWidget {
   Widget build(BuildContext context) {
     final url = '${item['poster_url'] ?? ''}'.trim();
     final title = '${item['title'] ?? 'Media'}';
+    final identity =
+        '${item['id'] ?? ''}|${item['path'] ?? ''}|$title|$url';
     final hue = ((item['demo_hue'] as num?)?.toDouble() ??
         (title.hashCode.abs() % 360).toDouble());
     final first = HSVColor.fromAHSV(1, hue, .78, .88).toColor();
@@ -345,6 +347,7 @@ class PosterArt extends StatelessWidget {
           ? fallback
           : Image.network(
               url,
+              key: ValueKey(identity),
               fit: BoxFit.cover,
               errorBuilder: (_, __, ___) => fallback,
               loadingBuilder: (context, child, progress) => progress == null

@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 class ServerSession {
   const ServerSession({
     required this.baseUrl,
+    this.fallbackBaseUrl = '',
     required this.deviceId,
     required this.deviceName,
     required this.scope,
@@ -14,6 +15,7 @@ class ServerSession {
   });
 
   final String baseUrl;
+  final String fallbackBaseUrl;
   final String deviceId;
   final String deviceName;
   final String scope;
@@ -22,10 +24,16 @@ class ServerSession {
 
   bool get canControl => scope == 'control';
 
-  ServerSession copyWith(
-      {String? accessToken, String? refreshToken, String? scope}) {
+  ServerSession copyWith({
+    String? baseUrl,
+    String? fallbackBaseUrl,
+    String? accessToken,
+    String? refreshToken,
+    String? scope,
+  }) {
     return ServerSession(
-      baseUrl: baseUrl,
+      baseUrl: baseUrl ?? this.baseUrl,
+      fallbackBaseUrl: fallbackBaseUrl ?? this.fallbackBaseUrl,
       deviceId: deviceId,
       deviceName: deviceName,
       scope: scope ?? this.scope,
@@ -41,6 +49,7 @@ class SessionStore {
   );
 
   static const _serverKey = 'bytesqueeze.server_url';
+  static const _fallbackServerKey = 'bytesqueeze.fallback_server_url';
   static const _deviceIdKey = 'bytesqueeze.device_id';
   static const _deviceNameKey = 'bytesqueeze.device_name';
   static const _scopeKey = 'bytesqueeze.scope';
@@ -50,6 +59,7 @@ class SessionStore {
   Future<ServerSession?> load() async {
     final prefs = await SharedPreferences.getInstance();
     final baseUrl = prefs.getString(_serverKey) ?? '';
+    final fallbackBaseUrl = prefs.getString(_fallbackServerKey) ?? '';
     final deviceId = prefs.getString(_deviceIdKey) ?? '';
     final deviceName = prefs.getString(_deviceNameKey) ?? 'ByteSqueeze';
     final scope = prefs.getString(_scopeKey) ?? 'read';
@@ -63,6 +73,7 @@ class SessionStore {
     }
     return ServerSession(
       baseUrl: baseUrl,
+      fallbackBaseUrl: fallbackBaseUrl,
       deviceId: deviceId,
       deviceName: deviceName,
       scope: scope,
@@ -74,6 +85,7 @@ class SessionStore {
   Future<void> save(ServerSession session) async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString(_serverKey, session.baseUrl);
+    await prefs.setString(_fallbackServerKey, session.fallbackBaseUrl);
     await prefs.setString(_deviceIdKey, session.deviceId);
     await prefs.setString(_deviceNameKey, session.deviceName);
     await prefs.setString(_scopeKey, session.scope);
@@ -84,6 +96,7 @@ class SessionStore {
   Future<void> clear() async {
     final prefs = await SharedPreferences.getInstance();
     await prefs.remove(_serverKey);
+    await prefs.remove(_fallbackServerKey);
     await prefs.remove(_scopeKey);
     await _secure.delete(key: _accessKey);
     await _secure.delete(key: _refreshKey);

@@ -6,7 +6,9 @@ ByteSqueeze is the Flutter remote-control app for HandBrake TSD Helper.
 - Secure one-time pairing and refreshable bearer sessions
 - Content-first dashboard with no persistent branded toolbar
 - Complete movie/show catalog, keyless artwork, upcoming episode calendar,
-  node-aware queueing, guided Autopilot, Smart Presets, storage, and events
+  node-aware queueing, guided Autopilot preview training, Smart Presets,
+  storage, and events
+- Automatic switching between a primary home URL and optional Tailscale/away URL
 - All transcoding remains on the Docker-hosted TSD controller and workers
 
 ## Run
@@ -18,8 +20,14 @@ flutter run
 ```
 
 The pairing code is generated in the TSD web dashboard under **Settings →
-Automation & Apps**. LAN HTTP is enabled on Android for home-server setups;
-use a trusted HTTPS reverse proxy for remote access.
+Automation & Apps**. Pair with the home URL and optionally save a Tailscale URL;
+ByteSqueeze automatically tries the other address when the current route cannot
+connect. LAN HTTP is enabled on Android for home-server setups.
+
+Autopilot training is available under **Server → Automation**. Generate a short
+accurate preview, compare the original and proposed frames, then approve it or
+choose what needs improvement. Reviews made on the phone and web dashboard feed
+the same local Smart Preset profile.
 
 ## Android package
 

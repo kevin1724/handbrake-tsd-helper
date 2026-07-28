@@ -186,6 +186,8 @@ PREVIEW_TASKS: dict[str, dict] = {}
 PREVIEW_TASK_LOCK = threading.Lock()
 SMART_FEEDBACK_TOKENS: dict[str, tuple[dict, float]] = {}
 SMART_FEEDBACK_TOKEN_LOCK = threading.Lock()
+AUTOPILOT_REVIEW_STATE: dict = {"cursor": 0}
+AUTOPILOT_REVIEW_LOCK = threading.RLock()
 PREVIEW_PROGRESS_RE = re.compile(r"Encoding:\s+task\s+\d+\s+of\s+\d+,\s*([\d.]+)\s*%", re.IGNORECASE)
 PREVIEW_QSV_CHECK = {"checked_at": 0.0, "available": False, "reason": "not checked"}
 
@@ -3305,14 +3307,147 @@ def _beta_load_library_cache(settings=None) -> dict:
     data.setdefault("movies", [])
     data.setdefault("shows", [])
     data.setdefault("stats", {})
+    if _beta_sanitize_duplicate_artwork(data):
+        # Repair older caches in place. Otherwise an incremental scan can copy
+        # the poisoned poster assignments back into every newly scanned row.
+        _beta_save_library_cache(data)
     data["tmdb_configured"] = bool(_beta_tmdb_config(settings))
     return _beta_apply_tracking(_beta_refresh_predictions(_beta_finalize_catalog(data)), _beta_load_tracking())
 
 
+def _autopilot_review_samples() -> list[dict]:
+    """Return real, distinct library files that can teach Smart Presets."""
+    data = _beta_load_library_cache(load_settings())
+    rows: list[dict] = []
+    seen: set[str] = set()
+
+    def add(path, title, media_type, poster_url="", year=None):
+        source = str(path or "").strip()
+        if (
+            not source
+            or source in seen
+            or not os.path.isfile(source)
+            or not is_allowed_path(source)
+            or not source.lower().endswith(VIDEO_EXTS)
+            or os.path.splitext(os.path.basename(source))[0].lower().endswith("-tsd")
+        ):
+            return
+        seen.add(source)
+        try:
+            size_bytes = int(os.path.getsize(source))
+        except OSError:
+            size_bytes = 0
+        rows.append(
+            {
+                "id": hashlib.sha256(source.encode("utf-8", errors="ignore")).hexdigest()[:20],
+                "path": source,
+                "title": str(title or os.path.basename(source))[:180],
+                "media_type": media_type,
+                "poster_url": str(poster_url or ""),
+                "year": year,
+                "size_bytes": size_bytes,
+            }
+        )
+
+    for movie in data.get("movies") or []:
+        if not isinstance(movie, dict):
+            continue
+        paths = [movie.get("path"), *(movie.get("paths") or [])]
+        add(next((path for path in paths if path), ""), movie.get("title"), "movie", movie.get("poster_url"), movie.get("year"))
+    for show in data.get("shows") or []:
+        if not isinstance(show, dict):
+            continue
+        files = [row for row in show.get("files") or [] if isinstance(row, dict)]
+        if files:
+            episode = files[len(files) // 2]
+            episode_label = episode.get("filename") or os.path.basename(str(episode.get("path") or ""))
+            add(episode.get("path"), f"{show.get('title') or 'Show'} · {episode_label}", "show", show.get("poster_url"), show.get("year"))
+    rows.sort(key=lambda row: (-int(row.get("size_bytes") or 0), str(row.get("title") or "").lower()))
+    return rows
+
+
+def _autopilot_review_payload(base_url: str = "", *, include_result: bool = True) -> dict:
+    """Merge the current accurate-preview task with shared learning state."""
+    with AUTOPILOT_REVIEW_LOCK:
+        review = json.loads(json.dumps(AUTOPILOT_REVIEW_STATE))
+    preview_id = str(review.get("preview_id") or "")
+    task = _preview_get_task(preview_id) if preview_id else None
+    if task:
+        preview = task
+        result = preview.get("result") if isinstance(preview.get("result"), dict) else None
+        if result and base_url and str(result.get("clip_url") or "").startswith("/"):
+            result["clip_url"] = f"{base_url.rstrip('/')}{result['clip_url']}"
+            preview["result"] = result
+        if not include_result and isinstance(preview.get("result"), dict):
+            compact_result = dict(preview["result"])
+            compact_result.pop("old_b64", None)
+            compact_result.pop("new_b64", None)
+            preview["result"] = compact_result
+        review["preview"] = preview
+    elif preview_id:
+        review["preview"] = {
+            "preview_id": preview_id,
+            "state": "expired",
+            "progress": 0,
+            "message": "This preview expired. Generate another training sample.",
+        }
+    review["available_samples"] = len(_autopilot_review_samples())
+    review["learning"] = smart_learning_status()
+    return review
+
+
+def _autopilot_review_summary() -> dict:
+    review = _autopilot_review_payload(include_result=False)
+    preview = review.get("preview") if isinstance(review.get("preview"), dict) else {}
+    return {
+        "active": bool(review.get("preview_id")),
+        "review_id": review.get("review_id"),
+        "title": review.get("title"),
+        "state": preview.get("state") or review.get("state") or "idle",
+        "progress": preview.get("progress") or 0,
+        "message": preview.get("message") or review.get("message") or "Generate a preview to begin teaching Autopilot.",
+        "available_samples": review.get("available_samples") or 0,
+        "learning": review.get("learning") or smart_learning_status(),
+    }
+
+
 def _beta_save_library_cache(data: dict) -> None:
+    _beta_sanitize_duplicate_artwork(data)
     os.makedirs(DATA_DIR, exist_ok=True)
     with open(BETA_LIBRARY_CACHE_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
+
+
+def _beta_sanitize_duplicate_artwork(data: dict) -> bool:
+    """Remove one local sidecar incorrectly shared by unrelated titles."""
+    groups: dict[str, list[dict]] = {}
+    for row in [*(data.get("movies") or []), *(data.get("shows") or [])]:
+        if not isinstance(row, dict):
+            continue
+        url = str(row.get("poster_url") or "").strip()
+        if url.startswith("/api/media/artwork/local-"):
+            groups.setdefault(url, []).append(row)
+
+    changed = False
+    for rows in groups.values():
+        identities = {
+            (
+                str(row.get("type") or "").lower(),
+                re.sub(r"[^a-z0-9]+", "", str(row.get("title") or "").lower()),
+                str(row.get("year") or ""),
+            )
+            for row in rows
+        }
+        if len(identities) <= 1:
+            continue
+        for row in rows:
+            row["poster_url"] = ""
+            if row.get("metadata_source") == "local":
+                row.pop("metadata_provider", None)
+            row["metadata_source"] = "local_duplicate_removed"
+            row["metadata_error"] = "Shared-folder artwork was ignored; refresh the library to find title-specific artwork."
+            changed = True
+    return changed
 
 
 def _beta_clear_library_cache() -> None:
@@ -3891,6 +4026,7 @@ def _beta_cached_art_maps() -> tuple[dict, dict]:
     shows = {}
     if not isinstance(cache, dict):
         return movies, shows
+    _beta_sanitize_duplicate_artwork(cache)
 
     for item in cache.get("movies") or []:
         if not isinstance(item, dict):
@@ -4296,21 +4432,18 @@ def _autopilot_candidates(data: dict, index: dict, settings: dict) -> dict:
 
     eligible.sort(key=lambda row: (int(row.get("predicted_saved_bytes") or 0), int(row.get("size_bytes") or 0)), reverse=True)
     selected = eligible[: min(batch_limit, capacity)]
-    should_queue = enabled and mode == "manage" and schedule_open and bool(selected)
+    should_queue = enabled and mode == "manage" and schedule_open and smart_ready and bool(selected)
     queued = 0
     if should_queue:
-        if smart_ready:
-            for row in selected:
-                try:
-                    _job_id, recommendation = _create_smart_job(row["path"], require_automation_ready=True)
-                    queued += 1
-                    row["smart_candidate_id"] = recommendation.get("recommended_id")
-                    row["reason"] = f"{row['reason']} Learned Smart Preset selected {recommendation.get('recommended_id')}."
-                except Exception as exc:
-                    row["decision"] = "error"
-                    row["reason"] = f"Smart Preset planning failed; file was not queued: {exc}"
-        else:
-            queued = int(create_jobs_batch([(row["path"], row["preset"]) for row in selected]) or 0)
+        for row in selected:
+            try:
+                _job_id, recommendation = _create_smart_job(row["path"], require_automation_ready=True)
+                queued += 1
+                row["smart_candidate_id"] = recommendation.get("recommended_id")
+                row["reason"] = f"{row['reason']} Learned Smart Preset selected {recommendation.get('recommended_id')}."
+            except Exception as exc:
+                row["decision"] = "error"
+                row["reason"] = f"Smart Preset planning failed; file was not queued: {exc}"
         for row in selected:
             if row.get("decision") != "error" and isinstance(index_files.get(row["path"]), dict):
                 index_files[row["path"]]["queued_at"] = now
@@ -4350,6 +4483,14 @@ def _autopilot_readiness(settings: dict | None = None) -> dict:
     add("library", bool(valid_roots), "Library folders", f"{len(valid_roots)} accessible media folder(s)." if valid_roots else "Map at least one accessible Movies or Shows folder.", required=True)
     add("data", os.path.isdir(DATA_DIR) and os.access(DATA_DIR, os.W_OK), "Durable data", "Automation state storage is writable." if os.path.isdir(DATA_DIR) and os.access(DATA_DIR, os.W_OK) else "Make the app data directory writable so decisions can be recovered.", required=True)
     add("preset", bool(list_preset_files()), "Encode presets", "At least one HandBrake preset is available." if list_preset_files() else "Install or configure a HandBrake preset before enabling manage mode.", required=True)
+    learning = smart_learning_status()
+    add(
+        "learning",
+        bool(learning.get("automation_ready")),
+        "Preview training",
+        learning.get("message") or "Review accurate comparison previews before enabling Manage mode.",
+        required=True,
+    )
     add("stability", bool(settings.get("beta_auto_scan_file_stability_enabled", True)), "Write protection", "New files must become stable before they can be queued." if settings.get("beta_auto_scan_file_stability_enabled", True) else "Enable the file-stability window to avoid encoding files that are still being copied.")
     add("hardware", bool(settings.get("qsv_device_available", False)), "Hardware acceleration", "Intel QSV is configured." if settings.get("qsv_device_available", False) else "Optional: configure Intel QSV for faster unattended encoding.")
     add("nodes", any(node.get("online") for node in nodes) if nodes else True, "Worker network", f"{sum(1 for node in nodes if node.get('online'))} of {len(nodes)} linked worker(s) online." if nodes else "Standalone mode is ready; link workers later for more capacity.")
@@ -4386,6 +4527,7 @@ def _autopilot_status_payload() -> dict:
         "scan": scan,
         "queue": {"paused": get_queue_state(), "summary": get_job_summary()},
         "nodes": list_nodes_public(),
+        "review": _autopilot_review_summary(),
         "guide": {
             "steps": [
                 {"id": "folders", "title": "Map your library", "detail": "Choose the exact Movies and Shows folders ByteSqueeze may watch."},
@@ -7302,6 +7444,170 @@ def register_routes(app):
                     os.rmdir(tmpdir)
                 except Exception:
                     pass
+
+    def _start_autopilot_review(data: dict | None = None, *, actor: str = "web") -> dict:
+        data = data if isinstance(data, dict) else {}
+        samples = _autopilot_review_samples()
+        if not samples:
+            raise ValueError("No unencoded movie or episode is available in the mapped library. Refresh the library first.")
+
+        with AUTOPILOT_REVIEW_LOCK:
+            existing_id = str(AUTOPILOT_REVIEW_STATE.get("preview_id") or "")
+            existing_task = _preview_get_task(existing_id) if existing_id else None
+            force_next = bool(data.get("next"))
+            if (
+                existing_task
+                and not force_next
+                and not AUTOPILOT_REVIEW_STATE.get("reviewed")
+                and existing_task.get("state") in {"queued", "planning", "encoding", "framing", "muxing", "done"}
+            ):
+                return _autopilot_review_payload(request.host_url)
+
+            cursor = int(AUTOPILOT_REVIEW_STATE.get("cursor") or 0)
+            if force_next or AUTOPILOT_REVIEW_STATE.get("reviewed"):
+                cursor += 1
+            requested_path = str(data.get("path") or "").strip()
+            selected = next((row for row in samples if row["path"] == requested_path), None)
+            if selected is None:
+                selected = samples[cursor % len(samples)]
+
+        state = load_smart_preset_state()
+        profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+        if not profile.get("automation_enabled"):
+            save_smart_preset_profile({"automation_enabled": True})
+
+        recommendation = _smart_recommendation({"src": selected["path"], "preset": "auto"})
+        plan = recommendation.pop("selected_plan")
+        candidate_id = str(recommendation.get("recommended_id") or "balanced")
+        candidate = next(
+            (row for row in recommendation.get("candidates") or [] if row.get("id") == candidate_id),
+            (recommendation.get("candidates") or [{}])[0],
+        )
+        preview_data = {
+            "src": selected["path"],
+            **_wizard_public_options(plan.get("options") or {}),
+            "target_size_auto": False,
+            "target_size_value": float((plan.get("inputs") or {}).get("target_mb") or 1.0),
+            "target_size_unit": "MB",
+            "smart_candidate_id": candidate_id,
+            "accurate_preview_layout": "side_by_side",
+        }
+        preview_id = f"autopilot_{uuid.uuid4().hex}"
+        _kill_preview_by_id(preview_id)
+        _preview_set_task(preview_id, state="queued", progress=0.0, message="Queued Autopilot comparison preview.", result=None, error="")
+        with AUTOPILOT_REVIEW_LOCK:
+            AUTOPILOT_REVIEW_STATE.clear()
+            AUTOPILOT_REVIEW_STATE.update(
+                {
+                    "cursor": cursor,
+                    "review_id": uuid.uuid4().hex,
+                    "preview_id": preview_id,
+                    "sample_id": selected["id"],
+                    "path": selected["path"],
+                    "title": selected["title"],
+                    "media_type": selected["media_type"],
+                    "poster_url": selected.get("poster_url") or "",
+                    "year": selected.get("year"),
+                    "size_bytes": selected.get("size_bytes") or 0,
+                    "candidate_id": candidate_id,
+                    "candidate_name": candidate.get("name") or candidate_id,
+                    "candidate_summary": candidate.get("summary") or "",
+                    "candidate_plan": candidate.get("plan") or {},
+                    "reviewed": False,
+                    "created_at": time.time(),
+                }
+            )
+        thread = threading.Thread(
+            target=_run_accurate_preview_task,
+            args=(preview_id, preview_data),
+            name=f"autopilot-preview-{preview_id[-8:]}",
+            daemon=True,
+        )
+        thread.start()
+        log_event("autopilot_preview_started", f"{actor} started Smart Preset training for {selected['title']}.", level="info")
+        return _autopilot_review_payload(request.host_url)
+
+    def _submit_autopilot_review(data: dict | None = None, *, actor: str = "web") -> dict:
+        data = data if isinstance(data, dict) else {}
+        review = _autopilot_review_payload(request.host_url)
+        preview = review.get("preview") if isinstance(review.get("preview"), dict) else {}
+        result = preview.get("result") if isinstance(preview.get("result"), dict) else {}
+        if preview.get("state") != "done" or not result:
+            raise ValueError("The accurate preview is not ready to review yet.")
+        context = _consume_smart_feedback_context(result.get("smart_feedback_token") or "")
+        if not context:
+            raise RuntimeError("This preview feedback expired or was already submitted.")
+        feedback = record_smart_preset_feedback(context, data.get("verdict"), data.get("reason"))
+        with AUTOPILOT_REVIEW_LOCK:
+            AUTOPILOT_REVIEW_STATE.update(
+                {
+                    "reviewed": True,
+                    "verdict": feedback.get("feedback", {}).get("verdict"),
+                    "reason": feedback.get("feedback", {}).get("reason"),
+                    "reviewed_at": time.time(),
+                }
+            )
+        log_event(
+            "autopilot_preview_reviewed",
+            f"{actor} submitted {AUTOPILOT_REVIEW_STATE.get('verdict')} feedback for {AUTOPILOT_REVIEW_STATE.get('title') or 'media'}.",
+            level="info",
+        )
+        payload = _autopilot_review_payload(request.host_url)
+        payload["learning"] = feedback.get("learning") or smart_learning_status()
+        return payload
+
+    @app.route("/api/autopilot/review", methods=["GET", "POST"])
+    def autopilot_review_api():
+        if request.method == "POST":
+            try:
+                review = _start_autopilot_review(request.get_json(silent=True) or {}, actor="Web dashboard")
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
+            except Exception as exc:
+                return jsonify(error=f"Could not start Autopilot preview: {exc}"), 500
+        else:
+            review = _autopilot_review_payload(request.host_url)
+        return jsonify(ok=True, review=review)
+
+    @app.route("/api/autopilot/review/feedback", methods=["POST"])
+    def autopilot_review_feedback_api():
+        try:
+            review = _submit_autopilot_review(request.get_json(silent=True) or {}, actor="Web dashboard")
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except RuntimeError as exc:
+            return jsonify(error=str(exc)), 409
+        return jsonify(ok=True, review=review)
+
+    @app.route("/api/mobile/v1/autopilot/review", methods=["GET", "POST"])
+    def mobile_autopilot_review_api():
+        required_scope = "control" if request.method == "POST" else "read"
+        device = _authenticated_mobile(required_scope)
+        if not device:
+            return jsonify(error="control permission required" if request.method == "POST" else "unauthorized mobile device"), (403 if request.method == "POST" else 401)
+        if request.method == "POST":
+            try:
+                review = _start_autopilot_review(request.get_json(silent=True) or {}, actor=str(device.get("name") or "ByteSqueeze"))
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
+            except Exception as exc:
+                return jsonify(error=f"Could not start Autopilot preview: {exc}"), 500
+        else:
+            review = _autopilot_review_payload(request.host_url)
+        return jsonify(ok=True, review=review)
+
+    @app.route("/api/mobile/v1/autopilot/review/feedback", methods=["POST"])
+    def mobile_autopilot_review_feedback_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        try:
+            review = _submit_autopilot_review(request.get_json(silent=True) or {}, actor=str(device.get("name") or "ByteSqueeze"))
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except RuntimeError as exc:
+            return jsonify(error=str(exc)), 409
+        return jsonify(ok=True, review=review)
 
     @app.route("/wizard_preview_accurate/start", methods=["POST"])
     def wizard_preview_accurate_start():

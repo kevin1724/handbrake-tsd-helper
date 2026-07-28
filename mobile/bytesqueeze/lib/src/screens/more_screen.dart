@@ -128,11 +128,11 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.info_outline_rounded,
                       color: ByteSqueezeColors.muted,
                       title: 'About',
-                      subtitle: 'ByteSqueeze 0.2.0 · TSD mobile API v1',
+                      subtitle: 'ByteSqueeze 0.3.0 · TSD mobile API v1',
                       onTap: () => showAboutDialog(
                         context: context,
                         applicationName: 'ByteSqueeze',
-                        applicationVersion: '0.2.0',
+                        applicationVersion: '0.3.0',
                         applicationIcon: ClipRRect(
                           borderRadius: BorderRadius.circular(18),
                           child: Image.asset(
@@ -500,10 +500,36 @@ class EventsPage extends StatelessWidget {
   }
 }
 
-class ConnectionPage extends StatelessWidget {
+class ConnectionPage extends StatefulWidget {
   const ConnectionPage({super.key, required this.controller});
 
   final AppController controller;
+
+  @override
+  State<ConnectionPage> createState() => _ConnectionPageState();
+}
+
+class _ConnectionPageState extends State<ConnectionPage> {
+  late final TextEditingController _primary;
+  late final TextEditingController _fallback;
+  bool _saving = false;
+
+  AppController get controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    _primary = TextEditingController(text: controller.session?.baseUrl ?? '');
+    _fallback = TextEditingController(
+        text: controller.session?.fallbackBaseUrl ?? '');
+  }
+
+  @override
+  void dispose() {
+    _primary.dispose();
+    _fallback.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -523,6 +549,11 @@ class ConnectionPage extends StatelessWidget {
                 const SizedBox(height: 18),
                 _KeyValue(label: 'Server', value: controller.serverLabel),
                 _KeyValue(
+                    label: 'Current route',
+                    value: controller.demoMode
+                        ? 'Demo'
+                        : controller.api.activeBaseUrl),
+                _KeyValue(
                     label: 'Device',
                     value: controller.demoMode
                         ? 'Demo mode'
@@ -537,6 +568,55 @@ class ConnectionPage extends StatelessWidget {
                     value: controller.demoMode
                         ? 'demo'
                         : (controller.session?.deviceId ?? '—')),
+              ],
+            ),
+          ),
+          const SizedBox(height: 13),
+          SurfaceCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Text('Automatic address fallback',
+                    style: Theme.of(context).textTheme.titleLarge),
+                const SizedBox(height: 5),
+                const Text(
+                    'ByteSqueeze tries the current route, then your home and away addresses. It switches only when a connection fails.',
+                    style: TextStyle(color: ByteSqueezeColors.muted)),
+                const SizedBox(height: 15),
+                TextField(
+                  controller: _primary,
+                  enabled: !controller.demoMode,
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Home / primary address',
+                    hintText: 'http://192.168.1.50:8080',
+                    prefixIcon: Icon(Icons.home_outlined),
+                  ),
+                ),
+                const SizedBox(height: 12),
+                TextField(
+                  controller: _fallback,
+                  enabled: !controller.demoMode,
+                  keyboardType: TextInputType.url,
+                  autocorrect: false,
+                  decoration: const InputDecoration(
+                    labelText: 'Away / Tailscale address (optional)',
+                    hintText: 'http://100.x.x.x:8080',
+                    prefixIcon: Icon(Icons.route_rounded),
+                  ),
+                ),
+                const SizedBox(height: 15),
+                FilledButton.icon(
+                  onPressed: controller.demoMode || _saving ? null : _save,
+                  icon: _saving
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.save_outlined),
+                  label: const Text('Save connection addresses'),
+                ),
               ],
             ),
           ),
@@ -557,6 +637,24 @@ class ConnectionPage extends StatelessWidget {
         ],
       ),
     );
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await controller.updateServerAddresses(_primary.text, _fallback.text);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text(
+              'Connection addresses saved. Automatic fallback is active.')));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 }
 
