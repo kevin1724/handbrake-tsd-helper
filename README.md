@@ -249,14 +249,17 @@ Autopilot reuses the incremental Library index and existing file-safety checks. 
 4. Applies movie/show, minimum-size, and predicted-savings policy rules.
 5. Sorts eligible work by predicted savings and source size.
 6. In Observe mode, records recommendations only.
-7. In Manage mode, queues no more than the per-scan limit and never exceeds the active-job cap.
+7. In Manage mode, waits until Smart Preset preview training is ready, then queues no more than the per-scan limit and never exceeds the active-job cap.
 
 Autopilot does not weaken the existing output verification or original-file protections.
 
 The web and mobile setup tutorial recommends a five-step path: map folders,
 observe decisions, teach Smart Presets with preview feedback, set guardrails,
-then enable Manage mode. The Safe starter, Balanced, and Hands-off policy
-profiles provide editable starting points.
+then enable Manage mode. Running a decision cycle while learning is incomplete
+opens the shared accurate-preview training flow: compare the original and
+proposed frames, approve or reject the choice, and repeat until the readiness
+check unlocks learned automation. The Safe starter, Balanced, and Hands-off
+policy profiles provide editable starting points.
 
 ## Headless Worker Encoding
 
@@ -315,6 +318,8 @@ encode.
 - Token rotation: `POST /api/mobile/v1/token/refresh`
 - Read endpoints for status, jobs, nodes, events, library, and release calendar
 - Scoped queue, node-target, show-monitoring, and Autopilot controls
+- Shared accurate-preview review and Smart Preset feedback from the phone
+- Primary home address plus an optional Tailscale/away address with automatic connection failover
 - Browser-admin controls for creating pairing codes and revoking devices
 
 Access and refresh tokens are returned only to the client and stored on the server as hashes. Keep the web UI and mobile API on a trusted LAN or behind your own authenticated reverse proxy; the main web UI does not yet provide user accounts.

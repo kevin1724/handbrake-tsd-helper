@@ -1164,6 +1164,38 @@ body.settings-subpage-automation .node-settings-section {
   margin-bottom: 18px;
 }
 
+.autopilot-review-card {
+  margin: 16px 0;
+  padding: 18px;
+  border: 1px solid rgba(22, 199, 214, 0.3);
+  border-radius: 16px;
+  background: linear-gradient(145deg, rgba(17, 66, 102, 0.55), rgba(5, 18, 32, 0.75));
+}
+
+.autopilot-review-card [hidden] { display: none !important; }
+
+.autopilot-review-card h3 { margin: 3px 0 5px; }
+.autopilot-review-progress { margin: 14px 0; }
+.autopilot-review-progress > div { height: 8px; overflow: hidden; border-radius: 999px; background: rgba(255,255,255,.09); }
+.autopilot-review-progress span { display: block; width: 0; height: 100%; border-radius: inherit; background: linear-gradient(90deg, var(--blue), var(--cyan)); transition: width .25s ease; }
+.autopilot-review-progress small { display: block; margin-top: 7px; color: var(--muted); }
+.autopilot-review-empty { display: grid; gap: 5px; margin: 14px 0; padding: 18px; border: 1px dashed rgba(22,199,214,.3); border-radius: 13px; text-align: center; }
+.autopilot-review-empty small, .autopilot-review-meta small { color: var(--muted); }
+.autopilot-review-media { margin-top: 14px; }
+.autopilot-review-meta { display: grid; gap: 4px; margin-bottom: 10px; }
+.autopilot-review-media video { width: 100%; max-height: 520px; border-radius: 13px; background: #000; }
+.autopilot-review-frames { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+.autopilot-review-frames figure { margin: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 11px; background: rgba(0,0,0,.3); }
+.autopilot-review-frames img { display: block; width: 100%; aspect-ratio: 16/9; object-fit: cover; }
+.autopilot-review-frames figcaption { padding: 7px 9px; color: var(--muted); font-size: 11px; font-weight: 750; }
+.autopilot-review-actions select { width: auto; min-width: 180px; }
+
+@media (max-width: 600px) {
+  .autopilot-review-card { padding: 14px; }
+  .autopilot-review-frames { grid-template-columns: 1fr; }
+  .autopilot-review-actions > * { width: 100%; }
+}
+
 .settings-details {
   margin: 14px 0;
   padding: 12px 14px;

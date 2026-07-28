@@ -22,6 +22,8 @@ os.environ["FLASK_ENV"] = "production"
 
 from webui.app import create_app  # noqa: E402
 from webui.app import config as app_config  # noqa: E402
+from webui.app import routes as app_routes  # noqa: E402
+from webui.app.media_metadata import _cache_sidecar, _sidecar_directories  # noqa: E402
 from webui.app.smart_presets import (  # noqa: E402
     SMART_PRESETS_FILE,
     feedback_context,
@@ -63,6 +65,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(automation.status_code, 200)
         self.assertIn(b"Autopilot", automation.data)
         self.assertIn(b"Companion app access", automation.data)
+        self.assertIn(b"Teach Autopilot what looks good", automation.data)
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
@@ -74,6 +77,109 @@ class ApiRouteSmokeTests(unittest.TestCase):
         dashboard_page = self.client.get("/dashboard")
         self.assertEqual(dashboard_page.status_code, 200)
         self.assertIn(b"Operations Dashboard", dashboard_page.data)
+
+    def test_autopilot_preview_training_is_visible_and_records_feedback(self):
+        try:
+            os.remove(SMART_PRESETS_FILE)
+        except FileNotFoundError:
+            pass
+        app_routes.AUTOPILOT_REVIEW_STATE.clear()
+        app_routes.AUTOPILOT_REVIEW_STATE["cursor"] = 0
+        app_routes.PREVIEW_TASKS.clear()
+
+        media_path = os.path.join(TEST_MEDIA, "Training.Movie.1080p.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"0" * 4096)
+        library = {
+            "movies": [{
+                "id": "training-movie",
+                "title": "Training Movie",
+                "year": 2026,
+                "path": media_path,
+                "poster_url": "/api/media/artwork/local-abc.jpg",
+            }],
+            "shows": [],
+        }
+        probe = {
+            "duration_sec": 7200.0,
+            "width": 1920,
+            "height": 1080,
+            "fps": 23.976,
+            "is_hdr": False,
+        }
+        with (
+            patch("webui.app.routes._beta_load_library_cache", return_value=library),
+            patch("webui.app.routes._probe_media", return_value=probe),
+            patch("webui.app.routes.threading.Thread") as preview_thread,
+        ):
+            response = self.client.post("/api/autopilot/review", json={})
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        review = response.get_json()["review"]
+        self.assertEqual(review["title"], "Training Movie")
+        self.assertEqual(review["preview"]["state"], "queued")
+        self.assertTrue(review["learning"]["automation_enabled"])
+        preview_thread.return_value.start.assert_called_once()
+
+        feedback_token = app_routes._register_smart_feedback_context(
+            {"source": {"kind": "movie"}, "features": {"codec": "h265"}, "plan": {}}
+        )
+        app_routes._preview_set_task(
+            review["preview_id"],
+            state="done",
+            progress=100,
+            message="Accurate preview ready.",
+            result={"ok": True, "smart_feedback_token": feedback_token},
+        )
+        feedback = self.client.post(
+            "/api/autopilot/review/feedback",
+            json={"verdict": "approve", "reason": "looks_good"},
+        )
+        self.assertEqual(feedback.status_code, 200, feedback.get_data(as_text=True))
+        feedback_review = feedback.get_json()["review"]
+        self.assertTrue(feedback_review["reviewed"])
+        self.assertEqual(feedback_review["learning"]["feedback_count"], 1)
+
+    def test_local_poster_lookup_does_not_walk_into_shared_parent(self):
+        title_one = os.path.join(TEST_MEDIA, "Title One")
+        title_two = os.path.join(TEST_MEDIA, "Title Two")
+        os.makedirs(title_one, exist_ok=True)
+        os.makedirs(title_two, exist_ok=True)
+        first = os.path.join(title_one, "movie.mkv")
+        second = os.path.join(title_two, "movie.mkv")
+        self.assertEqual(_sidecar_directories([first]), [title_one])
+        self.assertNotIn(TEST_MEDIA, _sidecar_directories([first, second]))
+
+    def test_movie_poster_lookup_rejects_shared_loose_movie_directory(self):
+        shared = os.path.join(TEST_MEDIA, "Loose Movies")
+        dedicated = os.path.join(TEST_MEDIA, "Dedicated Movie")
+        os.makedirs(shared, exist_ok=True)
+        os.makedirs(dedicated, exist_ok=True)
+        first = os.path.join(shared, "First Movie (2024).mkv")
+        second = os.path.join(shared, "Second Movie (2025).mkv")
+        dedicated_movie = os.path.join(dedicated, "Only Movie (2026).mkv")
+        for path in (first, second, dedicated_movie):
+            with open(path, "wb") as handle:
+                handle.write(b"movie")
+        for directory in (shared, dedicated):
+            with open(os.path.join(directory, "poster.jpg"), "wb") as handle:
+                handle.write(b"poster")
+
+        self.assertEqual(_cache_sidecar([first]), {})
+        self.assertTrue(_cache_sidecar([dedicated_movie]).get("poster_url", "").startswith("/api/media/artwork/local-"))
+
+    def test_library_cache_sanitizer_removes_shared_poster_from_unrelated_titles(self):
+        shared_url = "/api/media/artwork/local-shared.jpg"
+        data = {
+            "movies": [
+                {"type": "movie", "title": "Joker", "year": 2019, "poster_url": shared_url, "metadata_source": "local"},
+                {"type": "movie", "title": "Scarface", "year": 1983, "poster_url": shared_url, "metadata_source": "local"},
+            ],
+            "shows": [],
+        }
+
+        self.assertTrue(app_routes._beta_sanitize_duplicate_artwork(data))
+        self.assertEqual([movie["poster_url"] for movie in data["movies"]], ["", ""])
+        self.assertTrue(all(movie["metadata_source"] == "local_duplicate_removed" for movie in data["movies"]))
 
     def test_mobile_bearer_flow_and_scope_enforcement(self):
         pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "read"})

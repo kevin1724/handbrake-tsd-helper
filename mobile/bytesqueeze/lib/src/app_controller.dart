@@ -28,11 +28,12 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic> storage = {};
   Map<String, dynamic> events = {};
   Map<String, dynamic> smartPresets = {};
+  Map<String, dynamic> autopilotReview = {};
 
   bool get connected => demoMode || session != null;
   bool get canControl => demoMode || session?.canControl == true;
   String get serverLabel =>
-      demoMode ? 'Demo server' : (session?.baseUrl ?? 'Not connected');
+      demoMode ? 'Demo server' : (api.activeBaseUrl.isEmpty ? 'Not connected' : api.activeBaseUrl);
 
   Future<void> bootstrap() async {
     booting = true;
@@ -52,6 +53,7 @@ class AppController extends ChangeNotifier {
 
   Future<void> pair(
       {required String baseUrl,
+      String fallbackBaseUrl = '',
       required String code,
       required String deviceName}) async {
     busy = true;
@@ -59,7 +61,7 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     try {
       session =
-          await api.pair(baseUrl: baseUrl, code: code, deviceName: deviceName);
+          await api.pair(baseUrl: baseUrl, fallbackBaseUrl: fallbackBaseUrl, code: code, deviceName: deviceName);
       demoMode = false;
       await refreshAll(notifyBusy: false);
     } catch (failure) {
@@ -85,6 +87,7 @@ class AppController extends ChangeNotifier {
     storage = DemoData.storage;
     events = DemoData.events;
     smartPresets = DemoData.smart;
+    autopilotReview = {};
     error = null;
     notifyListeners();
   }
@@ -103,6 +106,7 @@ class AppController extends ChangeNotifier {
     storage = {};
     events = {};
     smartPresets = {};
+    autopilotReview = {};
     notifyListeners();
   }
 
@@ -133,6 +137,8 @@ class AppController extends ChangeNotifier {
       _load('/storage?limit=100', (value) => storage = value, failures),
       _load('/events?limit=100', (value) => events = value, failures),
       _load('/smart_presets', (value) => smartPresets = value, failures),
+      _load('/autopilot/review',
+          (value) => autopilotReview = _map(value['review']), failures),
     ]);
     if (failures.isNotEmpty) error = failures.first;
     busy = false;
@@ -294,6 +300,9 @@ class AppController extends ChangeNotifier {
       automation = await api.post('/automation', {'action': 'run'},
           timeout: const Duration(minutes: 3));
       dashboard = await api.get('/dashboard');
+      final value = await api.post('/autopilot/review', {});
+      autopilotReview = _map(value['review']);
+      _pollAutopilotReview();
     } finally {
       busy = false;
       notifyListeners();
@@ -309,6 +318,59 @@ class AppController extends ChangeNotifier {
     }
     smartPresets = await api.post('/smart_presets', {'profile': profile});
     notifyListeners();
+  }
+
+  Future<void> startAutopilotReview({bool next = false}) async {
+    _requireControl();
+    if (demoMode) return;
+    final value = await api.post('/autopilot/review', {'next': next});
+    autopilotReview = _map(value['review']);
+    notifyListeners();
+    _pollAutopilotReview();
+  }
+
+  Future<void> refreshAutopilotReview() async {
+    if (demoMode) return;
+    final value = await api.get('/autopilot/review');
+    autopilotReview = _map(value['review']);
+    notifyListeners();
+  }
+
+  Future<void> submitAutopilotReview(String verdict, String reason) async {
+    _requireControl();
+    if (demoMode) return;
+    final value = await api.post('/autopilot/review/feedback', {
+      'verdict': verdict,
+      'reason': reason,
+    });
+    autopilotReview = _map(value['review']);
+    smartPresets = await api.get('/smart_presets');
+    automation = await api.get('/automation');
+    notifyListeners();
+  }
+
+  Future<void> _pollAutopilotReview() async {
+    for (var attempt = 0; attempt < 240; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 1400));
+      if (demoMode || session == null) return;
+      try {
+        final value = await api.get('/autopilot/review');
+        autopilotReview = _map(value['review']);
+        notifyListeners();
+        final preview = _map(autopilotReview['preview']);
+        final state = '${preview['state'] ?? ''}';
+        if (state == 'done' || state == 'error' || state == 'expired') return;
+      } catch (_) {
+        return;
+      }
+    }
+  }
+
+  Future<void> updateServerAddresses(String primary, String fallback) async {
+    if (demoMode) return;
+    session = await api.updateAddresses(baseUrl: primary, fallbackBaseUrl: fallback);
+    notifyListeners();
+    await refreshAll();
   }
 
   void _requireControl() {

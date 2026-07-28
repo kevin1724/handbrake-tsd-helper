@@ -296,10 +296,53 @@
     <div class="autopilot-guide" aria-label="Autopilot tutorial">
       <div><span>1</span><strong>Map folders</strong><small>Pick the exact Movies and Shows folders to watch.</small></div>
       <div><span>2</span><strong>Observe</strong><small>Preview decisions without adding a single job.</small></div>
-      <div><span>3</span><strong>Teach presets</strong><small>Approve Size Wizard previews so Smart Presets learn.</small></div>
+      <div><span>3</span><strong>Teach presets</strong><small>Use the preview training panel below so Smart Presets learn.</small></div>
       <div><span>4</span><strong>Set limits</strong><small>Choose stability, savings, capacity, and schedule.</small></div>
       <div><span>5</span><strong>Manage</strong><small>Enable unattended queueing only when you are ready.</small></div>
     </div>
+
+    <section class="autopilot-review-card" aria-labelledby="autopilotReviewTitle">
+      <div class="section-heading-row">
+        <div>
+          <div class="eyebrow">Step 3 · preview training</div>
+          <h3 id="autopilotReviewTitle">Teach Autopilot what looks good</h3>
+          <p id="autopilotReviewMessage" class="small">Generate a real side-by-side sample, inspect it, then approve or reject it. Every answer improves future preset choices.</p>
+        </div>
+        <div id="autopilotReviewCount" class="node-pill node-pill-paired">0 reviewed</div>
+      </div>
+      <div id="autopilotReviewProgress" class="autopilot-review-progress" hidden>
+        <div><span id="autopilotReviewProgressBar"></span></div>
+        <small id="autopilotReviewProgressText">Preparing comparison…</small>
+      </div>
+      <div id="autopilotReviewEmpty" class="autopilot-review-empty">
+        <strong>Ready for your first quality check</strong>
+        <small>ByteSqueeze picks a representative file from your mapped library and encodes only a short sample.</small>
+      </div>
+      <div id="autopilotReviewMedia" class="autopilot-review-media" hidden>
+        <div class="autopilot-review-meta">
+          <strong id="autopilotReviewMediaTitle">Training sample</strong>
+          <small id="autopilotReviewPlan"></small>
+        </div>
+        <video id="autopilotReviewVideo" controls muted loop playsinline preload="metadata"></video>
+        <div class="autopilot-review-frames">
+          <figure><img id="autopilotReviewOriginal" alt="Original source comparison frame"><figcaption>Original</figcaption></figure>
+          <figure><img id="autopilotReviewProposed" alt="ByteSqueeze proposed comparison frame"><figcaption>ByteSqueeze proposal</figcaption></figure>
+        </div>
+      </div>
+      <div class="row button-row autopilot-review-actions">
+        <button id="startAutopilotReviewBtn" type="button">Generate accurate preview</button>
+        <button id="approveAutopilotReviewBtn" type="button" hidden>Looks good</button>
+        <select id="rejectAutopilotReason" hidden aria-label="Reason the preview needs changes">
+          <option value="quality">Quality needs work</option>
+          <option value="size">File should be smaller</option>
+          <option value="speed">Encode should be faster</option>
+          <option value="compatibility">Compatibility concern</option>
+          <option value="other">Something else</option>
+        </select>
+        <button id="rejectAutopilotReviewBtn" class="ghost-btn" type="button" hidden>Needs changes</button>
+        <button id="nextAutopilotReviewBtn" class="ghost-btn" type="button" hidden>Try another sample</button>
+      </div>
+    </section>
 
     <div class="autopilot-profile-row">
       <button type="button" class="ghost-btn autopilot-profile" data-profile="safe">Safe starter</button>
@@ -2129,6 +2172,125 @@
     // -------------------------------
     // Autopilot + companion access
     // -------------------------------
+    let autopilotReviewPoll = null;
+
+    function renderAutopilotReview(review) {
+      review = review || {};
+      const learning = review.learning || {};
+      const preview = review.preview || {};
+      const result = preview.result || {};
+      const state = preview.state || "idle";
+      const working = ["queued", "planning", "encoding", "framing", "muxing"].includes(state);
+      const ready = state === "done" && result.ok;
+      const reviewed = Boolean(review.reviewed);
+      const count = document.getElementById("autopilotReviewCount");
+      if (count) {
+        count.textContent = learning.automation_ready ? "Learning ready" : `${learning.feedback_count || 0} reviewed`;
+        count.className = `node-pill node-pill-${learning.automation_ready ? "online" : "paired"}`;
+      }
+      const message = document.getElementById("autopilotReviewMessage");
+      if (message) message.textContent = reviewed
+        ? (learning.message || "Feedback saved. Generate another sample to keep teaching Autopilot.")
+        : (preview.message || learning.message || "Generate a real comparison and tell ByteSqueeze what looks good.");
+
+      const progress = document.getElementById("autopilotReviewProgress");
+      if (progress) progress.hidden = !working;
+      const bar = document.getElementById("autopilotReviewProgressBar");
+      if (bar) bar.style.width = `${Math.max(0, Math.min(100, Number(preview.progress || 0)))}%`;
+      const progressText = document.getElementById("autopilotReviewProgressText");
+      if (progressText) progressText.textContent = preview.message || "Preparing accurate comparison…";
+
+      const empty = document.getElementById("autopilotReviewEmpty");
+      if (empty) empty.hidden = working || ready;
+      const media = document.getElementById("autopilotReviewMedia");
+      if (media) media.hidden = !ready;
+      const title = document.getElementById("autopilotReviewMediaTitle");
+      if (title) title.textContent = review.title || "Training sample";
+      const plan = document.getElementById("autopilotReviewPlan");
+      if (plan) {
+        const candidate = review.candidate_name || review.candidate_id || "Smart Preset";
+        const size = review.candidate_plan?.target_mb ? ` · ${Math.round(review.candidate_plan.target_mb)} MB target` : "";
+        plan.textContent = `${candidate}${size} · original on the left, proposal on the right`;
+      }
+      const video = document.getElementById("autopilotReviewVideo");
+      if (video && ready && result.clip_url && video.dataset.src !== result.clip_url) {
+        video.dataset.src = result.clip_url;
+        video.src = result.clip_url;
+        video.load();
+      }
+      const original = document.getElementById("autopilotReviewOriginal");
+      if (original && result.old_b64) original.src = `data:image/jpeg;base64,${result.old_b64}`;
+      const proposed = document.getElementById("autopilotReviewProposed");
+      if (proposed && result.new_b64) proposed.src = `data:image/jpeg;base64,${result.new_b64}`;
+
+      const start = document.getElementById("startAutopilotReviewBtn");
+      if (start) {
+        start.disabled = working;
+        start.hidden = ready && !reviewed;
+        start.textContent = reviewed ? "Generate next preview" : "Generate accurate preview";
+      }
+      ["approveAutopilotReviewBtn", "rejectAutopilotReviewBtn", "rejectAutopilotReason"].forEach(id => {
+        const element = document.getElementById(id);
+        if (element) element.hidden = !ready || reviewed;
+      });
+      const next = document.getElementById("nextAutopilotReviewBtn");
+      if (next) next.hidden = !ready;
+
+      if (working) {
+        clearTimeout(autopilotReviewPoll);
+        autopilotReviewPoll = setTimeout(loadAutopilotReview, 1400);
+      }
+    }
+
+    async function loadAutopilotReview() {
+      try {
+        const res = await fetch("/api/autopilot/review");
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not load preview training");
+        renderAutopilotReview(data.review);
+      } catch (err) {
+        const message = document.getElementById("autopilotReviewMessage");
+        if (message) message.textContent = err.message || "Could not load preview training.";
+      }
+    }
+
+    async function startAutopilotReview(next = false) {
+      const button = document.getElementById(next ? "nextAutopilotReviewBtn" : "startAutopilotReviewBtn");
+      try {
+        if (button) button.disabled = true;
+        const res = await fetch("/api/autopilot/review", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ next })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not generate preview");
+        renderAutopilotReview(data.review);
+      } catch (err) {
+        if (window.appToast) appToast(err.message || "Could not generate preview.", "error");
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    async function submitAutopilotReview(verdict) {
+      const reason = verdict === "approve" ? "looks_good" : (document.getElementById("rejectAutopilotReason")?.value || "other");
+      try {
+        const res = await fetch("/api/autopilot/review/feedback", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ verdict, reason })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Could not save preview feedback");
+        renderAutopilotReview(data.review);
+        await loadAutopilotStatus();
+        if (window.appToast) appToast(verdict === "approve" ? "Preview approved. Autopilot learned from it." : "Feedback saved. Autopilot will adjust future choices.", "success");
+      } catch (err) {
+        if (window.appToast) appToast(err.message || "Could not save feedback.", "error");
+      }
+    }
+
     function renderAutopilotStatus(data) {
       const autopilot = data?.autopilot || {};
       const readiness = data?.readiness || {};
@@ -2226,6 +2388,7 @@
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Autopilot cycle failed");
         renderAutopilotStatus(data);
+        await startAutopilotReview(false);
         if (window.appToast) appToast("Autopilot decision cycle complete.", "success");
       } catch (err) {
         if (window.appToast) appToast(err.message || "Autopilot cycle failed.", "error");
@@ -2799,6 +2962,7 @@
       loadPresetConfigUI();
       loadAutoScanStatus(true);
       loadAutopilotStatus();
+      loadAutopilotReview();
       loadMobileDevices();
       loadNodes();
 
@@ -2841,6 +3005,14 @@
       if (runAutopilotBtn) runAutopilotBtn.onclick = runAutopilot;
       const refreshAutopilotBtn = document.getElementById("refreshAutopilotBtn");
       if (refreshAutopilotBtn) refreshAutopilotBtn.onclick = loadAutopilotStatus;
+      const startAutopilotReviewBtn = document.getElementById("startAutopilotReviewBtn");
+      if (startAutopilotReviewBtn) startAutopilotReviewBtn.onclick = () => startAutopilotReview(false);
+      const nextAutopilotReviewBtn = document.getElementById("nextAutopilotReviewBtn");
+      if (nextAutopilotReviewBtn) nextAutopilotReviewBtn.onclick = () => startAutopilotReview(true);
+      const approveAutopilotReviewBtn = document.getElementById("approveAutopilotReviewBtn");
+      if (approveAutopilotReviewBtn) approveAutopilotReviewBtn.onclick = () => submitAutopilotReview("approve");
+      const rejectAutopilotReviewBtn = document.getElementById("rejectAutopilotReviewBtn");
+      if (rejectAutopilotReviewBtn) rejectAutopilotReviewBtn.onclick = () => submitAutopilotReview("reject");
       document.querySelectorAll(".autopilot-profile").forEach(button => {
         button.onclick = () => applyAutopilotProfile(button.dataset.profile || "balanced");
       });

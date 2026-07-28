@@ -17,6 +17,7 @@ class PairingScreen extends StatefulWidget {
 class _PairingScreenState extends State<PairingScreen> {
   final _formKey = GlobalKey<FormState>();
   final _server = TextEditingController(text: 'http://');
+  final _fallbackServer = TextEditingController();
   final _code = TextEditingController();
   final _name = TextEditingController(text: 'ByteSqueeze phone');
   bool _showAdvanced = false;
@@ -24,6 +25,7 @@ class _PairingScreenState extends State<PairingScreen> {
   @override
   void dispose() {
     _server.dispose();
+    _fallbackServer.dispose();
     _code.dispose();
     _name.dispose();
     super.dispose();
@@ -34,6 +36,7 @@ class _PairingScreenState extends State<PairingScreen> {
     try {
       await widget.controller.pair(
         baseUrl: _server.text,
+        fallbackBaseUrl: _fallbackServer.text,
         code: _code.text,
         deviceName: _name.text,
       );
@@ -166,8 +169,8 @@ class _PairingScreenState extends State<PairingScreen> {
                                   ? Icons.expand_less
                                   : Icons.tune_rounded),
                               label: Text(_showAdvanced
-                                  ? 'Hide device name'
-                                  : 'Device name'),
+                                  ? 'Hide connection options'
+                                  : 'Connection options'),
                             ),
                             AnimatedSize(
                               duration: const Duration(milliseconds: 220),
@@ -175,12 +178,31 @@ class _PairingScreenState extends State<PairingScreen> {
                                   ? Padding(
                                       padding:
                                           const EdgeInsets.only(bottom: 12),
-                                      child: TextFormField(
-                                        controller: _name,
-                                        decoration: const InputDecoration(
-                                            labelText: 'Device name',
-                                            prefixIcon: Icon(
-                                                Icons.phone_android_rounded)),
+                                      child: Column(
+                                        children: [
+                                          TextFormField(
+                                            controller: _fallbackServer,
+                                            keyboardType: TextInputType.url,
+                                            autocorrect: false,
+                                            decoration: const InputDecoration(
+                                              labelText:
+                                                  'Away / Tailscale address (optional)',
+                                              hintText: 'http://100.x.x.x:8080',
+                                              prefixIcon:
+                                                  Icon(Icons.route_rounded),
+                                              helperText:
+                                                  'Used automatically when the home address cannot be reached.',
+                                            ),
+                                          ),
+                                          const SizedBox(height: 12),
+                                          TextFormField(
+                                            controller: _name,
+                                            decoration: const InputDecoration(
+                                                labelText: 'Device name',
+                                                prefixIcon: Icon(Icons
+                                                    .phone_android_rounded)),
+                                          ),
+                                        ],
                                       ),
                                     )
                                   : const SizedBox.shrink(),
@@ -224,7 +246,7 @@ class _PairingScreenState extends State<PairingScreen> {
                           SizedBox(width: 9),
                           Expanded(
                             child: Text(
-                              'Generate the code in TSD Settings → Automation & Apps. Use HTTPS through a trusted reverse proxy outside your home network.',
+                              'Generate the code in TSD Settings → Automation & Apps. A Tailscale address can be saved as the automatic away-from-home fallback.',
                               style: TextStyle(
                                   color: ByteSqueezeColors.muted,
                                   fontSize: 12.5,

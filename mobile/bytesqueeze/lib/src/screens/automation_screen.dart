@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
@@ -111,6 +113,8 @@ class _AutomationScreenState extends State<AutomationScreen> {
                   onProfile: _applyProfile,
                   enabled: widget.controller.canControl,
                 ),
+                const SizedBox(height: 14),
+                _AutopilotTrainingCard(controller: widget.controller),
                 const SizedBox(height: 14),
                 SurfaceCard(
                   gradient: const LinearGradient(
@@ -511,7 +515,7 @@ class _AutopilotGuideCard extends StatelessWidget {
       (
         '3',
         'Teach',
-        'Approve a few Size Wizard previews to train Smart Presets.'
+        'Generate and review accurate comparisons in the training card below.'
       ),
       (
         '4',
@@ -615,6 +619,287 @@ class _AutopilotGuideCard extends StatelessWidget {
   }
 }
 
+class _AutopilotTrainingCard extends StatefulWidget {
+  const _AutopilotTrainingCard({required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<_AutopilotTrainingCard> createState() =>
+      _AutopilotTrainingCardState();
+}
+
+class _AutopilotTrainingCardState extends State<_AutopilotTrainingCard> {
+  bool _working = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final review = widget.controller.autopilotReview;
+    final preview = asMap(review['preview']);
+    final result = asMap(preview['result']);
+    final learning = asMap(review['learning']);
+    final state = '${preview['state'] ?? 'idle'}';
+    final encoding = const {
+      'queued',
+      'planning',
+      'encoding',
+      'framing',
+      'muxing'
+    }.contains(state);
+    final ready = state == 'done' && result['ok'] == true;
+    final reviewed = review['reviewed'] == true;
+    final learningReady = learning['automation_ready'] == true;
+    final progress =
+        ((preview['progress'] as num?)?.toDouble() ?? 0).clamp(0, 100) / 100;
+
+    return SurfaceCard(
+      gradient: const LinearGradient(
+        begin: Alignment.topLeft,
+        end: Alignment.bottomRight,
+        colors: [Color(0xFF143D67), Color(0xFF08182D)],
+      ),
+      borderColor: ByteSqueezeColors.cyan.withValues(alpha: .42),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              DecoratedBox(
+                decoration: BoxDecoration(
+                    color: ByteSqueezeColors.cyan.withValues(alpha: .13),
+                    borderRadius: BorderRadius.circular(14)),
+                child: const Padding(
+                  padding: EdgeInsets.all(11),
+                  child: Icon(Icons.compare_rounded,
+                      color: ByteSqueezeColors.cyan),
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('Preview training',
+                        style: Theme.of(context).textTheme.titleLarge),
+                    Text(
+                      learningReady
+                          ? 'Learned automation is ready'
+                          : '${learning['feedback_count'] ?? 0} reviewed · ${learning['reviews_needed'] ?? 0} minimum remaining',
+                      style: const TextStyle(
+                          color: ByteSqueezeColors.muted, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              StatusPill(
+                label: learningReady ? 'Ready' : 'Learning',
+                color: learningReady
+                    ? ByteSqueezeColors.mint
+                    : ByteSqueezeColors.cyan,
+                icon: learningReady
+                    ? Icons.verified_rounded
+                    : Icons.school_outlined,
+              ),
+            ],
+          ),
+          const SizedBox(height: 15),
+          Text(
+            '${preview['message'] ?? learning['message'] ?? 'Generate a short, accurate sample from your library. Compare the original with the proposed encode, then tell ByteSqueeze what you think.'}',
+            style: const TextStyle(color: ByteSqueezeColors.muted, height: 1.35),
+          ),
+          if (encoding) ...[
+            const SizedBox(height: 14),
+            LinearProgressIndicator(value: progress == 0 ? null : progress),
+            const SizedBox(height: 7),
+            Text('${(progress * 100).round()}% complete',
+                style: const TextStyle(
+                    color: ByteSqueezeColors.cyan, fontSize: 12)),
+          ],
+          if (ready) ...[
+            const SizedBox(height: 16),
+            Text('${review['title'] ?? 'Training sample'}',
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: const TextStyle(fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text(
+                '${review['candidate_name'] ?? 'Smart Preset'} · original versus ByteSqueeze proposal',
+                style: const TextStyle(
+                    color: ByteSqueezeColors.muted, fontSize: 12)),
+            const SizedBox(height: 12),
+            Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Expanded(
+                    child: _PreviewFrame(
+                        label: 'Original', base64Value: '${result['old_b64'] ?? ''}')),
+                const SizedBox(width: 9),
+                Expanded(
+                    child: _PreviewFrame(
+                        label: 'Proposal', base64Value: '${result['new_b64'] ?? ''}')),
+              ],
+            ),
+            const SizedBox(height: 9),
+            const Text(
+              'Inspect faces, motion detail, dark scenes, subtitles, and text edges. The server encoded this exact sample with the proposed preset.',
+              style: TextStyle(color: ByteSqueezeColors.muted, fontSize: 11.5),
+            ),
+          ],
+          const SizedBox(height: 15),
+          if (ready && !reviewed)
+            Row(
+              children: [
+                Expanded(
+                  child: FilledButton.icon(
+                    onPressed: _working ? null : () => _submit('approve', 'looks_good'),
+                    icon: const Icon(Icons.thumb_up_alt_outlined),
+                    label: const Text('Looks good'),
+                  ),
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: OutlinedButton.icon(
+                    onPressed: _working ? null : _chooseRejection,
+                    icon: const Icon(Icons.tune_rounded),
+                    label: const Text('Needs changes'),
+                  ),
+                ),
+              ],
+            )
+          else
+            FilledButton.icon(
+              onPressed: widget.controller.canControl && !_working && !encoding
+                  ? () => _start(next: ready || reviewed)
+                  : null,
+              icon: _working || encoding
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.play_circle_outline_rounded),
+              label: Text(ready || reviewed
+                  ? 'Generate another sample'
+                  : 'Generate accurate preview'),
+            ),
+          if (ready && !reviewed) ...[
+            const SizedBox(height: 8),
+            TextButton.icon(
+              onPressed: _working ? null : () => _start(next: true),
+              icon: const Icon(Icons.skip_next_rounded),
+              label: const Text('Use a different library sample'),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+
+  Future<void> _start({required bool next}) async {
+    setState(() => _working = true);
+    try {
+      await widget.controller.startAutopilotReview(next: next);
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
+      }
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  Future<void> _submit(String verdict, String reason) async {
+    setState(() => _working = true);
+    try {
+      await widget.controller.submitAutopilotReview(verdict, reason);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text(verdict == 'approve'
+              ? 'Approved. Autopilot learned from this preview.'
+              : 'Feedback saved. Future preset choices will adjust.')));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
+      }
+    } finally {
+      if (mounted) setState(() => _working = false);
+    }
+  }
+
+  Future<void> _chooseRejection() async {
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (context) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text('What should ByteSqueeze improve?',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+              subtitle: Text('This reason helps rank the next safe preset.'),
+            ),
+            for (final choice in const [
+              ('quality', Icons.high_quality_rounded, 'Quality needs work'),
+              ('size', Icons.compress_rounded, 'File should be smaller'),
+              ('speed', Icons.speed_rounded, 'Encode should be faster'),
+              ('compatibility', Icons.devices_rounded, 'Compatibility concern'),
+              ('other', Icons.more_horiz_rounded, 'Something else'),
+            ])
+              ListTile(
+                leading: Icon(choice.$2),
+                title: Text(choice.$3),
+                onTap: () => Navigator.pop(context, choice.$1),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (reason != null) await _submit('reject', reason);
+  }
+}
+
+class _PreviewFrame extends StatelessWidget {
+  const _PreviewFrame({required this.label, required this.base64Value});
+
+  final String label;
+  final String base64Value;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget image;
+    try {
+      image = Image.memory(base64Decode(base64Value),
+          fit: BoxFit.cover, gaplessPlayback: true);
+    } catch (_) {
+      image = const Center(
+          child: Icon(Icons.broken_image_outlined,
+              color: ByteSqueezeColors.muted));
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(13),
+      child: DecoratedBox(
+        decoration: const BoxDecoration(color: Colors.black),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            AspectRatio(aspectRatio: 16 / 9, child: image),
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 9, vertical: 7),
+              child: Text(label,
+                  style: const TextStyle(
+                      color: ByteSqueezeColors.muted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700)),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
 class _MiniMetric extends StatelessWidget {
   const _MiniMetric({required this.label, required this.value});
 
@@ -700,12 +985,14 @@ class _SmartPresetCard extends StatefulWidget {
 
 class _SmartPresetCardState extends State<_SmartPresetCard> {
   late String _strategy;
+  late bool _automationEnabled;
   bool _saving = false;
 
   @override
   void initState() {
     super.initState();
     _strategy = '${widget.profile['audio_strategy'] ?? 'copy'}';
+    _automationEnabled = widget.profile['automation_enabled'] == true;
   }
 
   @override
@@ -763,6 +1050,18 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
           const Text(
               'All matching English and Spanish audio and subtitle tracks stay selected.',
               style: TextStyle(color: ByteSqueezeColors.muted, fontSize: 12.5)),
+          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            value: _automationEnabled,
+            onChanged: widget.controller.canControl
+                ? (value) => setState(() => _automationEnabled = value)
+                : null,
+            title: const Text('Use learned presets automatically'),
+            subtitle: const Text(
+                'Unlocks only after enough accurate previews are approved.'),
+            secondary: const Icon(Icons.psychology_alt_rounded),
+          ),
           const SizedBox(height: 14),
           OutlinedButton.icon(
             onPressed: widget.controller.canControl && !_saving ? _save : null,
@@ -783,7 +1082,11 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
     setState(() => _saving = true);
     try {
       await widget.controller
-          .saveSmartProfile({...widget.profile, 'audio_strategy': _strategy});
+          .saveSmartProfile({
+        ...widget.profile,
+        'audio_strategy': _strategy,
+        'automation_enabled': _automationEnabled,
+      });
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context)
