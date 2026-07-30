@@ -226,9 +226,11 @@
       </span>
     </a>
     <div class="nav-links">
-      <a href="/dashboard" class="nav-link nav-jobs">Dashboard</a>
+      <a href="/" class="nav-link">Home</a>
+      <a href="/library" class="nav-link">Library</a>
+      <a href="/jobs" class="nav-link">Jobs</a>
+      <a href="/autopilot" class="nav-link">Autopilot</a>
       <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
-      <a href="/" class="nav-link nav-library">Library</a>
       <a href="/settings" class="nav-link nav-settings nav-link-active">Settings</a>
     </div>
     <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>
@@ -238,8 +240,8 @@
     <header class="page-hero">
       <div>
         <h1>
-          {% if settings_page == 'automation' %}
-            Automation &amp; Apps
+          {% if settings_page == 'ai' %}
+            AI &amp; API Keys
           {% elif settings_page == 'beta' %}
             Library Settings
           {% elif settings_page == 'nodes' %}
@@ -249,14 +251,14 @@
           {% endif %}
         </h1>
         <p class="page-subtitle">
-          {% if settings_page == 'automation' %}
-            Run a bounded Autopilot and manage secure access for future companion apps.
+          {% if settings_page == 'ai' %}
+            Connect Gemini or OpenAI to the Size Wizard, test the connection, and see exactly how the advisor is used.
           {% elif settings_page == 'beta' %}
             Library folders, posters, and incremental media discovery.
           {% elif settings_page == 'nodes' %}
             Pair workers, choose local or remote transfer modes, and review node status.
           {% else %}
-            Encoding defaults, presets, UI behavior, events, and storage history.
+            AI API keys, encoding defaults, presets, UI behavior, events, and storage history.
           {% endif %}
         </p>
       </div>
@@ -267,9 +269,9 @@
         <strong>General</strong>
         <span>Encoding, presets, events, storage</span>
       </a>
-      <a class="settings-section-link {% if settings_page == 'automation' %}settings-section-link-active{% endif %}" href="/settings/automation">
-        <strong>Automation &amp; Apps</strong>
-        <span>Autopilot policies and mobile access</span>
+      <a class="settings-section-link {% if settings_page == 'ai' %}settings-section-link-active{% endif %}" href="/settings/ai">
+        <strong>AI &amp; API Keys</strong>
+        <span>Paste and test Gemini or OpenAI keys</span>
       </a>
       <a class="settings-section-link {% if settings_page == 'beta' %}settings-section-link-active{% endif %}" href="/settings/beta">
         <strong>Library</strong>
@@ -281,8 +283,22 @@
       </a>
     </nav>
 
+    {% if settings_page == 'main' %}
+    <a class="settings-ai-shortcut" href="#ai-api-keys">
+      <span>
+        <small>SIZE WIZARD AI</small>
+        <strong>Looking for the Gemini or OpenAI API-key boxes?</strong>
+        <span>They are now directly below, with a guided setup and connection test.</span>
+      </span>
+      <b>Set up AI &darr;</b>
+    </a>
+    {% endif %}
+
     <div class="settings-grid">
 
+  {# Autopilot moved to /autopilot in release 3.0. Kept out of the rendered
+     settings DOM so general settings cannot silently mutate its policy. #}
+  {% if false %}
   <div class="section-card settings-wide automation-settings-section autopilot-card">
     <div class="section-heading-row">
       <div>
@@ -405,8 +421,9 @@
     <div id="autopilotReadiness" class="autopilot-readiness"></div>
     <div id="autopilotDecisionList" class="autopilot-decisions"><div class="node-empty">Loading Autopilot status…</div></div>
   </div>
+  {% endif %}
 
-  <div class="section-card settings-wide automation-settings-section mobile-access-card">
+  <div class="section-card settings-wide node-settings-section mobile-access-card">
     <div class="section-heading-row">
       <div>
         <div class="eyebrow">ByteSqueeze companion</div>
@@ -437,6 +454,80 @@
         <div id="mobileDeviceList" class="mobile-device-list"><div class="node-empty">Loading devices…</div></div>
       </div>
     </div>
+  </div>
+
+  <div id="ai-api-keys" class="section-card settings-wide ai-settings-section">
+    <div class="section-heading-row">
+      <div>
+        <div class="eyebrow">Optional Size Wizard advisor</div>
+        <h2>AI &amp; API Keys</h2>
+        <p class="small">The deterministic Size Wizard remains in control. An AI provider can explain the plan and suggest safe option changes from probe facts and your stated goal.</p>
+      </div>
+      <span id="aiProviderPill" class="node-pill node-pill-idle">Loading</span>
+    </div>
+
+    <div class="ai-setup-steps" aria-label="AI advisor setup steps">
+      <div><b>1</b><span><strong>Choose a provider</strong><small>Gemini, OpenAI, built-in local, or planner only.</small></span></div>
+      <div><b>2</b><span><strong>Paste its API key</strong><small>The key stays on this server and is never put in a prompt.</small></span></div>
+      <div><b>3</b><span><strong>Save &amp; test</strong><small>One click saves the selection and verifies the provider before you open Size Wizard.</small></span></div>
+    </div>
+
+    <div class="ai-provider-picker" role="radiogroup" aria-label="Size Wizard AI provider">
+      <label><input type="radio" name="wizardAiProvider" value="local"><span><strong>Built-in local</strong><small>Private, offline, no account. Uses the bundled lightweight advisor when available.</small></span></label>
+      <label><input type="radio" name="wizardAiProvider" value="gemini"><span><strong>Google Gemini Flash</strong><small>Google offers free-tier access for eligible models and accounts. Requires a Google AI Studio API key.</small></span></label>
+      <label><input type="radio" name="wizardAiProvider" value="openai"><span><strong>OpenAI</strong><small>Use an OpenAI API key and choose a compatible model.</small></span></label>
+      <label><input type="radio" name="wizardAiProvider" value="off"><span><strong>Planner only</strong><small>No language model. The existing deterministic plan and estimates still work.</small></span></label>
+    </div>
+
+    <div class="ai-credentials-grid">
+      <section class="node-link-panel">
+        <div class="section-heading-row"><div><h3>Google Gemini Flash</h3><p class="small">A fast cloud advisor with optional free-tier availability. Limits depend on Google's current model, account, and region.</p></div><span id="geminiConfiguredPill" class="node-pill node-pill-offline">No key</span></div>
+        <label class="field-stack"><span>Gemini API key</span><span class="secret-input-row"><input id="geminiApiKeyInput" type="password" autocomplete="new-password" placeholder="Paste the key from Google AI Studio"><button class="ghost-btn secret-toggle" type="button" data-secret-target="geminiApiKeyInput">Show</button></span><small>After saving, this box becomes blank on purpose. The status pill confirms whether a key is stored.</small></label>
+        <label class="field-stack" style="margin-top:10px"><span>Model</span><input id="geminiModelInput" type="text" value="gemini-3.6-flash"><small>Recommended default: <code>gemini-3.6-flash</code>. You can enter another supported Gemini model ID.</small></label>
+        <div class="button-row" style="margin-top:12px"><a class="button-link ghost-btn" href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">1. Create Gemini key</a><a class="button-link ghost-btn" href="https://ai.google.dev/gemini-api/docs/api-key" target="_blank" rel="noopener">Google key guide</a><a class="button-link ghost-btn" href="https://ai.google.dev/gemini-api/docs/pricing" target="_blank" rel="noopener">Free-tier limits</a><button id="clearGeminiKeyBtn" class="danger-outline" type="button">Clear saved key</button></div>
+      </section>
+      <section class="node-link-panel">
+        <div class="section-heading-row"><div><h3>OpenAI</h3><p class="small">Use a lower-cost model for concise planning help, or enter another current Responses API model.</p></div><span id="openaiConfiguredPill" class="node-pill node-pill-offline">No key</span></div>
+        <label class="field-stack"><span>OpenAI API key</span><span class="secret-input-row"><input id="openaiApiKeyInput" type="password" autocomplete="new-password" placeholder="Paste a key beginning with sk-"><button class="ghost-btn secret-toggle" type="button" data-secret-target="openaiApiKeyInput">Show</button></span><small>After saving, this box becomes blank on purpose. The status pill confirms whether a key is stored.</small></label>
+        <label class="field-stack" style="margin-top:10px"><span>Model</span><input id="openaiModelInput" type="text" value="gpt-5.6-luna"><small>Recommended cost-sensitive default: <code>gpt-5.6-luna</code>. API use is billed by OpenAI.</small></label>
+        <div class="button-row" style="margin-top:12px"><a class="button-link ghost-btn" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener">1. Create OpenAI key</a><a class="button-link ghost-btn" href="https://platform.openai.com/docs/quickstart" target="_blank" rel="noopener">OpenAI quickstart</a><a class="button-link ghost-btn" href="https://developers.openai.com/api/docs/models" target="_blank" rel="noopener">Browse models</a><button id="clearOpenaiKeyBtn" class="danger-outline" type="button">Clear saved key</button></div>
+      </section>
+    </div>
+    <details class="ai-setup-guide" open>
+      <summary>Setup walkthrough and Size Wizard examples</summary>
+      <div class="ai-guide-grid">
+        <article>
+          <strong>Gemini in five steps</strong>
+          <ol>
+            <li>Open <em>Create Gemini key</em> and create or copy a key in Google AI Studio.</li>
+            <li>Select <em>Google Gemini Flash</em> above.</li>
+            <li>Paste the key into <em>Gemini API key</em>.</li>
+            <li>Click <em>Save &amp; test selected provider</em>.</li>
+            <li>Open Size Wizard, select a file, build the plan, then ask the Plan Assistant a question.</li>
+          </ol>
+        </article>
+        <article>
+          <strong>OpenAI in five steps</strong>
+          <ol>
+            <li>Open <em>Create OpenAI key</em> and create a secret API key.</li>
+            <li>Select <em>OpenAI</em> above.</li>
+            <li>Paste the key into <em>OpenAI API key</em>.</li>
+            <li>Click <em>Save &amp; test selected provider</em>.</li>
+            <li>Open Size Wizard and use the Plan Assistant after a source has been analyzed.</li>
+          </ol>
+        </article>
+      </div>
+      <div class="ai-example-prompts">
+        <strong>Good questions to try in Size Wizard</strong>
+        <code>Explain why this plan chose H.265.</code>
+        <code>Prioritize quality but keep the result under 6 GB.</code>
+        <code>Keep English and Spanish audio and subtitles.</code>
+        <code>Keep surround sound; use E-AC3 5.1 only when passthrough is not possible.</code>
+      </div>
+      <p class="small">Prefer Docker environment variables? Use <code>GEMINI_API_KEY</code> or <code>OPENAI_API_KEY</code>; environment values override saved keys. See the <a href="https://github.com/kevin1724/handbrake-tsd-helper/blob/main/docs/AI_ADVISOR.md" target="_blank" rel="noopener">complete AI Advisor guide</a> for Compose examples, privacy details, and troubleshooting.</p>
+    </details>
+    <div class="ai-privacy-note"><strong>What leaves your server:</strong> media probe facts such as resolution, duration, HDR, target size, selected track policy, and the question you type. Video, audio, subtitles, file contents, and API keys are never placed in the model prompt. Environment variables <code>GEMINI_API_KEY</code> and <code>OPENAI_API_KEY</code> take priority over saved keys.</div>
+    <div class="button-row"><button id="testAiSettingsBtn" type="button">Save &amp; test selected provider</button><button id="saveAiSettingsBtn" class="ghost-btn" type="button">Save without testing</button><a class="button-link ghost-btn" href="/size_wizard">Open Size Wizard</a><span id="aiSettingsStatus" class="small" aria-live="polite"></span></div>
   </div>
 
   <!-- ============================================================
@@ -605,17 +696,17 @@
     <div id="autoScanStatusBox" class="node-status-box small">Loading auto-scan status...</div>
   </div>
 
-  <!-- Keyless media metadata -->
+  <!-- Preferred and fallback media metadata -->
   <div class="section-card beta-settings-section">
     <div class="section-heading-row">
       <div>
-        <div class="eyebrow">No account required</div>
+        <div class="eyebrow">TMDb preferred · no-key fallback</div>
         <h2>Artwork &amp; episode releases</h2>
       </div>
-      <span class="node-pill node-pill-paired">Keyless</span>
+      <span class="node-pill node-pill-paired">Automatic</span>
     </div>
     <p class="small">
-      ByteSqueeze first uses poster.jpg, folder.jpg, or cover.jpg beside your media. It then uses TVmaze for show artwork and release dates, and Apple Search for movie artwork. Results are cached by the Docker server.
+      When TMDb credentials are configured, ByteSqueeze uses TMDb artwork first. Without credentials—or when TMDb has no usable match—it automatically falls back to poster.jpg/folder.jpg/cover.jpg, TVmaze show artwork, and Apple Search movie artwork. TVmaze continues to provide episode-release data.
     </p>
 
     <div class="row">
@@ -634,8 +725,8 @@
     <p class="small">TV metadata is provided by <a href="https://www.tvmaze.com/" target="_blank" rel="noreferrer">TVmaze</a> under CC BY-SA. Movie artwork may be provided by Apple Search.</p>
 
     <details class="settings-details">
-      <summary>Optional legacy TMDb fallback</summary>
-      <p class="small">Existing TMDb credentials can remain as a last fallback, but they are no longer required.</p>
+      <summary>Preferred TMDb artwork</summary>
+      <p class="small">Add either a TMDb API key or read token to make TMDb the first poster source. Leave both blank to use the no-key providers.</p>
 
     <div class="row">
       <label for="tmdbApiKeyInput"><strong>TMDb API key</strong>:</label>
@@ -981,6 +1072,122 @@
     let folderBrowserKind = "movies";
     let folderBrowserPath = "";
     let pendingFolderAdd = null;
+    let clearGeminiKey = false;
+    let clearOpenaiKey = false;
+
+    function selectedAiProvider() {
+      return document.querySelector('input[name="wizardAiProvider"]:checked')?.value || "local";
+    }
+
+    function renderAiSettings(data) {
+      const provider = data?.provider || "local";
+      const radio = document.querySelector(`input[name="wizardAiProvider"][value="${provider}"]`);
+      if (radio) radio.checked = true;
+      const geminiModel = document.getElementById("geminiModelInput");
+      const openaiModel = document.getElementById("openaiModelInput");
+      if (geminiModel) geminiModel.value = data?.gemini_model || "gemini-3.6-flash";
+      if (openaiModel) openaiModel.value = data?.openai_model || "gpt-5.6-luna";
+
+      const providerPill = document.getElementById("aiProviderPill");
+      if (providerPill) {
+        const label = provider === "off" ? "Planner only" : provider === "gemini" ? "Gemini Flash" : provider === "openai" ? "OpenAI" : "Built-in local";
+        const active = provider === "off" || data?.ready;
+        providerPill.textContent = provider === "off" ? "Planner only active" : (active ? `${label} ready` : `${label} needs setup`);
+        providerPill.className = `node-pill node-pill-${active ? "online" : "idle"}`;
+      }
+      const showConfigured = (id, configured, source) => {
+        const pill = document.getElementById(id);
+        if (!pill) return;
+        pill.textContent = configured ? `Key from ${source || "settings"}` : "No key";
+        pill.className = `node-pill node-pill-${configured ? "online" : "offline"}`;
+      };
+      showConfigured("geminiConfiguredPill", data?.gemini_api_configured, data?.gemini_key_source);
+      showConfigured("openaiConfiguredPill", data?.openai_api_configured, data?.openai_key_source);
+    }
+
+    async function loadAiSettings() {
+      if (!document.getElementById("aiProviderPill")) return;
+      try {
+        const response = await fetch("/api/ai/settings", { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Could not load AI settings");
+        renderAiSettings(data);
+      } catch (error) {
+        const status = document.getElementById("aiSettingsStatus");
+        if (status) status.textContent = error.message;
+      }
+    }
+
+    function aiSettingsPayload() {
+      return {
+        provider: selectedAiProvider(),
+        gemini_model: document.getElementById("geminiModelInput")?.value || "gemini-3.6-flash",
+        openai_model: document.getElementById("openaiModelInput")?.value || "gpt-5.6-luna",
+        gemini_api_key: document.getElementById("geminiApiKeyInput")?.value || "",
+        openai_api_key: document.getElementById("openaiApiKeyInput")?.value || "",
+        clear_gemini_key: clearGeminiKey,
+        clear_openai_key: clearOpenaiKey
+      };
+    }
+
+    async function persistAiSettings() {
+      const response = await fetch("/api/ai/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(aiSettingsPayload())
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Could not save AI settings");
+      clearGeminiKey = false;
+      clearOpenaiKey = false;
+      const geminiKey = document.getElementById("geminiApiKeyInput");
+      const openaiKey = document.getElementById("openaiApiKeyInput");
+      if (geminiKey) geminiKey.value = "";
+      if (openaiKey) openaiKey.value = "";
+      renderAiSettings(data);
+      return data;
+    }
+
+    async function saveAiSettings() {
+      const button = document.getElementById("saveAiSettingsBtn");
+      const status = document.getElementById("aiSettingsStatus");
+      try {
+        if (button) button.disabled = true;
+        if (status) status.textContent = "Saving...";
+        await persistAiSettings();
+        if (status) status.textContent = "Saved. The selected provider is ready to test or use in Size Wizard.";
+        if (window.appToast) appToast("AI advisor settings saved.", "success");
+      } catch (error) {
+        if (status) status.textContent = error.message;
+        if (window.appToast) appToast(error.message, "error");
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
+
+    async function testAiSettings() {
+      const button = document.getElementById("testAiSettingsBtn");
+      const saveButton = document.getElementById("saveAiSettingsBtn");
+      const status = document.getElementById("aiSettingsStatus");
+      try {
+        if (button) button.disabled = true;
+        if (saveButton) saveButton.disabled = true;
+        if (status) status.textContent = "Saving the selected provider and key...";
+        await persistAiSettings();
+        if (status) status.textContent = "Saved. Testing the selected provider...";
+        const response = await fetch("/api/ai/test", { method: "POST" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Provider test failed");
+        if (status) status.textContent = data.answer || "Connection successful.";
+        if (window.appToast) appToast("AI provider connection successful.", "success");
+      } catch (error) {
+        if (status) status.textContent = error.message;
+        if (window.appToast) appToast(error.message, "error");
+      } finally {
+        if (button) button.disabled = false;
+        if (saveButton) saveButton.disabled = false;
+      }
+    }
 
     function normalizeFolderRows(rows) {
       if (!Array.isArray(rows)) return [];
@@ -1514,6 +1721,7 @@
     }
 
     function getAutopilotSettingsForSave() {
+      if (!document.getElementById("autopilotEnabled")) return {};
       return {
         autopilot_enabled: Boolean(document.getElementById("autopilotEnabled")?.checked),
         autopilot_mode: document.getElementById("autopilotMode")?.value || "observe",
@@ -2965,6 +3173,52 @@
       loadAutopilotReview();
       loadMobileDevices();
       loadNodes();
+      loadAiSettings();
+
+      const saveAiSettingsBtn = document.getElementById("saveAiSettingsBtn");
+      if (saveAiSettingsBtn) saveAiSettingsBtn.onclick = saveAiSettings;
+      const testAiSettingsBtn = document.getElementById("testAiSettingsBtn");
+      if (testAiSettingsBtn) testAiSettingsBtn.onclick = testAiSettings;
+      const clearGeminiKeyBtn = document.getElementById("clearGeminiKeyBtn");
+      if (clearGeminiKeyBtn) clearGeminiKeyBtn.onclick = () => {
+        clearGeminiKey = true;
+        const input = document.getElementById("geminiApiKeyInput");
+        if (input) input.value = "";
+        const status = document.getElementById("aiSettingsStatus");
+        if (status) status.textContent = "Gemini key will be cleared when you save.";
+      };
+      const clearOpenaiKeyBtn = document.getElementById("clearOpenaiKeyBtn");
+      if (clearOpenaiKeyBtn) clearOpenaiKeyBtn.onclick = () => {
+        clearOpenaiKey = true;
+        const input = document.getElementById("openaiApiKeyInput");
+        if (input) input.value = "";
+        const status = document.getElementById("aiSettingsStatus");
+        if (status) status.textContent = "OpenAI key will be cleared when you save.";
+      };
+      const geminiApiKeyInput = document.getElementById("geminiApiKeyInput");
+      if (geminiApiKeyInput) geminiApiKeyInput.oninput = () => {
+        if (geminiApiKeyInput.value.trim()) clearGeminiKey = false;
+      };
+      const openaiApiKeyInput = document.getElementById("openaiApiKeyInput");
+      if (openaiApiKeyInput) openaiApiKeyInput.oninput = () => {
+        if (openaiApiKeyInput.value.trim()) clearOpenaiKey = false;
+      };
+      document.querySelectorAll("[data-secret-target]").forEach((toggle) => {
+        toggle.onclick = () => {
+          const input = document.getElementById(toggle.dataset.secretTarget || "");
+          if (!input) return;
+          const reveal = input.type === "password";
+          input.type = reveal ? "text" : "password";
+          toggle.textContent = reveal ? "Hide" : "Show";
+          toggle.setAttribute("aria-pressed", reveal ? "true" : "false");
+        };
+      });
+      document.querySelectorAll('input[name="wizardAiProvider"]').forEach((radio) => {
+        radio.onchange = () => {
+          const status = document.getElementById("aiSettingsStatus");
+          if (status) status.textContent = `${radio.parentElement?.innerText?.split("\n")[0] || "Provider"} selected. Save and test to apply it.`;
+        };
+      });
 
       // Events + Storage
       resizeHistoryPane("eventsTablePane", "eventsVisibleRowsSelect");

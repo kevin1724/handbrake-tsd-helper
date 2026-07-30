@@ -1,0 +1,96 @@
+name: Publish ByteSqueeze Android
+
+on:
+  push:
+    tags:
+      - "bytesqueeze-v*"
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Release tag, for example bytesqueeze-v0.3.12
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bytesqueeze-android-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build-release:
+    name: Test, build, and publish APK
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile/bytesqueeze
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Java
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          pub-cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Generate launcher icons
+        run: dart run flutter_launcher_icons
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
+
+      - name: Build release APK
+        run: flutter build apk --release
+
+      - name: Name and checksum the APK
+        id: package
+        shell: bash
+        run: |
+          version="$(awk '/^version:/ {print $2; exit}' pubspec.yaml)"
+          version_name="${version%%+*}"
+          mkdir -p dist
+          apk="dist/ByteSqueeze-${version_name}.apk"
+          cp build/app/outputs/flutter-apk/app-release.apk "$apk"
+          sha256sum "$apk" > "${apk}.sha256"
+          echo "version=$version_name" >> "$GITHUB_OUTPUT"
+          echo "apk=$apk" >> "$GITHUB_OUTPUT"
+
+      - name: Publish GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          INPUT_RELEASE_TAG: ${{ inputs.release_tag }}
+          PACKAGE_APK: ${{ steps.package.outputs.apk }}
+          PACKAGE_VERSION: ${{ steps.package.outputs.version }}
+        shell: bash
+        run: |
+          release_tag="${INPUT_RELEASE_TAG:-$GITHUB_REF_NAME}"
+          if [[ "$release_tag" != bytesqueeze-v* ]]; then
+            echo "Release tag must start with bytesqueeze-v" >&2
+            exit 1
+          fi
+          if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$release_tag" "$PACKAGE_APK" "${PACKAGE_APK}.sha256" --clobber --repo "$GITHUB_REPOSITORY"
+          else
+            gh release create "$release_tag" "$PACKAGE_APK" "${PACKAGE_APK}.sha256" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "ByteSqueeze ${PACKAGE_VERSION}" \
+              --generate-notes \
+              --latest
+          fi

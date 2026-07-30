@@ -828,6 +828,21 @@ def _job_encode_metadata(job: dict | None) -> dict:
     )
 
 
+def _job_learning_metadata(metadata: dict | None) -> dict:
+    """Keep the small, safe provenance needed for post-encode learning."""
+    metadata = metadata if isinstance(metadata, dict) else {}
+    context = metadata.get("smart_feedback_context")
+    feedback = metadata.get("quality_feedback")
+    return {
+        "smart_preset": bool(metadata.get("smart_preset", False)),
+        "smart_profile_id": str(metadata.get("smart_profile_id") or "")[:80],
+        "smart_candidate_id": str(metadata.get("smart_candidate_id") or "")[:80],
+        "automation_source": str(metadata.get("automation_source") or "")[:40],
+        "smart_feedback_context": context if isinstance(context, dict) else None,
+        "quality_feedback": feedback if isinstance(feedback, dict) else None,
+    }
+
+
 # -------------------------------------------------------------------
 # Persistence: saving / loading jobs.json
 # -------------------------------------------------------------------
@@ -858,6 +873,7 @@ def save_jobs():
                 "video_codec": j.get("video_codec"),
                 "encoder_family": j.get("encoder_family"),
                 "bit_depth": j.get("bit_depth"),
+                **_job_learning_metadata(j),
                 "log": j.get("log", ""),
                 "returncode": j.get("returncode"),
                 "pid": None,  # never persist the actual pid
@@ -959,6 +975,7 @@ def load_jobs():
                 "video_codec": method.get("video_codec"),
                 "encoder_family": method.get("encoder_family"),
                 "bit_depth": method.get("bit_depth"),
+                **_job_learning_metadata(j),
                 "log": j.get("log", ""),
                 "returncode": j.get("returncode"),
                 "pid": None,
@@ -1071,6 +1088,7 @@ def create_job(src: str, preset: str, extra_args: str = "", preset_bundle: dict 
         "video_codec": method.get("video_codec"),
         "encoder_family": method.get("encoder_family"),
         "bit_depth": method.get("bit_depth"),
+        **_job_learning_metadata(encode_metadata),
         "log": "",
         "returncode": None,
         "pid": None,
@@ -1220,6 +1238,7 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "last_error": "",
     }
     method = _encode_metadata_from_extra_args(extra_args, preset, encode_metadata or transfer.get("encode_metadata"))
+    learning_metadata = encode_metadata or transfer.get("encode_metadata")
     jobs[job_id] = {
         "status": "queued",
         "src": display_src,
@@ -1234,6 +1253,7 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "video_codec": method.get("video_codec"),
         "encoder_family": method.get("encoder_family"),
         "bit_depth": method.get("bit_depth"),
+        **_job_learning_metadata(learning_metadata),
         "log": "",
         "returncode": None,
         "pid": None,
@@ -1314,6 +1334,7 @@ def list_jobs_for_api() -> list[dict]:
                 "video_codec": j.get("video_codec") or method.get("video_codec"),
                 "encoder_family": j.get("encoder_family") or method.get("encoder_family"),
                 "bit_depth": j.get("bit_depth") or method.get("bit_depth"),
+                **_job_learning_metadata(j),
                 "mode": j.get("mode", "local"),
                 "transfer": _remote_transfer_public(j.get("transfer")) if j.get("mode") == "remote_transfer" else None,
                 "status": j.get("status"),

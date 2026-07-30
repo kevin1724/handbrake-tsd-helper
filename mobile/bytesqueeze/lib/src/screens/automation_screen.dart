@@ -28,8 +28,10 @@ class _AutomationScreenState extends State<AutomationScreen> {
   String _start = '00:00';
   String _end = '23:59';
   bool _scanEnabled = false;
+  bool _continuousLearning = true;
   double _stabilityMinutes = 10;
   bool _saving = false;
+  bool _tourScheduled = false;
 
   void _hydrate() {
     final settings = asMap(widget.controller.automation['settings']);
@@ -47,6 +49,8 @@ class _AutomationScreenState extends State<AutomationScreen> {
     _start = '${settings['autopilot_schedule_start'] ?? '00:00'}';
     _end = '${settings['autopilot_schedule_end'] ?? '23:59'}';
     _scanEnabled = settings['beta_auto_scan_enabled'] == true;
+    _continuousLearning =
+        settings['autopilot_continuous_learning_enabled'] != false;
     _stabilityMinutes =
         (settings['beta_auto_scan_file_stability_minutes'] as num?)
                 ?.toDouble() ??
@@ -58,13 +62,23 @@ class _AutomationScreenState extends State<AutomationScreen> {
   Widget build(BuildContext context) {
     if (!_hydrated) _hydrate();
     final status = asMap(widget.controller.automation['status']);
+    final onboarding = asMap(status['onboarding']);
     final autopilot = asMap(status['autopilot']);
     final readiness = asMap(status['readiness']);
+    final continuousLearning = asMap(status['continuous_learning']);
     final checks = asList(readiness['checks']);
     final decisions = asList(autopilot['decisions']);
     final smartProfile = asMap(widget.controller.smartPresets['profile']);
     final learning = asMap(widget.controller.smartPresets['learning']);
     final ready = readiness['ready'] == true;
+    if (!_tourScheduled &&
+        !widget.controller.demoMode &&
+        onboarding['tour_completed'] != true) {
+      _tourScheduled = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _showTour();
+      });
+    }
 
     return RefreshIndicator(
       onRefresh: widget.controller.refreshAll,
@@ -81,14 +95,14 @@ class _AutomationScreenState extends State<AutomationScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          const Text('GUIDED AUTOMATION',
+                          const Text('SELF-RUNNING ENCODING',
                               style: TextStyle(
                                   color: ByteSqueezeColors.cyan,
                                   fontSize: 11,
                                   fontWeight: FontWeight.w800,
                                   letterSpacing: 1.6)),
                           const SizedBox(height: 5),
-                          Text('Automation',
+                          Text('Autopilot',
                               style: Theme.of(context).textTheme.headlineLarge),
                           const SizedBox(height: 4),
                           const Text(
@@ -112,9 +126,15 @@ class _AutomationScreenState extends State<AutomationScreen> {
                 _AutopilotGuideCard(
                   onProfile: _applyProfile,
                   enabled: widget.controller.canControl,
+                  onTour: _restartTour,
+                  onGuide: _showGuide,
                 ),
                 const SizedBox(height: 14),
                 _AutopilotTrainingCard(controller: widget.controller),
+                const SizedBox(height: 14),
+                _CompletedFeedbackCard(
+                    controller: widget.controller,
+                    learning: continuousLearning),
                 const SizedBox(height: 14),
                 SurfaceCard(
                   gradient: const LinearGradient(
@@ -255,6 +275,18 @@ class _AutomationScreenState extends State<AutomationScreen> {
                         subtitle: const Text(
                             'Incrementally discover new and changed downloads.'),
                         secondary: const Icon(Icons.radar_rounded),
+                      ),
+                      SwitchListTile.adaptive(
+                        contentPadding: EdgeInsets.zero,
+                        value: _continuousLearning,
+                        onChanged: widget.controller.canControl
+                            ? (value) => setState(
+                                () => _continuousLearning = value)
+                            : null,
+                        title: const Text('Continue learning after playback'),
+                        subtitle: const Text(
+                            'Ask how completed learned encodes actually looked and sounded.'),
+                        secondary: const Icon(Icons.rate_review_outlined),
                       ),
                       _SliderSetting(
                         label: 'Download write-safety window',
@@ -432,6 +464,7 @@ class _AutomationScreenState extends State<AutomationScreen> {
         'autopilot_max_active_jobs': _maxActive.round(),
         'autopilot_schedule_start': _start,
         'autopilot_schedule_end': _end,
+        'autopilot_continuous_learning_enabled': _continuousLearning,
         'beta_auto_scan_enabled': _scanEnabled,
         'beta_auto_scan_file_stability_enabled': true,
         'beta_auto_scan_file_stability_minutes': _stabilityMinutes.round(),
@@ -483,6 +516,52 @@ class _AutomationScreenState extends State<AutomationScreen> {
     ));
   }
 
+  Future<void> _restartTour() async {
+    try {
+      if (widget.controller.canControl) {
+        await widget.controller.setAutopilotTourCompleted(false);
+      }
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
+      }
+    }
+    if (mounted) await _showTour();
+  }
+
+  Future<void> _showTour() async {
+    final completed = await showModalBottomSheet<bool>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: ByteSqueezeColors.navy,
+      showDragHandle: true,
+      builder: (context) => const _AutopilotTourSheet(),
+    );
+    if (completed == true && widget.controller.canControl) {
+      try {
+        await widget.controller.setAutopilotTourCompleted(true);
+      } catch (error) {
+        if (mounted) {
+          ScaffoldMessenger.of(context)
+              .showSnackBar(SnackBar(content: Text('$error')));
+        }
+      }
+    }
+  }
+
+  Future<void> _showGuide() async {
+    await showModalBottomSheet<void>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      backgroundColor: ByteSqueezeColors.navy,
+      showDragHandle: true,
+      builder: (context) => const _AutopilotGuideSheet(),
+    );
+  }
+
   Future<void> _run(Future<void> Function() action, {String? success}) async {
     try {
       await action();
@@ -497,11 +576,380 @@ class _AutomationScreenState extends State<AutomationScreen> {
   }
 }
 
+class _CompletedFeedbackCard extends StatelessWidget {
+  const _CompletedFeedbackCard(
+      {required this.controller, required this.learning});
+
+  final AppController controller;
+  final Map<String, dynamic> learning;
+
+  @override
+  Widget build(BuildContext context) {
+    final enabled = learning['enabled'] != false;
+    final jobs = asList(learning['jobs']);
+    final pending = (learning['pending'] as num?)?.toInt() ?? 0;
+    return SurfaceCard(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          Row(
+            children: [
+              const Icon(Icons.rate_review_outlined,
+                  color: ByteSqueezeColors.cyan),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text('After-watch feedback',
+                        style: Theme.of(context).textTheme.titleLarge),
+                    const Text(
+                        'Correct presets after watching the completed encode',
+                        style: TextStyle(
+                            color: ByteSqueezeColors.muted, fontSize: 12)),
+                  ],
+                ),
+              ),
+              StatusPill(
+                  label: '$pending waiting',
+                  color: pending > 0
+                      ? ByteSqueezeColors.amber
+                      : ByteSqueezeColors.mint),
+            ],
+          ),
+          const SizedBox(height: 13),
+          if (!enabled)
+            const Text(
+                'Continuous learning is off. Turn it on in Operating policy to review completed learned jobs.',
+                style: TextStyle(color: ByteSqueezeColors.muted))
+          else if (jobs.isEmpty)
+            const Text(
+                'Completed Autopilot and Smart Preset jobs will appear here after they finish.',
+                style: TextStyle(color: ByteSqueezeColors.muted))
+          else
+            ...jobs.take(5).map((value) {
+              final job = asMap(value);
+              final needsFeedback = job['needs_feedback'] == true;
+              return Padding(
+                padding: const EdgeInsets.only(top: 8),
+                child: DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: ByteSqueezeColors.raised,
+                    borderRadius: BorderRadius.circular(14),
+                    border: Border.all(color: ByteSqueezeColors.line),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(12),
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.stretch,
+                      children: [
+                        Text('${job['title'] ?? 'Completed encode'}',
+                            maxLines: 2,
+                            overflow: TextOverflow.ellipsis,
+                            style:
+                                const TextStyle(fontWeight: FontWeight.w800)),
+                        const SizedBox(height: 3),
+                        Text(
+                            '${job['candidate_id'] ?? 'Smart preset'} - saved ${formatBytes(job['saved_bytes'])}',
+                            style: const TextStyle(
+                                color: ByteSqueezeColors.muted, fontSize: 12)),
+                        const SizedBox(height: 10),
+                        if (needsFeedback)
+                          Row(
+                            children: [
+                              Expanded(
+                                child: FilledButton.icon(
+                                  onPressed: controller.canControl
+                                      ? () => _submit(context, job,
+                                          'approve', 'looks_good')
+                                      : null,
+                                  icon: const Icon(
+                                      Icons.thumb_up_alt_outlined, size: 18),
+                                  label: const Text('Looked good'),
+                                ),
+                              ),
+                              const SizedBox(width: 8),
+                              Expanded(
+                                child: OutlinedButton.icon(
+                                  onPressed: controller.canControl
+                                      ? () => _reportProblem(context, job)
+                                      : null,
+                                  icon: const Icon(Icons.tune_rounded, size: 18),
+                                  label: const Text('Problem'),
+                                ),
+                              ),
+                            ],
+                          )
+                        else
+                          Text(
+                              'Feedback saved: ${asMap(job['feedback'])['verdict'] ?? 'done'}',
+                              style: const TextStyle(
+                                  color: ByteSqueezeColors.mint,
+                                  fontWeight: FontWeight.w700)),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _reportProblem(
+      BuildContext context, Map<String, dynamic> job) async {
+    final reason = await showModalBottomSheet<String>(
+      context: context,
+      showDragHandle: true,
+      builder: (sheetContext) => SafeArea(
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            const ListTile(
+              title: Text('What was wrong after watching?',
+                  style: TextStyle(fontWeight: FontWeight.w800)),
+              subtitle: Text('This changes future choices for similar media.'),
+            ),
+            for (final choice in const [
+              ('quality', Icons.high_quality_rounded, 'Picture quality'),
+              ('playback', Icons.play_circle_outline, 'Playback or compatibility'),
+              ('audio', Icons.volume_up_outlined, 'Audio choice'),
+              ('subtitles', Icons.subtitles_outlined, 'Subtitle choice'),
+              ('size', Icons.compress_rounded, 'File was too large'),
+              ('other', Icons.more_horiz_rounded, 'Something else'),
+            ])
+              ListTile(
+                leading: Icon(choice.$2),
+                title: Text(choice.$3),
+                onTap: () => Navigator.pop(sheetContext, choice.$1),
+              ),
+          ],
+        ),
+      ),
+    );
+    if (reason != null && context.mounted) {
+      await _submit(context, job, 'reject', reason);
+    }
+  }
+
+  Future<void> _submit(BuildContext context, Map<String, dynamic> job,
+      String verdict, String reason) async {
+    try {
+      await controller.submitCompletedEncodeFeedback(
+          '${job['id'] ?? ''}', verdict, reason);
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+          content: Text('Feedback saved for future similar encodes.')));
+    } catch (error) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$error')));
+    }
+  }
+}
+
+class _AutopilotTourSheet extends StatefulWidget {
+  const _AutopilotTourSheet();
+
+  @override
+  State<_AutopilotTourSheet> createState() => _AutopilotTourSheetState();
+}
+
+class _AutopilotTourSheetState extends State<_AutopilotTourSheet> {
+  int _step = 0;
+
+  static const _steps = [
+    (
+      Icons.folder_copy_outlined,
+      'Map only the folders you trust',
+      'Set Movies and Shows folders on the web server. Autopilot never searches outside those mapped locations.'
+    ),
+    (
+      Icons.visibility_outlined,
+      'Start safely in Observe',
+      'Observe scans and explains what it would select without adding anything to the queue.'
+    ),
+    (
+      Icons.compare_rounded,
+      'Teach with accurate previews',
+      'Generate a real comparison below, inspect the original and proposal, then approve it or say what needs improvement. Two consistent reviews normally unlock learned automation.'
+    ),
+    (
+      Icons.tune_rounded,
+      'Choose clear guardrails',
+      'Set the stable-file wait, minimum savings, schedule, batch size, and maximum active jobs before switching to Manage.'
+    ),
+    (
+      Icons.rate_review_outlined,
+      'Keep teaching after playback',
+      'If a completed encode looks or sounds wrong later, report it here. Picture, playback, audio, subtitles, and size feedback all change future choices.'
+    ),
+  ];
+
+  @override
+  Widget build(BuildContext context) {
+    final step = _steps[_step];
+    final last = _step == _steps.length - 1;
+    return FractionallySizedBox(
+      heightFactor: .82,
+      child: Padding(
+        padding: const EdgeInsets.fromLTRB(24, 8, 24, 24),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text('Autopilot guided setup',
+                      style: TextStyle(
+                          fontSize: 21, fontWeight: FontWeight.w900)),
+                ),
+                Text('${_step + 1}/${_steps.length}',
+                    style: const TextStyle(color: ByteSqueezeColors.muted)),
+              ],
+            ),
+            const SizedBox(height: 12),
+            LinearProgressIndicator(value: (_step + 1) / _steps.length),
+            Expanded(
+              child: Center(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                          color: ByteSqueezeColors.cyan.withValues(alpha: .12),
+                          shape: BoxShape.circle),
+                      child: Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Icon(step.$1,
+                            size: 54, color: ByteSqueezeColors.cyan),
+                      ),
+                    ),
+                    const SizedBox(height: 24),
+                    Text(step.$2,
+                        textAlign: TextAlign.center,
+                        style: Theme.of(context).textTheme.headlineSmall),
+                    const SizedBox(height: 12),
+                    Text(step.$3,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                            color: ByteSqueezeColors.muted,
+                            fontSize: 15,
+                            height: 1.45)),
+                  ],
+                ),
+              ),
+            ),
+            Row(
+              children: [
+                if (_step > 0)
+                  TextButton.icon(
+                    onPressed: () => setState(() => _step--),
+                    icon: const Icon(Icons.arrow_back_rounded),
+                    label: const Text('Back'),
+                  )
+                else
+                  const Spacer(),
+                const Spacer(),
+                FilledButton.icon(
+                  onPressed: () {
+                    if (last) {
+                      Navigator.pop(context, true);
+                    } else {
+                      setState(() => _step++);
+                    }
+                  },
+                  icon: Icon(last
+                      ? Icons.check_circle_outline_rounded
+                      : Icons.arrow_forward_rounded),
+                  label: Text(last ? 'Start with Observe' : 'Next'),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _AutopilotGuideSheet extends StatelessWidget {
+  const _AutopilotGuideSheet();
+
+  @override
+  Widget build(BuildContext context) {
+    const sections = [
+      (
+        '1. Set up',
+        'Map Movies and Shows on the web, choose Safe starter or Balanced, keep Observe selected, enable drive watching, and save.'
+      ),
+      (
+        '2. Train',
+        'In Preview training, generate an accurate sample. Compare faces, motion, dark scenes, subtitles, and text edges. Approve good results or identify the problem.'
+      ),
+      (
+        '3. Verify',
+        'Run a decision cycle in Observe. Read the readiness checks and latest decisions until the selected and skipped work makes sense.'
+      ),
+      (
+        '4. Automate',
+        'Switch to Manage only after training is ready. Manage still obeys stable-file waits, schedule, savings, queue limits, output validation, and source protection.'
+      ),
+      (
+        '5. Continue learning',
+        'After watching completed learned encodes, use After-watch feedback. A quality problem favors a roomier preset; a size problem favors a smaller one; audio and subtitle reports influence track choices.'
+      ),
+      (
+        'If something is unclear',
+        'Stay in Observe, generate another preview from a different title, and check Readiness. Nothing is automatically queued while Observe is active.'
+      ),
+    ];
+    return FractionallySizedBox(
+      heightFactor: .9,
+      child: ListView(
+        padding: const EdgeInsets.fromLTRB(22, 8, 22, 36),
+        children: [
+          Text('Autopilot guide',
+              style: Theme.of(context).textTheme.headlineMedium),
+          const SizedBox(height: 6),
+          const Text('The complete phone workflow, from setup to feedback.',
+              style: TextStyle(color: ByteSqueezeColors.muted)),
+          const SizedBox(height: 18),
+          ...sections.map((section) => Padding(
+                padding: const EdgeInsets.only(bottom: 12),
+                child: SurfaceCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(section.$1,
+                          style: const TextStyle(fontWeight: FontWeight.w900)),
+                      const SizedBox(height: 7),
+                      Text(section.$2,
+                          style: const TextStyle(
+                              color: ByteSqueezeColors.muted, height: 1.4)),
+                    ],
+                  ),
+                ),
+              )),
+        ],
+      ),
+    );
+  }
+}
+
 class _AutopilotGuideCard extends StatelessWidget {
-  const _AutopilotGuideCard({required this.onProfile, required this.enabled});
+  const _AutopilotGuideCard({
+    required this.onProfile,
+    required this.enabled,
+    required this.onTour,
+    required this.onGuide,
+  });
 
   final ValueChanged<String> onProfile;
   final bool enabled;
+  final VoidCallback onTour;
+  final VoidCallback onGuide;
 
   @override
   Widget build(BuildContext context) {
@@ -586,6 +1034,23 @@ class _AutopilotGuideCard extends StatelessWidget {
                   ],
                 ),
               )),
+          Wrap(
+            spacing: 8,
+            runSpacing: 8,
+            children: [
+              OutlinedButton.icon(
+                onPressed: onTour,
+                icon: const Icon(Icons.route_outlined),
+                label: const Text('Restart guided tour'),
+              ),
+              TextButton.icon(
+                onPressed: onGuide,
+                icon: const Icon(Icons.menu_book_outlined),
+                label: const Text('Read full guide'),
+              ),
+            ],
+          ),
+          const SizedBox(height: 10),
           const Divider(),
           const Text('Pick a starting policy',
               style: TextStyle(fontWeight: FontWeight.w800)),

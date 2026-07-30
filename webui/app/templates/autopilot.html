@@ -1,0 +1,180 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HandBrake TSD Helper - Autopilot</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  <style>
+    .auto-shell{max-width:1500px;margin:0 auto}.auto-hero{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:24px 3px 18px}.auto-hero h1{margin:4px 0 6px;font-size:clamp(30px,4vw,45px);letter-spacing:-.04em}.auto-hero p{max-width:720px;margin:0;color:rgba(229,229,229,.65)}
+    .autopilot-page [hidden]{display:none!important}
+    .auto-kicker{color:#67e8f9;font-size:12px;font-weight:850;letter-spacing:.14em;text-transform:uppercase}.auto-layout{display:grid;grid-template-columns:minmax(0,1.45fr) minmax(320px,.65fr);gap:16px}.auto-stack{display:grid;gap:16px;min-width:0}.auto-card{border:1px solid rgba(255,255,255,.09);border-radius:18px;background:rgba(22,26,32,.88);overflow:hidden}.auto-card-head{display:flex;align-items:flex-start;justify-content:space-between;gap:15px;padding:18px 20px;border-bottom:1px solid rgba(255,255,255,.07)}.auto-card-head h2{margin:2px 0 4px;font-size:20px}.auto-card-head p{margin:0;color:rgba(229,229,229,.58);font-size:12px}.auto-card-body{padding:18px 20px}
+    .auto-overview{display:grid;grid-template-columns:150px 1fr;gap:18px;align-items:stretch}.auto-score{display:grid;place-items:center;align-content:center;border:1px solid rgba(34,211,238,.25);border-radius:15px;background:rgba(34,211,238,.07);text-align:center}.auto-score strong{font-size:35px}.auto-score span{color:rgba(229,229,229,.56);font-size:11px}.auto-checks{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:9px}.auto-check{display:grid;grid-template-columns:24px 1fr;gap:8px;padding:10px;border:1px solid rgba(255,255,255,.07);border-radius:11px;background:rgba(255,255,255,.025)}.auto-check>span{display:grid;place-items:center;width:22px;height:22px;border-radius:50%;font-size:11px;font-weight:900}.auto-check.ok>span{color:#bbf7d0;background:rgba(34,197,94,.15)}.auto-check.warn>span{color:#fde68a;background:rgba(245,158,11,.14)}.auto-check strong,.auto-check small{display:block}.auto-check strong{font-size:12px}.auto-check small{margin-top:3px;color:rgba(229,229,229,.54)}
+    .auto-steps{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:9px}.auto-step{position:relative;display:grid;gap:7px;min-height:122px;padding:13px;border:1px solid rgba(255,255,255,.08);border-radius:13px;background:rgba(255,255,255,.025)}.auto-step-number{display:grid;place-items:center;width:27px;height:27px;border-radius:50%;color:#a5f3fc;background:rgba(22,199,214,.13);font-size:12px;font-weight:900}.auto-step.done{border-color:rgba(34,197,94,.23);background:rgba(34,197,94,.04)}.auto-step.done .auto-step-number{color:#bbf7d0;background:rgba(34,197,94,.17)}.auto-step strong{font-size:13px}.auto-step small{color:rgba(229,229,229,.52)}
+    .training-status{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:13px;border:1px solid rgba(34,211,238,.18);border-radius:13px;background:rgba(34,211,238,.05)}.training-meter{height:7px;margin-top:9px;overflow:hidden;border-radius:999px;background:rgba(255,255,255,.08)}.training-meter span{display:block;width:0;height:100%;border-radius:inherit;background:linear-gradient(90deg,#06b6d4,#22c55e);transition:width .25s}.training-media{margin-top:15px}.training-media video{display:block;width:100%;max-height:540px;border-radius:14px;background:#000}.training-frames{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px}.training-frames figure{margin:0;overflow:hidden;border:1px solid rgba(255,255,255,.08);border-radius:12px}.training-frames img{display:block;width:100%;aspect-ratio:16/9;object-fit:cover;background:#07090b}.training-frames figcaption{padding:8px;color:rgba(229,229,229,.58);font-size:11px;font-weight:800}.training-progress{margin:14px 0;padding:12px;border-radius:12px;background:rgba(255,255,255,.035)}.training-progress>div{height:8px;overflow:hidden;border-radius:99px;background:rgba(255,255,255,.08)}.training-progress span{display:block;height:100%;background:#22d3ee}.training-progress small{display:block;margin-top:6px;color:rgba(229,229,229,.57)}
+    .policy-profiles{display:grid;grid-template-columns:repeat(3,1fr);gap:9px;margin-bottom:14px}.policy-profile{display:grid;gap:3px;text-align:left;min-height:66px;padding:10px 12px}.policy-profile small{opacity:.63}.policy-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}.policy-grid label{display:grid;gap:6px;color:rgba(229,229,229,.62);font-size:12px}.policy-grid input,.policy-grid select{width:100%;min-height:38px}.policy-wide{grid-column:span 2}.policy-toggle{display:flex!important;align-items:center;gap:9px;padding:11px;border:1px solid rgba(255,255,255,.08);border-radius:11px;background:rgba(255,255,255,.025);color:#fff!important}.policy-toggle input{width:auto;min-height:0}.policy-note{margin:14px 0;padding:11px 13px;border-left:3px solid #22d3ee;background:rgba(34,211,238,.055);color:rgba(229,229,229,.67);font-size:12px}
+    .quality-list{display:grid;gap:10px}.quality-row{padding:13px;border:1px solid rgba(255,255,255,.08);border-radius:12px;background:rgba(255,255,255,.025)}.quality-row-head{display:flex;justify-content:space-between;gap:10px}.quality-row strong,.quality-row small{display:block}.quality-row small{margin-top:3px;color:rgba(229,229,229,.53)}.quality-actions{display:flex;flex-wrap:wrap;gap:7px;margin-top:11px}.quality-actions select{min-width:180px}.quality-done{color:#bbf7d0;font-size:12px;font-weight:800}.auto-decisions{display:grid;gap:8px}.auto-decision{display:grid;grid-template-columns:68px 1fr;gap:10px;padding:11px;border:1px solid rgba(255,255,255,.07);border-radius:11px}.auto-decision .tag{align-self:start;padding:4px 7px;border-radius:999px;text-align:center;color:#cbd5e1;background:rgba(148,163,184,.12);font-size:10px;font-weight:900;text-transform:uppercase}.auto-decision .tag.eligible{color:#bbf7d0;background:rgba(34,197,94,.13)}.auto-decision .tag.wait{color:#fde68a;background:rgba(245,158,11,.13)}.auto-decision strong,.auto-decision small{display:block}.auto-decision small{margin-top:4px;color:rgba(229,229,229,.53)}
+    .guide-index{display:grid;gap:8px}.guide-index a{display:flex;justify-content:space-between;gap:10px;padding:10px 11px;border:1px solid rgba(255,255,255,.07);border-radius:10px;color:#fff;text-decoration:none;background:rgba(255,255,255,.02)}.guide-docs h3{margin:22px 0 7px}.guide-docs p,.guide-docs li{color:rgba(229,229,229,.65);font-size:13px;line-height:1.55}.guide-docs ol,.guide-docs ul{padding-left:20px}.guide-callout{padding:12px;border:1px solid rgba(34,197,94,.2);border-radius:11px;background:rgba(34,197,94,.055);color:#bbf7d0;font-size:12px}
+    .tour-backdrop{position:fixed;inset:0;z-index:1200;display:grid;place-items:center;padding:20px;background:rgba(2,6,12,.82);backdrop-filter:blur(8px)}.tour-backdrop[hidden]{display:none}.tour-panel{width:min(650px,100%);border:1px solid rgba(34,211,238,.3);border-radius:22px;background:#151a21;box-shadow:0 24px 90px rgba(0,0,0,.7);overflow:hidden}.tour-progress{height:5px;background:rgba(255,255,255,.08)}.tour-progress span{display:block;height:100%;background:linear-gradient(90deg,#06b6d4,#22c55e);transition:width .25s}.tour-body{padding:28px}.tour-body .auto-step-number{width:42px;height:42px;margin-bottom:18px;font-size:16px}.tour-body h2{font-size:27px;letter-spacing:-.025em}.tour-body p{color:rgba(229,229,229,.67);line-height:1.6}.tour-actions{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:16px 28px;border-top:1px solid rgba(255,255,255,.07)}.tour-actions>div{display:flex;gap:8px}
+    @media(max-width:1100px){.auto-layout{grid-template-columns:1fr}.auto-steps{grid-template-columns:1fr 1fr}.policy-grid{grid-template-columns:1fr 1fr}}@media(max-width:680px){.auto-hero{align-items:flex-start;flex-direction:column}.auto-overview{grid-template-columns:1fr}.auto-score{min-height:120px}.auto-checks,.auto-steps,.policy-grid,.policy-profiles,.training-frames{grid-template-columns:1fr}.policy-wide{grid-column:auto}.quality-row-head{display:block}.quality-actions>*{width:100%}}
+  </style>
+</head>
+<body class="autopilot-page">
+  <nav class="top-nav app-nav">
+    <a href="/" class="app-brand"><span class="brand-mark">TSD</span><span class="brand-copy"><strong>HandBrake TSD</strong><span>Autonomous media encoding</span></span></a>
+    <div class="nav-links">
+      <a href="/" class="nav-link">Home</a><a href="/library" class="nav-link">Library</a><a href="/jobs" class="nav-link">Jobs</a><a href="/autopilot" class="nav-link nav-link-active">Autopilot</a><a href="/size_wizard" class="nav-link">Size Wizard</a><a href="/settings" class="nav-link">Settings</a>
+    </div>
+    <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Loading</span></div>
+  </nav>
+
+  <main class="auto-shell">
+    <header class="auto-hero">
+      <div><span class="auto-kicker">Guided automation</span><h1>Autopilot, made understandable.</h1><p>Teach it what you like, watch every decision in Observe mode, then let it queue safe work inside limits you control.</p></div>
+      <div class="button-row"><button id="restartTourBtn" class="ghost-btn" type="button">Guided tour</button><button id="runCycleBtn" type="button">Run decision cycle</button></div>
+    </header>
+
+    <section class="auto-card" style="margin-bottom:16px">
+      <div class="auto-card-body auto-overview">
+        <div class="auto-score"><strong id="readinessScore">0%</strong><span>setup readiness</span></div>
+        <div id="readinessChecks" class="auto-checks"><div class="auto-check warn"><span>!</span><div><strong>Loading setup</strong><small>Checking folders, presets, and training.</small></div></div></div>
+      </div>
+    </section>
+
+    <section class="auto-card" style="margin-bottom:16px">
+      <div class="auto-card-head"><div><span class="auto-kicker">Your path to hands-off</span><h2>Four clear steps</h2><p>You can leave and return at any point. Nothing is queued during preview training.</p></div><span id="modePill" class="node-pill node-pill-offline">Disabled</span></div>
+      <div id="setupSteps" class="auto-card-body auto-steps"></div>
+    </section>
+
+    <div class="auto-layout">
+      <div class="auto-stack">
+        <section id="training" class="auto-card">
+          <div class="auto-card-head"><div><span class="auto-kicker">Step 2 - initial training</span><h2>Look at real preview comparisons</h2><p>Autopilot encodes only a short sample. Tell it whether the proposed preset meets your quality expectations.</p></div><span id="trainingCount" class="node-pill node-pill-paired">0 reviewed</span></div>
+          <div class="auto-card-body">
+            <div class="training-status"><div><strong id="trainingHeadline">Two quick reviews unlock learned presets</strong><div class="training-meter"><span id="trainingMeter"></span></div><small id="trainingMessage" class="small">Loading your learning progress...</small></div><button id="startTrainingBtn" type="button">Create first preview</button></div>
+            <div id="trainingProgress" class="training-progress" hidden><div><span id="trainingProgressBar" style="width:0"></span></div><small id="trainingProgressText">Preparing sample...</small></div>
+            <div id="trainingMedia" class="training-media" hidden>
+              <div style="margin-bottom:10px"><strong id="trainingTitle">Training sample</strong><div id="trainingPlan" class="small"></div></div>
+              <video id="trainingVideo" controls muted loop playsinline preload="metadata"></video>
+              <div class="training-frames"><figure><img id="trainingOriginal" alt="Original source frame"><figcaption>Original source</figcaption></figure><figure><img id="trainingProposed" alt="Autopilot proposed frame"><figcaption>Proposed encode</figcaption></figure></div>
+            </div>
+            <div id="trainingActions" class="button-row" style="margin-top:14px" hidden>
+              <button id="approveTrainingBtn" type="button">Looks good</button>
+              <select id="trainingRejectReason" aria-label="What needs to change"><option value="quality">Quality needs work</option><option value="size">File should be smaller</option><option value="speed">Encode should be faster</option><option value="compatibility">Playback compatibility</option><option value="audio">Audio choice is wrong</option><option value="subtitles">Subtitle choice is wrong</option><option value="other">Something else</option></select>
+              <button id="rejectTrainingBtn" class="ghost-btn" type="button">Needs changes</button>
+              <button id="nextTrainingBtn" class="ghost-btn" type="button">Try another sample</button>
+            </div>
+          </div>
+        </section>
+
+        <section id="policy" class="auto-card">
+          <div class="auto-card-head"><div><span class="auto-kicker">Step 3 - guardrails</span><h2>Choose what Autopilot is allowed to do</h2><p>Start in Observe. Manage mode is blocked until required safety and training checks pass.</p></div></div>
+          <div class="auto-card-body">
+            <div id="policyProfiles" class="policy-profiles"></div>
+            <div class="policy-grid">
+              <label class="policy-toggle policy-wide"><input id="policyEnabled" type="checkbox"><span><strong>Run Autopilot on schedule</strong><br><small>Uses the library scan interval.</small></span></label>
+              <label>Operating mode<select id="policyMode"><option value="observe">Observe - explain only</option><option value="manage">Manage - queue safely</option></select></label>
+              <label class="policy-toggle"><input id="continuousLearning" type="checkbox"><span>Ask for feedback after encodes</span></label>
+              <label>Minimum source size (GB)<input id="policyMinSize" type="number" min="0.1" max="1000" step="0.1"></label>
+              <label>Minimum predicted savings (%)<input id="policyMinSavings" type="number" min="0" max="95" step="1"></label>
+              <label>Jobs added per scan<input id="policyBatch" type="number" min="1" max="50" step="1"></label>
+              <label>Maximum active jobs<input id="policyActive" type="number" min="1" max="100" step="1"></label>
+              <label>Schedule starts<input id="policyStart" type="time"></label>
+              <label>Schedule ends<input id="policyEnd" type="time"></label>
+              <label>Stable for this long (minutes)<input id="policyStableMinutes" type="number" min="1" max="240" step="1"></label>
+              <label class="policy-toggle"><input id="policyMovies" type="checkbox"><span>Include movies</span></label>
+              <label class="policy-toggle"><input id="policyShows" type="checkbox"><span>Include TV episodes</span></label>
+            </div>
+            <div class="policy-note"><strong>Safety is always on.</strong> A source must be inside a mapped folder and stable, and the existing verification and oversized-output protections still run during every encode.</div>
+            <div class="button-row"><button id="savePolicyBtn" type="button">Save policy</button><span id="policyStatus" class="small"></span></div>
+          </div>
+        </section>
+
+        <section id="feedback" class="auto-card">
+          <div class="auto-card-head"><div><span class="auto-kicker">Continuous learning</span><h2>How did completed encodes actually look?</h2><p>If you watched something and it looked or sounded wrong, tell Autopilot here. The next similar job will use that lesson.</p></div><span id="feedbackPending" class="node-pill node-pill-idle">0 waiting</span></div>
+          <div id="qualityFeedbackList" class="auto-card-body quality-list"><div class="node-empty">Completed learned encodes will appear here.</div></div>
+        </section>
+
+        <section id="decisions" class="auto-card">
+          <div class="auto-card-head"><div><span class="auto-kicker">Observe before you automate</span><h2>Latest decisions</h2><p>Every file is marked eligible, waiting, or skipped with a plain-language reason.</p></div><button id="refreshStatusBtn" class="ghost-btn" type="button">Refresh</button></div>
+          <div id="decisionList" class="auto-card-body auto-decisions"><div class="node-empty">Run a decision cycle to see what Autopilot would do.</div></div>
+        </section>
+      </div>
+
+      <aside class="auto-stack">
+        <section class="auto-card">
+          <div class="auto-card-head"><div><span class="auto-kicker">Start here</span><h2>Setup shortcuts</h2></div></div>
+          <div class="auto-card-body guide-index"><a href="/settings/beta"><span>Map Movies and Shows folders</span><b>&rarr;</b></a><a href="#training"><span>Train with real previews</span><b>&rarr;</b></a><a href="#policy"><span>Set safe operating limits</span><b>&rarr;</b></a><a href="#decisions"><span>Review decision reasons</span><b>&rarr;</b></a></div>
+        </section>
+        <section id="documentation" class="auto-card">
+          <div class="auto-card-head"><div><span class="auto-kicker">Built-in guide</span><h2>How Autopilot works</h2></div></div>
+          <div class="auto-card-body guide-docs">
+            <div class="guide-callout">Recommended: map folders, approve two good preview samples, use Observe for at least one scan, then switch to Manage.</div>
+            <h3>1. Map your library</h3><p>Autopilot only looks inside the Movies and Shows folders you explicitly map in Library Settings. Refresh the Library after changing folders.</p>
+            <h3>2. Teach visual quality</h3><p>Select <strong>Create preview</strong>. A short section is encoded and shown beside the original. Approve it if you would happily watch a whole movie at that quality. Reject it and choose why if you would not.</p>
+            <h3>3. Observe decisions</h3><p>Observe mode never queues anything. Run a cycle and read why each file is eligible, waiting, or skipped. Adjust minimum size, savings, and schedule until the choices feel right.</p>
+            <h3>4. Enable Manage</h3><p>Manage can add only the configured number of jobs and only while capacity is available. It still waits for files to stop changing and will not remove a source until encode verification succeeds.</p>
+            <h3>5. Keep teaching after playback</h3><p>Completed learned jobs appear in the feedback section. If the movie looked good, approve it. If it looked bad, choose whether quality, size, playback, audio, or subtitles were the problem. This feedback changes later recommendations for similar sources.</p>
+            <h3>What training changes</h3><ul><li>Preferred quality and compression tradeoff for similar resolution and HDR sources.</li><li>Codec, encoder family, and target-size choices.</li><li>Confidence in whether a candidate is safe to choose automatically.</li></ul>
+            <h3>What it never bypasses</h3><ul><li>Mapped-folder boundaries and file stability.</li><li>Queue capacity and your operating schedule.</li><li>Existing output-size checks, encode validation, and source protection.</li></ul>
+            <p><a class="button-link ghost-btn" href="/docs/autopilot" style="display:none">Open full documentation</a></p>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <div id="tourBackdrop" class="tour-backdrop" hidden role="dialog" aria-modal="true" aria-labelledby="tourTitle">
+    <div class="tour-panel"><div class="tour-progress"><span id="tourProgress"></span></div><div class="tour-body"><div id="tourNumber" class="auto-step-number">1</div><span class="auto-kicker">Autopilot guided tour</span><h2 id="tourTitle">Welcome to Autopilot</h2><p id="tourCopy"></p></div><div class="tour-actions"><button id="tourSkipBtn" class="ghost-btn" type="button">Skip for now</button><div><button id="tourBackBtn" class="ghost-btn" type="button">Back</button><button id="tourNextBtn" type="button">Next</button></div></div></div>
+  </div>
+
+  <script>
+    const initialSettings = {{ settings|tojson }};
+    let autoState = null, reviewPoll = 0, tourStep = 0;
+    const $ = id => document.getElementById(id);
+    const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+    const fileName = path => String(path || "").split(/[\\/]/).pop() || "Completed encode";
+    const fmtBytes = value => { let n=Number(value||0),i=0,u=["B","KB","MB","GB","TB"];while(n>=1024&&i<u.length-1){n/=1024;i++}return `${n>=100||i===0?n.toFixed(0):n.toFixed(1)} ${u[i]}` };
+    const settingNumber = (id, fallback, min, max) => Math.max(min,Math.min(max,Number($(id)?.value||fallback)));
+    const toast = (message,type="success") => window.appToast ? appToast(message,type) : null;
+
+    function fillPolicy(settings=initialSettings){
+      $("policyEnabled").checked=Boolean(settings.autopilot_enabled);$("policyMode").value=settings.autopilot_mode||"observe";$("continuousLearning").checked=settings.autopilot_continuous_learning_enabled!==false;
+      $("policyMinSize").value=settings.autopilot_min_size_gb??2;$("policyMinSavings").value=settings.autopilot_min_savings_percent??10;$("policyBatch").value=settings.autopilot_batch_limit??3;$("policyActive").value=settings.autopilot_max_active_jobs??5;
+      $("policyStart").value=settings.autopilot_schedule_start||"00:00";$("policyEnd").value=settings.autopilot_schedule_end||"23:59";$("policyStableMinutes").value=settings.beta_auto_scan_file_stability_minutes??10;$("policyMovies").checked=settings.autopilot_include_movies!==false;$("policyShows").checked=Boolean(settings.autopilot_include_shows);
+    }
+    function policyPayload(){return {autopilot_enabled:$("policyEnabled").checked,autopilot_mode:$("policyMode").value,autopilot_continuous_learning_enabled:$("continuousLearning").checked,autopilot_min_size_gb:settingNumber("policyMinSize",2,.1,1000),autopilot_min_savings_percent:settingNumber("policyMinSavings",10,0,95),autopilot_batch_limit:settingNumber("policyBatch",3,1,50),autopilot_max_active_jobs:settingNumber("policyActive",5,1,100),autopilot_schedule_start:$("policyStart").value||"00:00",autopilot_schedule_end:$("policyEnd").value||"23:59",autopilot_include_movies:$("policyMovies").checked,autopilot_include_shows:$("policyShows").checked,beta_auto_scan_enabled:$("policyEnabled").checked,beta_auto_scan_file_stability_enabled:true,beta_auto_scan_file_stability_minutes:settingNumber("policyStableMinutes",10,1,240)}}
+
+    function renderProfiles(profiles){$("policyProfiles").innerHTML=(profiles||[]).map(p=>`<button class="ghost-btn policy-profile" type="button" data-profile="${escapeHtml(p.id)}"><strong>${escapeHtml(p.name)}</strong><small>${escapeHtml(p.description)}</small></button>`).join("");document.querySelectorAll("[data-profile]").forEach(btn=>btn.onclick=()=>{const p=(profiles||[]).find(row=>row.id===btn.dataset.profile);if(p)fillPolicy({...initialSettings,...p.settings});toast(`${p?.name||"Policy"} loaded. Review and save it.`)})}
+    function renderReadiness(readiness){$("readinessScore").textContent=`${readiness.score||0}%`;$("readinessChecks").innerHTML=(readiness.checks||[]).map(c=>`<div class="auto-check ${c.ok?"ok":"warn"}"><span>${c.ok?"&#10003;":"!"}</span><div><strong>${escapeHtml(c.label)}</strong><small>${escapeHtml(c.detail)}</small></div></div>`).join("")}
+    function renderSteps(data){const checks=Object.fromEntries((data.readiness?.checks||[]).map(c=>[c.key,c.ok]));const learning=data.review?.learning||{};const ap=data.autopilot||{};const steps=[{title:"Map folders",copy:"Choose where Movies and Shows live.",done:checks.library,href:"/settings/beta"},{title:"Train quality",copy:`${learning.feedback_count||0} preview reviews saved.`,done:learning.automation_ready,href:"#training"},{title:"Set guardrails",copy:"Begin with Observe and safe limits.",done:Boolean(ap.enabled),href:"#policy"},{title:"Review and manage",copy:"Read decisions, then enable Manage.",done:ap.enabled&&ap.mode==="manage"&&data.readiness?.ready,href:"#decisions"}];$("setupSteps").innerHTML=steps.map((s,i)=>`<a href="${s.href}" class="auto-step ${s.done?"done":""}" style="color:inherit;text-decoration:none"><span class="auto-step-number">${s.done?"&#10003;":i+1}</span><strong>${s.title}</strong><small>${s.copy}</small></a>`).join("")}
+    function renderDecisions(ap){const decisions=Array.isArray(ap.decisions)?ap.decisions:[];$("decisionList").innerHTML=`<div class="small" style="padding-bottom:4px">${ap.eligible||0} eligible &middot; ${ap.queued||0} queued &middot; ${ap.active_jobs||0}/${ap.max_active_jobs||0} active &middot; schedule ${ap.schedule_open?"open":"closed"}</div>`+(decisions.length?decisions.slice(0,20).map(d=>`<div class="auto-decision"><span class="tag ${escapeHtml(d.decision)}">${escapeHtml(d.decision)}</span><div><strong>${escapeHtml(d.label||fileName(d.path))}</strong><small>${escapeHtml(d.reason)} &middot; ${fmtBytes(d.size_bytes)} &middot; ${escapeHtml(d.preset||"auto")}</small></div></div>`).join(""):`<div class="node-empty">Run a decision cycle to inspect eligible, waiting, and skipped files.</div>`)}
+    function renderQuality(learning){const jobs=Array.isArray(learning.jobs)?learning.jobs:[];$("feedbackPending").textContent=`${learning.pending||0} waiting`;$("qualityFeedbackList").innerHTML=jobs.length?jobs.map(job=>`<article class="quality-row"><div class="quality-row-head"><div><strong>${escapeHtml(job.title||fileName(job.src))}</strong><small>${escapeHtml(job.candidate_id||"Smart preset")} &middot; saved ${fmtBytes(job.saved_bytes)}</small></div>${job.needs_feedback?"":`<span class="quality-done">Feedback saved: ${escapeHtml(job.feedback?.verdict||"done")}</span>`}</div>${job.needs_feedback?`<div class="quality-actions"><button type="button" data-good-job="${escapeHtml(job.id)}">Looked and sounded good</button><select id="reason-${escapeHtml(job.id)}"><option value="quality">Picture quality was bad</option><option value="playback">Playback or compatibility issue</option><option value="audio">Audio was wrong</option><option value="subtitles">Subtitles were wrong</option><option value="size">File was still too large</option><option value="other">Another problem</option></select><button class="ghost-btn" type="button" data-bad-job="${escapeHtml(job.id)}">Report a problem</button></div>`:""}</article>`).join(""):`<div class="node-empty">No completed learned encodes yet. They will appear here after Autopilot or Smart Preset jobs finish.</div>`;document.querySelectorAll("[data-good-job]").forEach(b=>b.onclick=()=>sendQualityFeedback(b.dataset.goodJob,"approve","looks_good"));document.querySelectorAll("[data-bad-job]").forEach(b=>b.onclick=()=>sendQualityFeedback(b.dataset.badJob,"reject",$(`reason-${b.dataset.badJob}`)?.value||"other"))}
+    function renderStatus(data){autoState=data;renderReadiness(data.readiness||{});renderSteps(data);renderProfiles(data.policy_profiles||[]);renderDecisions(data.autopilot||{});renderQuality(data.continuous_learning||{});const ap=data.autopilot||{};$("modePill").textContent=ap.enabled?(ap.mode==="manage"?"Managing":"Observing"):"Disabled";$("modePill").className=`node-pill node-pill-${ap.enabled?(ap.mode==="manage"?"online":"paired"):"offline"}`;const learning=data.review?.learning||{};renderTrainingLearning(learning);if(data.onboarding&&!data.onboarding.tour_completed&&!sessionStorage.getItem("autopilot-tour-dismissed"))openTour(0)}
+    function renderTrainingLearning(learning){const target=Math.max(1,Number(autoState?.onboarding?.training_target||2)),count=Number(learning.feedback_count||0),pct=Math.min(100,Math.round(count/target*100));$("trainingCount").textContent=`${count} reviewed`;$("trainingMeter").style.width=`${pct}%`;$("trainingHeadline").textContent=learning.automation_ready?"Learned presets are ready":"Review real samples to unlock learned presets";$("trainingMessage").textContent=learning.message||`${Math.max(0,target-count)} reviews remaining`}
+
+    function renderReview(review){const preview=review.preview||{},result=preview.result||{},working=["queued","planning","encoding","framing","muxing"].includes(preview.state),ready=preview.state==="done"&&Boolean(result.clip_url||result.old_b64),reviewed=Boolean(review.reviewed);renderTrainingLearning(review.learning||{});$("trainingProgress").hidden=!working;$("trainingProgressBar").style.width=`${Math.max(2,Number(preview.progress||0))}%`;$("trainingProgressText").textContent=preview.message||"Preparing sample...";$("trainingMedia").hidden=!ready;$("trainingActions").hidden=!ready;if(ready){$("trainingTitle").textContent=review.title||"Training sample";$("trainingPlan").textContent=`${review.candidate_name||review.candidate_id||"Smart preset"}${review.candidate_summary?` - ${review.candidate_summary}`:""}`;if(result.clip_url&&$("trainingVideo").dataset.src!==result.clip_url){$("trainingVideo").dataset.src=result.clip_url;$("trainingVideo").src=result.clip_url;$("trainingVideo").load()}if(result.old_b64)$("trainingOriginal").src=`data:image/jpeg;base64,${result.old_b64}`;if(result.new_b64)$("trainingProposed").src=`data:image/jpeg;base64,${result.new_b64}`}
+      $("approveTrainingBtn").hidden=reviewed;$("rejectTrainingBtn").hidden=reviewed;$("trainingRejectReason").hidden=reviewed;$("nextTrainingBtn").hidden=!ready;$("startTrainingBtn").disabled=working;$("startTrainingBtn").textContent=working?"Building preview...":(reviewed?"Create another preview":"Create preview");if(working){clearTimeout(reviewPoll);reviewPoll=setTimeout(loadReview,1400)}}
+    async function loadReview(){try{const r=await fetch("/api/autopilot/review",{cache:"no-store"}),d=await r.json();if(!r.ok)throw Error(d.error||"Training unavailable");renderReview(d.review||{})}catch(e){$("trainingMessage").textContent=e.message}}
+    async function startReview(next=false){$("startTrainingBtn").disabled=true;try{const r=await fetch("/api/autopilot/review",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({next})}),d=await r.json();if(!r.ok)throw Error(d.error||"Could not create preview");renderReview(d.review||{})}catch(e){toast(e.message,"error")}finally{$("startTrainingBtn").disabled=false}}
+    async function submitReview(verdict){const reason=verdict==="approve"?"looks_good":$("trainingRejectReason").value;try{const r=await fetch("/api/autopilot/review/feedback",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({verdict,reason})}),d=await r.json();if(!r.ok)throw Error(d.error||"Could not save feedback");renderReview(d.review||{});await loadStatus();toast(verdict==="approve"?"Saved. Autopilot learned that this quality is acceptable.":"Saved. Future similar plans will account for this problem.")}catch(e){toast(e.message,"error")}}
+    async function sendQualityFeedback(id,verdict,reason){try{const r=await fetch(`/api/autopilot/completed/${encodeURIComponent(id)}/feedback`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({verdict,reason})}),d=await r.json();if(!r.ok)throw Error(d.error||"Could not save feedback");renderQuality(d.continuous_learning||{});toast("Playback feedback saved. Autopilot will use it for similar jobs.")}catch(e){toast(e.message,"error")}}
+    async function loadStatus(){try{const r=await fetch("/api/autopilot/status",{cache:"no-store"}),d=await r.json();if(!r.ok)throw Error(d.error||"Autopilot unavailable");renderStatus(d)}catch(e){toast(e.message,"error")}}
+    async function savePolicy(){const button=$("savePolicyBtn");button.disabled=true;$("policyStatus").textContent="Saving...";try{const r=await fetch("/api/settings",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(policyPayload())}),d=await r.json();if(!r.ok)throw Error(d.error||"Could not save policy");Object.assign(initialSettings,d.settings||{});$("policyStatus").textContent="Saved.";await loadStatus();toast("Autopilot policy saved.")}catch(e){$("policyStatus").textContent=e.message;toast(e.message,"error")}finally{button.disabled=false;setTimeout(()=>{$("policyStatus").textContent=""},3500)}}
+    async function runCycle(){const b=$("runCycleBtn");b.disabled=true;b.textContent="Scanning library...";try{const r=await fetch("/api/autopilot/run",{method:"POST"}),d=await r.json();if(!r.ok)throw Error(d.error||"Decision cycle failed");renderStatus(d);toast("Decision cycle complete. Review the reasons below.")}catch(e){toast(e.message,"error")}finally{b.disabled=false;b.textContent="Run decision cycle"}}
+
+    const tourSlides=[
+      {title:"Autopilot has a safe learning path",copy:"You no longer need to guess which part of the app trains it. This page keeps setup, previews, limits, decisions, and later playback feedback together."},
+      {title:"First, review short real previews",copy:"Autopilot picks a representative file and creates a short side-by-side comparison. Two good approvals are enough to unlock learned preset selection. A preview does not queue the full movie."},
+      {title:"Observe shows its work",copy:"Run a decision cycle in Observe mode. Nothing is queued. You can see which files would qualify and the exact reason others are waiting or skipped."},
+      {title:"Manage stays inside your guardrails",copy:"When training and required checks pass, Manage can queue work within your size, savings, schedule, stability, and capacity limits. Existing output verification remains active."},
+      {title:"Correct it after you actually watch",copy:"A preview cannot catch everything. Completed learned encodes stay in the feedback section so picture, playback, audio, and subtitle problems can improve the next similar choice."}
+    ];
+    function openTour(step=0){tourStep=Math.max(0,Math.min(tourSlides.length-1,step));renderTour();$("tourBackdrop").hidden=false}
+    function renderTour(){const slide=tourSlides[tourStep];$("tourNumber").textContent=String(tourStep+1);$("tourTitle").textContent=slide.title;$("tourCopy").textContent=slide.copy;$("tourProgress").style.width=`${(tourStep+1)/tourSlides.length*100}%`;$("tourBackBtn").disabled=tourStep===0;$("tourNextBtn").textContent=tourStep===tourSlides.length-1?"Finish tour":"Next"}
+    async function closeTour(completed){$("tourBackdrop").hidden=true;if(!completed)sessionStorage.setItem("autopilot-tour-dismissed","1");try{await fetch("/api/autopilot/onboarding",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({completed})})}catch(_e){}}
+    document.addEventListener("DOMContentLoaded",()=>{fillPolicy();$("restartTourBtn").onclick=()=>openTour(0);$("refreshStatusBtn").onclick=loadStatus;$("runCycleBtn").onclick=runCycle;$("savePolicyBtn").onclick=savePolicy;$("startTrainingBtn").onclick=()=>startReview(false);$("nextTrainingBtn").onclick=()=>startReview(true);$("approveTrainingBtn").onclick=()=>submitReview("approve");$("rejectTrainingBtn").onclick=()=>submitReview("reject");$("tourBackBtn").onclick=()=>{tourStep--;renderTour()};$("tourNextBtn").onclick=()=>{if(tourStep>=tourSlides.length-1)closeTour(true);else{tourStep++;renderTour()}};$("tourSkipBtn").onclick=()=>closeTour(false);loadStatus();loadReview()});
+  </script>
+</body>
+</html>

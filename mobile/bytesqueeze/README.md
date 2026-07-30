@@ -5,7 +5,7 @@ ByteSqueeze is the Flutter remote-control app for HandBrake TSD Helper.
 - Android first, with the iOS target maintained from day one
 - Secure one-time pairing and refreshable bearer sessions
 - Content-first dashboard with no persistent branded toolbar
-- Complete movie/show catalog, keyless artwork, upcoming episode calendar,
+- Complete movie/show catalog, TMDb-first artwork with no-key fallback, upcoming episode calendar,
   node-aware queueing, guided Autopilot preview training, Smart Presets,
   storage, and events
 - Automatic switching between a primary home URL and optional Tailscale/away URL
@@ -19,12 +19,14 @@ dart run flutter_launcher_icons
 flutter run
 ```
 
-The pairing code is generated in the TSD web dashboard under **Settings →
-Automation & Apps**. Pair with the home URL and optionally save a Tailscale URL;
+The pairing code is generated in the TSD web dashboard under **Settings >
+Linked Nodes**, in **Companion app access**. Pair with the home URL and optionally save a Tailscale URL;
 ByteSqueeze automatically tries the other address when the current route cannot
 connect. LAN HTTP is enabled on Android for home-server setups.
 
-Autopilot training is available under **Server → Automation**. Generate a short
+Autopilot is a first-class page in the main navigation. Its first-run tour,
+restartable guide, preview training, guardrails, decision history, and
+after-watch feedback use the same learning profile as the web dashboard. Generate a short
 accurate preview, compare the original and proposed frames, then approve it or
 choose what needs improvement. Reviews made on the phone and web dashboard feed
 the same local Smart Preset profile.
@@ -39,6 +41,11 @@ private upload keystore before publishing to Google Play.
 Local release builds are written to `dist/` for installation testing. APK files
 are intentionally ignored by Git; publish signed binaries through a release or
 app-store workflow rather than committing them to the source tree.
+
+Pushing a `bytesqueeze-v*` tag, or manually running the **Publish ByteSqueeze
+Android** GitHub workflow with a release tag, runs analysis and tests, builds the
+release APK, creates its SHA-256 checksum, and attaches both files to the GitHub
+release.
 
 ## iOS
 

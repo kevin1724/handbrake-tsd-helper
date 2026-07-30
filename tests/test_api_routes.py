@@ -7,6 +7,7 @@ from datetime import datetime, timedelta
 from unittest.mock import patch
 
 
+PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 TEST_ROOT = tempfile.mkdtemp(prefix="handbrake-api-tests-")
 TEST_DATA = os.path.join(TEST_ROOT, "data")
 TEST_MEDIA = os.path.join(TEST_ROOT, "media")
@@ -22,10 +23,13 @@ os.environ["FLASK_ENV"] = "production"
 
 from webui.app import create_app  # noqa: E402
 from webui.app import config as app_config  # noqa: E402
+from webui.app import jobs as app_jobs  # noqa: E402
 from webui.app import routes as app_routes  # noqa: E402
-from webui.app.media_metadata import _cache_sidecar, _sidecar_directories  # noqa: E402
+from webui.app import wizard_llm as app_wizard_llm  # noqa: E402
+from webui.app.media_metadata import _cache_sidecar, _choose_movie, _sidecar_directories  # noqa: E402
 from webui.app.smart_presets import (  # noqa: E402
     SMART_PRESETS_FILE,
+    candidate_learning,
     feedback_context,
     record_feedback,
 )
@@ -62,21 +66,134 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(mobile.get_json()["api_version"], "v1")
 
         automation = self.client.get("/settings/automation")
-        self.assertEqual(automation.status_code, 200)
-        self.assertIn(b"Autopilot", automation.data)
-        self.assertIn(b"Companion app access", automation.data)
-        self.assertIn(b"Teach Autopilot what looks good", automation.data)
+        self.assertEqual(automation.status_code, 302)
+        self.assertTrue(automation.headers["Location"].endswith("/autopilot"))
+
+        autopilot_page = self.client.get("/autopilot")
+        self.assertEqual(autopilot_page.status_code, 200)
+        self.assertIn(b"Autopilot, made understandable", autopilot_page.data)
+        self.assertIn(b"Look at real preview comparisons", autopilot_page.data)
+        self.assertIn(b"How did completed encodes actually look", autopilot_page.data)
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "2.2.0")
+        self.assertEqual(status.get_json()["release"], "3.12.0")
+        self.assertIn("continuous_learning", status.get_json())
+        self.assertIn("onboarding", status.get_json())
 
-        library_page = self.client.get("/")
+        library_page = self.client.get("/library")
         self.assertEqual(library_page.status_code, 200)
         self.assertIn(b"Your complete media catalog", library_page.data)
-        dashboard_page = self.client.get("/dashboard")
-        self.assertEqual(dashboard_page.status_code, 200)
-        self.assertIn(b"Operations Dashboard", dashboard_page.data)
+        home_page = self.client.get("/")
+        self.assertEqual(home_page.status_code, 200)
+        self.assertIn(b"Everything important, at a glance", home_page.data)
+        jobs_page = self.client.get("/jobs")
+        self.assertEqual(jobs_page.status_code, 200)
+        self.assertIn(b"Jobs &amp; Queue", jobs_page.data)
+
+    def test_ai_settings_are_secret_safe_and_provider_test_is_grounded(self):
+        page = self.client.get("/settings/ai")
+        self.assertEqual(page.status_code, 200)
+        self.assertIn(b"AI &amp; API Keys", page.data)
+        self.assertIn(b"Create Gemini key", page.data)
+        self.assertIn(b"Save &amp; test selected provider", page.data)
+        self.assertIn(b"Keep English and Spanish audio and subtitles", page.data)
+
+        general_page = self.client.get("/settings")
+        self.assertEqual(general_page.status_code, 200)
+        self.assertIn(b"Looking for the Gemini or OpenAI API-key boxes?", general_page.data)
+        self.assertIn(b'id="ai-api-keys"', general_page.data)
+        with open(os.path.join(PROJECT_ROOT, "webui", "app", "static", "styleui.css"), "r", encoding="utf-8") as handle:
+            self.assertNotIn("body.settings-subpage-main .ai-settings-section", handle.read())
+
+        wizard_page = self.client.get("/size_wizard")
+        self.assertEqual(wizard_page.status_code, 200)
+        self.assertIn(b"Set up Gemini or OpenAI", wizard_page.data)
+        self.assertIn(b'id="wizardAiSetupCard"', wizard_page.data)
+
+        with open(os.path.join(PROJECT_ROOT, "docs", "AI_ADVISOR.md"), "r", encoding="utf-8") as handle:
+            advisor_docs = handle.read()
+        self.assertIn("Docker Compose environment variables", advisor_docs)
+        self.assertIn("GEMINI_API_KEY", advisor_docs)
+        self.assertIn("OPENAI_API_KEY", advisor_docs)
+
+        saved = self.client.post(
+            "/api/ai/settings",
+            json={
+                "provider": "gemini",
+                "gemini_api_key": "test-secret-key",
+                "gemini_model": "gemini-3.6-flash",
+            },
+        )
+        self.assertEqual(saved.status_code, 200, saved.get_data(as_text=True))
+        payload = saved.get_json()
+        self.assertTrue(payload["gemini_api_configured"])
+        self.assertNotIn("gemini_api_key", payload)
+
+        public_settings = self.client.get("/api/settings").get_json()["settings"]
+        self.assertNotIn("gemini_api_key", public_settings)
+        self.assertTrue(public_settings["gemini_api_configured"])
+
+        with patch("webui.app.routes.run_wizard_llm", return_value={"ok": True, "answer": "Connection ready.", "status": {"provider": "gemini"}}) as advisor:
+            tested = self.client.post("/api/ai/test")
+        self.assertEqual(tested.status_code, 200)
+        self.assertIn("Connection ready", tested.get_json()["answer"])
+        advisor.assert_called_once()
+
+        self.client.post("/api/ai/settings", json={"provider": "local", "clear_gemini_key": True})
+
+    def test_gemini_and_openai_advisors_use_supported_json_shapes(self):
+        class FakeResponse:
+            def __init__(self, payload):
+                self.payload = json.dumps(payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                return self.payload
+
+        plan = {
+            "src": os.path.join(TEST_MEDIA, "Private.Movie.mkv"),
+            "probe": {"width": 1920, "height": 1080, "duration_sec": 7200, "source_size_bytes": 10 * 1024**3, "is_hdr": False, "source_type": "movie"},
+            "inputs": {"ai_goal": "balanced", "ai_risk": "safe", "target_mb": 5000, "video_codec": "h265", "encoder_family": "software", "audio_mode": "copy", "audio_tracks": "all", "subtitle_mode": "all"},
+            "estimates": {"encoder": "x265", "quality_label": "Good", "output_resolution": {"width": 1920, "height": 1080}},
+        }
+        model_payload = {"answer": "The plan is balanced and keeps the requested tracks.", "updates": {}, "confidence": "high"}
+
+        with patch(
+            "webui.app.wizard_llm.urlopen",
+            return_value=FakeResponse({"candidates": [{"content": {"parts": [{"text": json.dumps(model_payload)}]}}]}),
+        ) as gemini_call:
+            gemini = app_wizard_llm.run_wizard_llm(
+                "Explain this plan.",
+                plan,
+                {"wizard_ai_provider": "gemini", "gemini_api_key": "gemini-secret", "gemini_model": "gemini-3.6-flash"},
+            )
+        self.assertTrue(gemini["ok"])
+        gemini_request = gemini_call.call_args.args[0]
+        self.assertIn(":generateContent", gemini_request.full_url)
+        self.assertIn("gemini-3.6-flash", gemini_request.full_url)
+        self.assertEqual(gemini_request.get_header("X-goog-api-key"), "gemini-secret")
+
+        with patch(
+            "webui.app.wizard_llm.urlopen",
+            return_value=FakeResponse({"output": [{"content": [{"type": "output_text", "text": json.dumps(model_payload)}]}]}),
+        ) as openai_call:
+            openai = app_wizard_llm.run_wizard_llm(
+                "Explain this plan.",
+                plan,
+                {"wizard_ai_provider": "openai", "openai_api_key": "openai-secret", "openai_model": "gpt-5.6-luna"},
+            )
+        self.assertTrue(openai["ok"])
+        openai_request = openai_call.call_args.args[0]
+        self.assertEqual(openai_request.full_url, "https://api.openai.com/v1/responses")
+        sent = json.loads(openai_call.call_args.kwargs["data"].decode("utf-8"))
+        self.assertEqual(sent["model"], "gpt-5.6-luna")
+        self.assertNotIn("reasoning", sent)
 
     def test_autopilot_preview_training_is_visible_and_records_feedback(self):
         try:
@@ -139,6 +256,54 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertTrue(feedback_review["reviewed"])
         self.assertEqual(feedback_review["learning"]["feedback_count"], 1)
 
+    def test_completed_smart_job_accepts_feedback_only_once(self):
+        job_id = "completed-learning-job"
+        app_jobs.jobs[job_id] = {
+            "id": job_id,
+            "status": "done",
+            "src": os.path.join(TEST_MEDIA, "Completed.Movie.2026.mkv"),
+            "preset": "1080",
+            "smart_preset": True,
+            "smart_candidate_id": "balanced",
+            "automation_source": "autopilot",
+            "smart_feedback_context": {
+                "source": {"kind": "movie", "hdr": False, "resolution": "1080p"},
+                "features": {"codec": "h265", "target_ratio": 0.45},
+                "plan": {"encoder": "x265"},
+            },
+            "finished_at": 123.0,
+        }
+        try:
+            response = self.client.post(
+                f"/api/autopilot/completed/{job_id}/feedback",
+                json={"verdict": "reject", "reason": "audio"},
+            )
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            self.assertEqual(response.get_json()["feedback"]["reason"], "audio")
+            self.assertEqual(app_jobs.jobs[job_id]["quality_feedback"]["verdict"], "reject")
+
+            duplicate = self.client.post(
+                f"/api/autopilot/completed/{job_id}/feedback",
+                json={"verdict": "approve", "reason": "looks_good"},
+            )
+            self.assertEqual(duplicate.status_code, 409)
+        finally:
+            app_jobs.jobs.pop(job_id, None)
+
+    def test_quality_and_size_feedback_teach_a_direction(self):
+        saved_context = {
+            "source": {"kind": "movie", "hdr": False, "resolution": "1080p"},
+            "features": {"codec": "h265", "encoder_family": "software", "output_resolution": "1080p", "target_ratio": 0.4},
+        }
+        profile = {"minimum_feedback": 2}
+        quality_state = {"profile": profile, "feedback": [{"verdict": "reject", "reason": "quality", "context": saved_context}]}
+        smaller = {"source": saved_context["source"], "features": {**saved_context["features"], "target_ratio": 0.3}}
+        roomier = {"source": saved_context["source"], "features": {**saved_context["features"], "target_ratio": 0.55}}
+        self.assertGreater(candidate_learning(roomier, quality_state)["acceptance"], candidate_learning(smaller, quality_state)["acceptance"])
+
+        size_state = {"profile": profile, "feedback": [{"verdict": "reject", "reason": "size", "context": saved_context}]}
+        self.assertGreater(candidate_learning(smaller, size_state)["acceptance"], candidate_learning(roomier, size_state)["acceptance"])
+
     def test_local_poster_lookup_does_not_walk_into_shared_parent(self):
         title_one = os.path.join(TEST_MEDIA, "Title One")
         title_two = os.path.join(TEST_MEDIA, "Title Two")
@@ -180,6 +345,89 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertTrue(app_routes._beta_sanitize_duplicate_artwork(data))
         self.assertEqual([movie["poster_url"] for movie in data["movies"]], ["", ""])
         self.assertTrue(all(movie["metadata_source"] == "local_duplicate_removed" for movie in data["movies"]))
+
+    def test_library_cache_sanitizer_removes_shared_remote_movie_match(self):
+        shared_url = "https://is1-ssl.mzstatic.com/image/thumb/wrong/600x900bb.jpg"
+        data = {
+            "movies": [
+                {"type": "movie", "title": "Joker Folie a Deux", "year": 2024, "poster_url": shared_url, "metadata_source": "apple", "metadata_provider_id": 10},
+                {"type": "movie", "title": "Deadpool And Wolverine", "year": 2024, "poster_url": shared_url, "metadata_source": "apple", "metadata_provider_id": 10},
+            ],
+            "shows": [],
+        }
+        self.assertTrue(app_routes._beta_sanitize_duplicate_artwork(data))
+        self.assertEqual([movie["poster_url"] for movie in data["movies"]], ["", ""])
+        self.assertTrue(all("metadata_provider_id" not in movie for movie in data["movies"]))
+
+    def test_keyless_movie_match_requires_the_title_not_just_the_year(self):
+        rows = [
+            {"trackName": "Alien vs. Predator", "releaseDate": "2004-08-13T07:00:00Z", "trackId": 1},
+            {"trackName": "Joker: Folie a Deux", "releaseDate": "2024-10-04T07:00:00Z", "trackId": 2},
+        ]
+        self.assertIsNone(_choose_movie(rows, "Deadpool and Wolverine", 2024))
+        match = _choose_movie(rows, "Joker Folie a Deux", 2024)
+        self.assertIsNotNone(match)
+        self.assertEqual(match["trackId"], 2)
+
+    def test_tmdb_match_requires_title_and_year_fit(self):
+        rows = [
+            {"id": 1, "title": "Alien vs. Predator", "release_date": "2004-08-13", "poster_path": "/wrong.jpg"},
+            {"id": 2, "title": "Joker: Folie a Deux", "release_date": "2024-10-04", "poster_path": "/right.jpg"},
+            {"id": 3, "title": "Joker: Folie a Deux", "release_date": "1994-10-04", "poster_path": "/wrong-year.jpg"},
+        ]
+        self.assertIsNone(app_routes._beta_choose_tmdb_result(rows, "Deadpool and Wolverine", 2024))
+        match = app_routes._beta_choose_tmdb_result(rows, "Joker Folie a Deux", 2024)
+        self.assertIsNotNone(match)
+        self.assertEqual(match["id"], 2)
+
+    def test_tmdb_artwork_wins_and_keyless_remains_the_fallback(self):
+        settings = {
+            "tmdb_api_key": "configured",
+            "metadata_no_key_enabled": True,
+            "episode_release_monitor_enabled": True,
+        }
+
+        def keyless(data, _settings):
+            for movie in data.get("movies") or []:
+                movie["poster_url"] = "https://apple.example/fallback.jpg"
+                movie["metadata_source"] = "apple"
+            return data
+
+        preferred = {"movies": [{"title": "Example Movie", "year": 2026}], "shows": []}
+        with (
+            patch("webui.app.routes._beta_tmdb_search", return_value={
+                "poster_url": "https://image.tmdb.org/t/p/w342/preferred.jpg",
+                "source": "tmdb",
+                "poster_source": "tmdb",
+                "metadata_source": "tmdb",
+                "tmdb_id": 42,
+            }),
+            patch("webui.app.routes.enrich_media_library", side_effect=keyless),
+        ):
+            result = app_routes._beta_enrich_metadata(preferred, settings)
+        self.assertEqual(result["movies"][0]["poster_source"], "tmdb")
+        self.assertTrue(result["movies"][0]["poster_url"].endswith("preferred.jpg"))
+        self.assertEqual(result["metadata"]["artwork_priority"], "tmdb_then_keyless")
+
+        fallback = {"movies": [{"title": "Missing Poster", "year": 2026}], "shows": []}
+        with (
+            patch("webui.app.routes._beta_tmdb_search", return_value={"poster_url": "", "source": "tmdb_empty"}),
+            patch("webui.app.routes.enrich_media_library", side_effect=keyless),
+        ):
+            result = app_routes._beta_enrich_metadata(fallback, settings)
+        self.assertEqual(result["movies"][0]["metadata_source"], "apple")
+        self.assertTrue(result["movies"][0]["poster_url"].endswith("fallback.jpg"))
+
+    def test_library_filename_parser_keeps_real_movie_title(self):
+        cases = {
+            "1976.Rocky.1920x1038.BDRip.x265.mkv": ("Rocky", 1976),
+            "Deadpool.And.Wolverine.2024.2160p.UHD.BluRay.mkv": ("Deadpool And Wolverine", 2024),
+            "Joker.Folie.a.Deux.2024.1080p.BluRay.mkv": ("Joker Folie a Deux", 2024),
+        }
+        for name, expected in cases.items():
+            with self.subTest(name=name):
+                parsed = app_routes._beta_parse_media(os.path.join(TEST_MEDIA, name))
+                self.assertEqual((parsed["title"], parsed["year"]), expected)
 
     def test_mobile_bearer_flow_and_scope_enforcement(self):
         pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "read"})
@@ -230,6 +478,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
+        self.assertEqual(dashboard_payload["release"], "3.12.0")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)
@@ -250,6 +499,14 @@ class ApiRouteSmokeTests(unittest.TestCase):
         )
         self.assertEqual(automation_update.status_code, 200, automation_update.get_data(as_text=True))
         self.assertTrue(automation_update.get_json()["settings"]["autopilot_enabled"])
+
+        onboarding = self.client.post(
+            "/api/mobile/v1/autopilot/onboarding",
+            json={"completed": True},
+            headers=headers,
+        )
+        self.assertEqual(onboarding.status_code, 200, onboarding.get_data(as_text=True))
+        self.assertTrue(onboarding.get_json()["onboarding"]["tour_completed"])
 
         storage = self.client.get("/api/mobile/v1/storage", headers=headers)
         self.assertEqual(storage.status_code, 200, storage.get_data(as_text=True))

@@ -300,9 +300,6 @@ class AppController extends ChangeNotifier {
       automation = await api.post('/automation', {'action': 'run'},
           timeout: const Duration(minutes: 3));
       dashboard = await api.get('/dashboard');
-      final value = await api.post('/autopilot/review', {});
-      autopilotReview = _map(value['review']);
-      _pollAutopilotReview();
     } finally {
       busy = false;
       notifyListeners();
@@ -345,6 +342,35 @@ class AppController extends ChangeNotifier {
     });
     autopilotReview = _map(value['review']);
     smartPresets = await api.get('/smart_presets');
+    automation = await api.get('/automation');
+    notifyListeners();
+  }
+
+  Future<void> submitCompletedEncodeFeedback(
+      String jobId, String verdict, String reason) async {
+    _requireControl();
+    if (demoMode) return;
+    await api.post('/autopilot/completed/$jobId/feedback', {
+      'verdict': verdict,
+      'reason': reason,
+    });
+    automation = await api.get('/automation');
+    smartPresets = await api.get('/smart_presets');
+    notifyListeners();
+  }
+
+  Future<void> setAutopilotTourCompleted(bool completed) async {
+    _requireControl();
+    if (demoMode) {
+      final status = _map(automation['status']);
+      final onboarding = _map(status['onboarding']);
+      onboarding['tour_completed'] = completed;
+      status['onboarding'] = onboarding;
+      automation['status'] = status;
+      notifyListeners();
+      return;
+    }
+    await api.post('/autopilot/onboarding', {'completed': completed});
     automation = await api.get('/automation');
     notifyListeners();
   }

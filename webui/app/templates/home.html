@@ -1,0 +1,171 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HandBrake TSD Helper - Home</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  <style>
+    .home-shell { max-width: 1500px; margin: 0 auto; }
+    .home-hero { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; padding:26px 4px 20px; }
+    .home-hero h1 { margin:4px 0 6px; font-size:clamp(28px,4vw,44px); letter-spacing:-.04em; }
+    .home-hero p { max-width:680px; margin:0; color:rgba(229,229,229,.68); }
+    .home-kicker { color:#67e8f9; font-size:12px; font-weight:850; letter-spacing:.13em; text-transform:uppercase; }
+    .home-grid { display:grid; grid-template-columns:minmax(0,1.5fr) minmax(300px,.7fr); gap:16px; }
+    .home-stack { display:grid; gap:16px; min-width:0; }
+    .home-metrics { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; }
+    .home-metric { min-height:122px; padding:17px; border:1px solid rgba(255,255,255,.09); border-radius:16px; background:linear-gradient(145deg,rgba(255,255,255,.045),rgba(255,255,255,.018)); }
+    .home-metric span,.home-label { display:block; color:rgba(229,229,229,.58); font-size:12px; font-weight:720; }
+    .home-metric strong { display:block; margin:11px 0 5px; color:#fff; font-size:27px; letter-spacing:-.03em; }
+    .home-metric small { color:rgba(229,229,229,.54); }
+    .home-card { border:1px solid rgba(255,255,255,.09); border-radius:18px; background:rgba(22,26,32,.86); overflow:hidden; }
+    .home-card-head { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:17px 19px; border-bottom:1px solid rgba(255,255,255,.07); }
+    .home-card-head h2 { margin:0; font-size:18px; }
+    .home-card-body { padding:14px 19px 19px; }
+    .home-link { color:#67e8f9; text-decoration:none; font-size:12px; font-weight:800; }
+    .home-job,.home-event { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; padding:12px 0; border-bottom:1px solid rgba(255,255,255,.06); }
+    .home-job:last-child,.home-event:last-child { border-bottom:0; }
+    .home-job strong,.home-event strong { display:block; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .home-job small,.home-event small { display:block; margin-top:4px; color:rgba(229,229,229,.55); }
+    .home-job-state { align-self:start; padding:5px 9px; border-radius:999px; color:#a5f3fc; background:rgba(22,199,214,.12); font-size:10px; font-weight:850; text-transform:uppercase; }
+    .home-empty { padding:25px 4px; color:rgba(229,229,229,.55); text-align:center; }
+    .autopilot-overview { display:grid; gap:14px; }
+    .autopilot-score-ring { display:grid; grid-template-columns:74px 1fr; gap:14px; align-items:center; }
+    .autopilot-score-ring strong { display:grid; place-items:center; width:70px; height:70px; border-radius:50%; border:5px solid rgba(34,211,238,.65); background:rgba(34,211,238,.08); font-size:20px; }
+    .autopilot-score-ring h3 { margin:0 0 4px; font-size:17px; }
+    .autopilot-score-ring p { margin:0; color:rgba(229,229,229,.58); font-size:12px; }
+    .home-alert { padding:12px; border:1px solid rgba(245,158,11,.25); border-radius:12px; background:rgba(245,158,11,.07); color:#fde68a; font-size:12px; }
+    .home-quick { display:grid; grid-template-columns:1fr 1fr; gap:9px; }
+    .home-quick a { display:grid; gap:4px; min-height:70px; padding:12px; border:1px solid rgba(255,255,255,.08); border-radius:12px; color:#fff; text-decoration:none; background:rgba(255,255,255,.025); }
+    .home-quick a:hover { border-color:rgba(34,211,238,.45); background:rgba(34,211,238,.06); }
+    .home-quick small { color:rgba(229,229,229,.54); }
+    .home-status { display:inline-flex; align-items:center; gap:7px; padding:8px 12px; border:1px solid rgba(34,197,94,.2); border-radius:999px; background:rgba(34,197,94,.08); color:#bbf7d0; font-size:12px; font-weight:800; }
+    .home-status::before { content:""; width:7px; height:7px; border-radius:50%; background:#22c55e; box-shadow:0 0 12px #22c55e; }
+    @media (max-width:1050px) { .home-grid{grid-template-columns:1fr}.home-metrics{grid-template-columns:1fr 1fr} }
+    @media (max-width:650px) { .home-hero{align-items:flex-start;flex-direction:column}.home-metrics{grid-template-columns:1fr}.home-quick{grid-template-columns:1fr} }
+  </style>
+</head>
+<body class="home-page">
+  <nav class="top-nav app-nav">
+    <a href="/" class="app-brand"><span class="brand-mark">TSD</span><span class="brand-copy"><strong>HandBrake TSD</strong><span>Autonomous media encoding</span></span></a>
+    <div class="nav-links">
+      <a href="/" class="nav-link nav-link-active">Home</a>
+      <a href="/library" class="nav-link">Library</a>
+      <a href="/jobs" class="nav-link">Jobs</a>
+      <a href="/autopilot" class="nav-link">Autopilot</a>
+      <a href="/size_wizard" class="nav-link">Size Wizard</a>
+      <a href="/settings" class="nav-link">Settings</a>
+    </div>
+    <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Loading</span></div>
+  </nav>
+
+  <main class="home-shell">
+    <header class="home-hero">
+      <div><span class="home-kicker">System overview</span><h1>Everything important, at a glance.</h1><p>A calm view of the queue, library, workers, and Autopilot. Open a workspace only when something needs your attention.</p></div>
+      <div class="row" style="display:flex;gap:10px;align-items:center;margin:0"><span id="homeSystemStatus" class="home-status">System online</span><button id="homeRefreshBtn" type="button" class="ghost-btn">Refresh</button></div>
+    </header>
+
+    <section class="home-metrics" aria-label="System totals">
+      <div class="home-metric"><span>Queue</span><strong id="homeQueueMetric">--</strong><small id="homeQueueDetail">Loading jobs</small></div>
+      <div class="home-metric"><span>Space recovered</span><strong id="homeSavedMetric">--</strong><small id="homeSavedDetail">Across verified encodes</small></div>
+      <div class="home-metric"><span>Media library</span><strong id="homeLibraryMetric">--</strong><small id="homeLibraryDetail">Loading catalog</small></div>
+      <div class="home-metric"><span>Workers</span><strong id="homeWorkersMetric">--</strong><small id="homeWorkersDetail">Loading node health</small></div>
+    </section>
+
+    <div class="home-grid" style="margin-top:16px">
+      <div class="home-stack">
+        <section class="home-card">
+          <div class="home-card-head"><h2>Current work</h2><a class="home-link" href="/jobs">Open jobs &rarr;</a></div>
+          <div id="homeJobs" class="home-card-body"><div class="home-empty">Loading queue...</div></div>
+        </section>
+        <section class="home-card">
+          <div class="home-card-head"><h2>Recent activity</h2><a class="home-link" href="/settings">View history &rarr;</a></div>
+          <div id="homeEvents" class="home-card-body"><div class="home-empty">Loading activity...</div></div>
+        </section>
+      </div>
+
+      <aside class="home-stack">
+        <section class="home-card">
+          <div class="home-card-head"><h2>Autopilot</h2><a class="home-link" href="/autopilot">Open workspace &rarr;</a></div>
+          <div class="home-card-body autopilot-overview">
+            <div class="autopilot-score-ring"><strong id="homeAutoScore">0%</strong><div><h3 id="homeAutoMode">Checking setup</h3><p id="homeAutoCopy">Loading readiness checks...</p></div></div>
+            <div id="homeAutoAlert" class="home-alert" hidden></div>
+            <a href="/autopilot" class="button-link">Review and train Autopilot</a>
+          </div>
+        </section>
+        <section class="home-card">
+          <div class="home-card-head"><h2>Quick actions</h2></div>
+          <div class="home-card-body home-quick">
+            <a href="/library"><strong>Browse library</strong><small>Movies, shows, posters</small></a>
+            <a href="/jobs"><strong>Add a job</strong><small>Find a folder or file</small></a>
+            <a href="/size_wizard"><strong>Size Wizard</strong><small>Build and preview a plan</small></a>
+            <a href="/settings/nodes"><strong>Workers</strong><small>Pair or inspect nodes</small></a>
+          </div>
+        </section>
+      </aside>
+    </div>
+  </main>
+
+  <script>
+    const homeFormatBytes = value => {
+      let n = Number(value || 0); const units = ["B","KB","MB","GB","TB"]; let i = 0;
+      while (n >= 1024 && i < units.length - 1) { n /= 1024; i += 1; }
+      return `${n >= 100 || i === 0 ? n.toFixed(0) : n.toFixed(1)} ${units[i]}`;
+    };
+    const homeText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+    const homeWhen = value => { if (!value) return "Recently"; const d = new Date(Number(value) > 100000000000 ? Number(value) : Number(value) * 1000); return isNaN(d) ? "Recently" : d.toLocaleString(); };
+    const homeEscape = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+
+    function renderHome(data) {
+      const summary = data.queue?.summary || {};
+      const counts = summary.counts || {};
+      const active = Array.isArray(data.queue?.active) ? data.queue.active : [];
+      const activeCount = Number(counts.running || summary.running || 0) + Number(counts.queued || summary.queued || 0);
+      homeText("homeQueueMetric", activeCount ? `${activeCount} active` : "Clear");
+      homeText("homeQueueDetail", data.queue?.paused ? "Queue is paused" : `${counts.done || summary.done || 0} completed, ${counts.error || summary.error || 0} need attention`);
+      const storage = data.storage || {};
+      homeText("homeSavedMetric", homeFormatBytes(storage.saved_bytes || storage.total_saved_bytes || 0));
+      homeText("homeSavedDetail", `${storage.count || storage.completed || storage.total_jobs || counts.done || 0} verified encodes`);
+      const library = data.library || {};
+      homeText("homeLibraryMetric", `${Number(library.movies || 0) + Number(library.shows || 0)} titles`);
+      homeText("homeLibraryDetail", `${library.movies || 0} movies, ${library.shows || 0} shows, ${library.episodes || 0} episodes`);
+      const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+      const online = nodes.filter(node => node.online).length;
+      homeText("homeWorkersMetric", nodes.length ? `${online} / ${nodes.length}` : "Local");
+      homeText("homeWorkersDetail", nodes.length ? "linked workers online" : "Standalone encoder ready");
+
+      const jobs = document.getElementById("homeJobs");
+      jobs.innerHTML = active.length ? active.map(job => `<div class="home-job"><div><strong>${homeEscape(job.src?.split(/[\\/]/).pop() || "Encode job")}</strong><small>${homeEscape(job.node_name || job.encoder || job.preset || "Local encoder")}${job.progress != null ? ` &middot; ${Math.round(Number(job.progress || 0))}%` : ""}</small></div><span class="home-job-state">${homeEscape(job.status || "queued")}</span></div>`).join("") : `<div class="home-empty"><strong>Nothing is encoding right now.</strong><br><span class="small">Autopilot or a manual job will appear here.</span></div>`;
+
+      const events = Array.isArray(data.events) ? data.events : [];
+      const eventBox = document.getElementById("homeEvents");
+      eventBox.innerHTML = events.length ? events.map(event => `<div class="home-event"><div><strong>${homeEscape(event.message || event.type || "System activity")}</strong><small>${homeEscape(String(event.type || "event").replaceAll("_", " "))}</small></div><small>${homeEscape(homeWhen(event.created_at || event.timestamp || event.ts))}</small></div>`).join("") : `<div class="home-empty">No recent activity.</div>`;
+
+      const readiness = data.autopilot?.readiness || {};
+      const autopilot = data.autopilot?.autopilot || {};
+      const learning = data.autopilot?.continuous_learning || {};
+      homeText("homeAutoScore", `${readiness.score || 0}%`);
+      homeText("homeAutoMode", autopilot.enabled ? (autopilot.mode === "manage" ? "Managing safely" : "Observing only") : "Not enabled yet");
+      homeText("homeAutoCopy", readiness.ready ? "All required checks pass. Guardrails remain active." : "Finish the guided setup before unattended queueing.");
+      const alert = document.getElementById("homeAutoAlert");
+      const pending = Number(learning.pending || 0);
+      alert.hidden = !pending && readiness.ready;
+      alert.textContent = pending ? `${pending} completed encode${pending === 1 ? " needs" : "s need"} your quality feedback.` : (readiness.recommendations?.[0] || "Autopilot setup needs attention.");
+    }
+
+    async function loadHome() {
+      const button = document.getElementById("homeRefreshBtn"); if (button) button.disabled = true;
+      try {
+        const response = await fetch("/api/home/summary", { cache: "no-store" });
+        const data = await response.json(); if (!response.ok) throw new Error(data.error || "Overview unavailable");
+        renderHome(data); homeText("homeSystemStatus", "System online");
+      } catch (error) {
+        homeText("homeSystemStatus", "Needs attention");
+        const status = document.getElementById("homeSystemStatus"); if (status) status.style.cssText = "color:#fecaca;border-color:rgba(239,68,68,.25);background:rgba(239,68,68,.08)";
+      } finally { if (button) button.disabled = false; }
+    }
+    document.addEventListener("DOMContentLoaded", () => { document.getElementById("homeRefreshBtn").onclick = loadHome; loadHome(); window.setInterval(loadHome, 12000); });
+  </script>
+</body>
+</html>

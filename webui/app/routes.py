@@ -33,6 +33,7 @@ import os
 import json
 import math
 import re
+import difflib
 import subprocess
 import base64
 import tempfile
@@ -56,6 +57,7 @@ from flask import (
     render_template,
     send_file,
     abort,
+    redirect,
 )
 from werkzeug.utils import secure_filename
 
@@ -83,6 +85,7 @@ from .jobs import (
     move_queued_job_to_position,
     move_queued_job,
     get_job_summary,
+    save_jobs,
     _encoded_output_is_valid,
 )
 
@@ -2649,10 +2652,16 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
     }
 
 
-def _create_smart_job(src: str, *, require_automation_ready: bool = False) -> tuple[str, dict]:
+def _create_smart_job(
+    src: str,
+    *,
+    require_automation_ready: bool = False,
+    automation_source: str = "smart_preset",
+) -> tuple[str, dict]:
     recommendation = _smart_recommendation({"src": src, "preset": "auto"}, require_automation_ready=require_automation_ready)
     plan = recommendation.pop("selected_plan")
     recommended_id = recommendation.get("recommended_id")
+    feedback_context = smart_feedback_context(plan, str(recommended_id or "balanced"))
     job_id = create_job(
         plan["src"],
         plan["preset"],
@@ -2669,6 +2678,8 @@ def _create_smart_job(src: str, *, require_automation_ready: bool = False) -> tu
             "smart_preset": True,
             "smart_profile_id": "default",
             "smart_candidate_id": recommended_id,
+            "smart_feedback_context": feedback_context,
+            "automation_source": automation_source,
         },
     )
     return job_id, recommendation
@@ -2701,6 +2712,10 @@ BETA_MEDIA_TAG_RE = re.compile(
     r"extended|unrated|directors? ?cut|theatrical)(?!\w)",
     re.IGNORECASE,
 )
+
+
+APP_RELEASE = "3.12.0"
+BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
     r"hdr(?:10(?:[ ._\-]*(?:plus|\+))?)?|hdr10plus|hdr10\+|hlg|"
@@ -3419,13 +3434,13 @@ def _beta_save_library_cache(data: dict) -> None:
 
 
 def _beta_sanitize_duplicate_artwork(data: dict) -> bool:
-    """Remove one local sidecar incorrectly shared by unrelated titles."""
+    """Remove one poster incorrectly shared by unrelated library titles."""
     groups: dict[str, list[dict]] = {}
     for row in [*(data.get("movies") or []), *(data.get("shows") or [])]:
         if not isinstance(row, dict):
             continue
         url = str(row.get("poster_url") or "").strip()
-        if url.startswith("/api/media/artwork/local-"):
+        if url:
             groups.setdefault(url, []).append(row)
 
     changed = False
@@ -3442,10 +3457,11 @@ def _beta_sanitize_duplicate_artwork(data: dict) -> bool:
             continue
         for row in rows:
             row["poster_url"] = ""
-            if row.get("metadata_source") == "local":
-                row.pop("metadata_provider", None)
-            row["metadata_source"] = "local_duplicate_removed"
-            row["metadata_error"] = "Shared-folder artwork was ignored; refresh the library to find title-specific artwork."
+            previous_source = str(row.get("metadata_source") or "unknown")
+            for key in ("poster_source", "metadata_match_title", "metadata_match_year", "metadata_provider_id"):
+                row.pop(key, None)
+            row["metadata_source"] = f"{previous_source}_duplicate_removed"[:80]
+            row["metadata_error"] = "Artwork shared by unrelated titles was removed; refresh the library to find a title-specific match."
             changed = True
     return changed
 
@@ -3460,10 +3476,21 @@ def _beta_clear_library_cache() -> None:
 
 
 def _beta_clean_title(value: str) -> str:
-    text = os.path.splitext(os.path.basename(value or ""))[0]
+    text = os.path.basename(value or "")
+    root, extension = os.path.splitext(text)
+    # Title fragments such as "Joker.Folie.a.Deux" are not filenames; do
+    # not mistake the final dotted word for an extension and discard it.
+    if extension.lower() in VIDEO_EXTS:
+        text = root
     text = re.sub(r"[-_.]+", " ", text)
     text = re.sub(r"\bTSD\b$", " ", text, flags=re.IGNORECASE)
-    text = BETA_MEDIA_TAG_RE.sub(" ", text)
+    technical_starts = [
+        match.start()
+        for match in (BETA_MEDIA_TAG_RE.search(text), BETA_DIMENSION_TAG_RE.search(text))
+        if match
+    ]
+    if technical_starts:
+        text = text[: min(technical_starts)]
     text = re.sub(r"[\[\]\(\)\{\}]", " ", text)
     text = re.sub(r"\s+", " ", text).strip(" -._")
     return text or "Unknown Title"
@@ -3508,7 +3535,10 @@ def _beta_parse_media(src_path: str) -> dict:
     if year_match:
         year = int(year_match.group(1))
         if media_type == "movie":
-            title_part = name_only[: year_match.start()]
+            before_year = name_only[: year_match.start()].strip(" ._-[(")
+            # Some collections use "1976.Movie.Title...". Treat a leading
+            # year as metadata, not as the whole title or an empty title.
+            title_part = before_year or name_only[year_match.end() :]
 
     title = _beta_title_from_path(src_path, title_part, media_type)
     try:
@@ -3576,6 +3606,95 @@ def _beta_tmdb_auth_cache_tag(settings: dict) -> str:
     return hashlib.sha256(secret.encode("utf-8", errors="ignore")).hexdigest()[:16]
 
 
+def _beta_tmdb_title_tokens(value: str) -> list[str]:
+    return [
+        token
+        for token in re.findall(r"[a-z0-9]+", str(value or "").lower())
+        if token not in {"the", "a", "an"}
+    ]
+
+
+def _beta_choose_tmdb_result(rows: list, title: str, year=None) -> dict | None:
+    """Choose a TMDb result only when its title really matches the library title."""
+    wanted = re.sub(r"[^a-z0-9]+", "", str(title or "").lower())
+    wanted_tokens = set(_beta_tmdb_title_tokens(title))
+    try:
+        wanted_year = int(year) if year not in (None, "") else None
+    except (TypeError, ValueError):
+        wanted_year = None
+    ranked = []
+    for row in rows if isinstance(rows, list) else []:
+        if not isinstance(row, dict):
+            continue
+        names = [row.get("title"), row.get("name"), row.get("original_title"), row.get("original_name")]
+        best_title_score = None
+        for raw_name in names:
+            candidate = re.sub(r"[^a-z0-9]+", "", str(raw_name or "").lower())
+            if not wanted or not candidate:
+                continue
+            candidate_tokens = set(_beta_tmdb_title_tokens(raw_name))
+            shared = len(wanted_tokens & candidate_tokens)
+            coverage = shared / max(1, len(wanted_tokens))
+            candidate_coverage = shared / max(1, len(candidate_tokens))
+            similarity = difflib.SequenceMatcher(None, wanted, candidate).ratio()
+            exact = candidate == wanted
+            if not (exact or similarity >= 0.74 or (coverage >= 0.75 and candidate_coverage >= 0.6)):
+                continue
+            title_score = (6.0 if exact else 0.0) + similarity * 4.0 + coverage * 2.0 + candidate_coverage
+            best_title_score = max(best_title_score or 0.0, title_score)
+        if best_title_score is None:
+            continue
+
+        date_text = str(row.get("first_air_date") or row.get("release_date") or "")
+        try:
+            candidate_year = int(date_text[:4]) if len(date_text) >= 4 else None
+        except (TypeError, ValueError):
+            candidate_year = None
+        if wanted_year is not None and candidate_year is not None:
+            year_delta = abs(candidate_year - wanted_year)
+            if year_delta > 1:
+                continue
+            year_score = 1.5 if year_delta == 0 else 0.5
+        else:
+            year_score = 0.2
+        poster_score = 0.35 if row.get("poster_path") else 0.0
+        try:
+            popularity = float(row.get("popularity") or 0.0)
+        except (TypeError, ValueError):
+            popularity = 0.0
+        popularity_score = min(0.25, max(0.0, popularity / 1000.0))
+        ranked.append((best_title_score + year_score + poster_score + popularity_score, row))
+    ranked.sort(key=lambda entry: entry[0], reverse=True)
+    return ranked[0][1] if ranked else None
+
+
+def _public_settings(settings: dict) -> dict:
+    """Return browser-safe settings without cloud-provider secrets."""
+    public = dict(settings or {})
+    for key in ("gemini_api_key", "openai_api_key"):
+        public.pop(key, None)
+    public["gemini_api_configured"] = bool(os.environ.get("GEMINI_API_KEY") or settings.get("gemini_api_key"))
+    public["openai_api_configured"] = bool(os.environ.get("OPENAI_API_KEY") or settings.get("openai_api_key"))
+    return public
+
+
+def _wizard_ai_settings_payload(settings: dict | None = None) -> dict:
+    settings = settings or load_settings()
+    status = wizard_llm_status(settings)
+    return {
+        "provider": status.get("provider") or "local",
+        "model": status.get("model") or "",
+        "ready": bool(status.get("ready")),
+        "providers": status.get("providers") or {},
+        "gemini_model": str(settings.get("gemini_model") or "gemini-3.6-flash"),
+        "openai_model": str(settings.get("openai_model") or "gpt-5.6-luna"),
+        "gemini_api_configured": bool(os.environ.get("GEMINI_API_KEY") or settings.get("gemini_api_key")),
+        "openai_api_configured": bool(os.environ.get("OPENAI_API_KEY") or settings.get("openai_api_key")),
+        "gemini_key_source": "environment" if os.environ.get("GEMINI_API_KEY") else ("settings" if settings.get("gemini_api_key") else "none"),
+        "openai_key_source": "environment" if os.environ.get("OPENAI_API_KEY") else ("settings" if settings.get("openai_api_key") else "none"),
+    }
+
+
 def _beta_tmdb_search(media_type: str, title: str, year=None, settings=None) -> dict:
     settings = settings or {}
     auth = _beta_tmdb_config(settings)
@@ -3611,7 +3730,7 @@ def _beta_tmdb_search(media_type: str, title: str, year=None, settings=None) -> 
 
     rows = payload.get("results") if isinstance(payload, dict) else []
     rows = rows if isinstance(rows, list) else []
-    best = next((row for row in rows if row.get("poster_path")), rows[0] if rows else None)
+    best = _beta_choose_tmdb_result(rows, title, year)
     if not isinstance(best, dict):
         result = {"configured": True, "poster_url": "", "source": "tmdb_empty"}
         BETA_POSTER_CACHE[cache_key] = result
@@ -3623,6 +3742,9 @@ def _beta_tmdb_search(media_type: str, title: str, year=None, settings=None) -> 
         "configured": True,
         "poster_url": poster_url,
         "source": "tmdb" if poster_url else "tmdb_no_poster",
+        "poster_source": "tmdb" if poster_url else "",
+        "metadata_source": "tmdb" if poster_url else "tmdb_no_poster",
+        "metadata_provider": {"name": "TMDb", "url": "https://www.themoviedb.org/"},
         "tmdb_id": best.get("id"),
         "tmdb_title": best.get("name") or best.get("title") or "",
         "tmdb_year": (best.get("first_air_date") or best.get("release_date") or "")[:4],
@@ -3697,19 +3819,43 @@ def _beta_finalize_catalog(data: dict) -> dict:
 
 
 def _beta_enrich_metadata(data: dict, settings: dict, *, enabled: bool = True) -> dict:
-    """Apply the no-key metadata pipeline and optional legacy TMDb fallback."""
+    """Prefer TMDb artwork when configured, with local/keyless fallback."""
+    tmdb_enabled = bool(enabled and _beta_tmdb_config(settings))
+    preferred_art: list[tuple[dict, dict, dict]] = []
+    if tmdb_enabled:
+        # Resolve TMDb first. Keyless metadata still supplies release calendars
+        # and acts as the artwork fallback, then successful TMDb art is applied
+        # again so it always wins in the final catalog sent to web and mobile.
+        for show in data.get("shows") or []:
+            if not isinstance(show, dict):
+                continue
+            result = _beta_tmdb_search("show", show.get("title"), show.get("year"), settings)
+            season_art = _beta_tmdb_season_art(result.get("tmdb_id"), show.get("seasons") or [], settings)
+            if result.get("poster_url"):
+                show.update(result)
+            preferred_art.append((show, result, season_art))
+        for movie in data.get("movies") or []:
+            if isinstance(movie, dict):
+                result = _beta_tmdb_search("movie", movie.get("title"), movie.get("year"), settings)
+                if result.get("poster_url"):
+                    movie.update(result)
+                preferred_art.append((movie, result, {}))
+
     if enabled or settings.get("episode_release_monitor_enabled", True):
         data = enrich_media_library(data, settings)
 
-    if enabled and _beta_tmdb_config(settings):
-        for show in data.get("shows") or []:
-            if not isinstance(show, dict) or show.get("poster_url"):
-                continue
-            show.update(_beta_tmdb_search("show", show.get("title"), show.get("year"), settings))
-            show["season_art"] = _beta_tmdb_season_art(show.get("tmdb_id"), show.get("seasons") or [], settings)
-        for movie in data.get("movies") or []:
-            if isinstance(movie, dict) and not movie.get("poster_url"):
-                movie.update(_beta_tmdb_search("movie", movie.get("title"), movie.get("year"), settings))
+    for item, result, season_art in preferred_art:
+        if result.get("poster_url"):
+            item.update(result)
+        elif result.get("tmdb_id"):
+            item["tmdb_id"] = result.get("tmdb_id")
+        if season_art:
+            item["season_art"] = season_art
+
+    metadata = data.setdefault("metadata", {})
+    if isinstance(metadata, dict):
+        metadata["tmdb_configured"] = bool(_beta_tmdb_config(settings))
+        metadata["artwork_priority"] = "tmdb_then_keyless" if tmdb_enabled else "keyless"
 
     return _beta_finalize_catalog(data)
 
@@ -3813,7 +3959,7 @@ def _beta_merge_show_group(groups: dict, incoming: dict) -> None:
     group["total_size_bytes"] += int(incoming.get("total_size_bytes") or 0)
     group["files"].extend(incoming.get("files") or [])
 
-    for key_name in ("poster_url", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error"):
+    for key_name in ("poster_url", "poster_source", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error"):
         if not group.get(key_name) and incoming.get(key_name):
             group[key_name] = incoming.get(key_name)
 
@@ -4039,8 +4185,9 @@ def _beta_cached_art_maps() -> tuple[dict, dict]:
         art = {
             k: item.get(k)
             for k in (
-                "poster_url", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error",
+                "poster_url", "poster_source", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error",
                 "metadata_source", "metadata_provider", "metadata_url", "summary", "genres", "release_date",
+                "metadata_match_title", "metadata_match_year", "metadata_provider_id",
             )
             if item.get(k)
         }
@@ -4058,7 +4205,7 @@ def _beta_cached_art_maps() -> tuple[dict, dict]:
         art = {
             k: item.get(k)
             for k in (
-                "poster_url", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error", "season_art",
+                "poster_url", "poster_source", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error", "season_art",
                 "metadata_source", "metadata_provider", "metadata_url", "summary", "genres", "tvmaze_id",
                 "show_status", "network", "next_episode", "release_calendar",
             )
@@ -4437,7 +4584,11 @@ def _autopilot_candidates(data: dict, index: dict, settings: dict) -> dict:
     if should_queue:
         for row in selected:
             try:
-                _job_id, recommendation = _create_smart_job(row["path"], require_automation_ready=True)
+                _job_id, recommendation = _create_smart_job(
+                    row["path"],
+                    require_automation_ready=True,
+                    automation_source="autopilot",
+                )
                 queued += 1
                 row["smart_candidate_id"] = recommendation.get("recommended_id")
                 row["reason"] = f"{row['reason']} Learned Smart Preset selected {recommendation.get('recommended_id')}."
@@ -4501,6 +4652,38 @@ def _autopilot_readiness(settings: dict | None = None) -> dict:
     return {"ready": ready, "score": score, "checks": checks, "recommendations": recommendations[:6]}
 
 
+def _autopilot_completed_feedback_jobs(limit: int = 24) -> list[dict]:
+    """Completed learned jobs that can improve future automatic choices."""
+    rows = []
+    for job in list_jobs_for_api():
+        context = job.get("smart_feedback_context")
+        if (
+            job.get("status") != "done"
+            or not job.get("smart_preset")
+            or not isinstance(context, dict)
+            or str(job.get("automation_source") or "") not in {"autopilot", "smart_preset"}
+        ):
+            continue
+        src = str(job.get("src") or "")
+        feedback = job.get("quality_feedback") if isinstance(job.get("quality_feedback"), dict) else None
+        rows.append(
+            {
+                "id": job.get("id"),
+                "title": _beta_clean_title(os.path.basename(src)),
+                "src": src,
+                "preset": job.get("preset"),
+                "candidate_id": job.get("smart_candidate_id") or "smart",
+                "encoder": job.get("encoder") or job.get("encode_method") or "Smart Preset",
+                "saved_bytes": int(job.get("saved_bytes") or 0),
+                "finished_at": job.get("finished_at"),
+                "feedback": feedback,
+                "needs_feedback": not bool(feedback),
+            }
+        )
+    rows.sort(key=lambda row: float(row.get("finished_at") or 0), reverse=True)
+    return rows[: max(1, min(100, int(limit or 24)))]
+
+
 def _autopilot_status_payload() -> dict:
     settings = load_settings()
     scan = _beta_load_autoscan_status(settings)
@@ -4520,14 +4703,26 @@ def _autopilot_status_payload() -> dict:
             "capacity": max(0, max_active - active_jobs),
             "estimated_selected_savings_bytes": 0,
         }
+    feedback_jobs = _autopilot_completed_feedback_jobs()
+    smart_state = public_smart_preset_state()
+    continuous_learning_enabled = bool(settings.get("autopilot_continuous_learning_enabled", True))
     return {
-        "release": "2.2.0",
+        "release": APP_RELEASE,
         "autopilot": autopilot,
         "readiness": _autopilot_readiness(settings),
         "scan": scan,
         "queue": {"paused": get_queue_state(), "summary": get_job_summary()},
         "nodes": list_nodes_public(),
         "review": _autopilot_review_summary(),
+        "continuous_learning": {
+            "enabled": continuous_learning_enabled,
+            "pending": sum(1 for row in feedback_jobs if row.get("needs_feedback")) if continuous_learning_enabled else 0,
+            "jobs": feedback_jobs if continuous_learning_enabled else [],
+        },
+        "onboarding": {
+            "tour_completed": bool(settings.get("autopilot_tour_completed", False)),
+            "training_target": int((smart_state.get("profile") or {}).get("minimum_feedback") or 2),
+        },
         "guide": {
             "steps": [
                 {"id": "folders", "title": "Map your library", "detail": "Choose the exact Movies and Shows folders ByteSqueeze may watch."},
@@ -5477,9 +5672,9 @@ def register_routes(app):
 
     # ------------- UI -------------
 
-    @app.route("/dashboard")
-    def index():
-        """Render the operations and queue dashboard."""
+    @app.route("/jobs")
+    def jobs_page():
+        """Render file search, one-shot encoding, and queue operations."""
         preset_files = list_preset_files()
         settings = load_settings()
         return render_template(
@@ -5490,12 +5685,23 @@ def register_routes(app):
             settings=settings,
         )
 
+    @app.route("/")
+    @app.route("/dashboard")
+    def home_page():
+        """Render the clean system overview used as the main landing page."""
+        return render_template("home.html")
+
+    @app.route("/autopilot")
+    def autopilot_page():
+        """Render the dedicated guided Autopilot workspace."""
+        return render_template("autopilot.html", settings=_public_settings(load_settings()))
+
     @app.route("/size_wizard")
     def size_wizard_page():
         """Render the Size Wizard page (prefill via query string)."""
         return render_template("size_wizard.html")
 
-    @app.route("/")
+    @app.route("/library")
     @app.route("/beta")
     def beta_page():
         """Render the primary media library experience."""
@@ -5599,6 +5805,60 @@ def register_routes(app):
     def autopilot_run_api():
         status = _beta_run_incremental_auto_scan(reason="autopilot-manual", force=True)
         return jsonify(ok=True, status=status, **_autopilot_status_payload())
+
+    @app.route("/api/autopilot/onboarding", methods=["POST"])
+    def autopilot_onboarding_api():
+        data = request.get_json(silent=True) or {}
+        completed = bool(data.get("completed", True))
+        save_settings({"autopilot_tour_completed": completed})
+        return jsonify(ok=True, completed=completed, onboarding=_autopilot_status_payload().get("onboarding"))
+
+    def _autopilot_completed_feedback_response(job_id: str, *, actor: str):
+        job = get_job(str(job_id or ""))
+        if not job:
+            return jsonify(error="completed job not found"), 404
+        if job.get("status") != "done":
+            return jsonify(error="quality feedback is available after the encode completes"), 409
+        context = job.get("smart_feedback_context")
+        if not job.get("smart_preset") or not isinstance(context, dict):
+            return jsonify(error="this job was not created from a learned preset"), 400
+        if isinstance(job.get("quality_feedback"), dict):
+            return jsonify(error="feedback was already submitted for this encode"), 409
+
+        data = request.get_json(silent=True) or {}
+        verdict = str(data.get("verdict") or "").strip().lower()
+        reason = str(data.get("reason") or "").strip().lower()
+        try:
+            feedback = record_smart_preset_feedback(
+                context,
+                verdict,
+                reason,
+                origin="post_encode",
+                job_id=str(job_id),
+            )
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+
+        saved = feedback.get("feedback") if isinstance(feedback.get("feedback"), dict) else {}
+        job["quality_feedback"] = {
+            "id": saved.get("id"),
+            "verdict": saved.get("verdict"),
+            "reason": saved.get("reason"),
+            "created_at": saved.get("created_at") or time.time(),
+        }
+        save_jobs()
+        log_event(
+            "autopilot_post_encode_feedback",
+            f"{actor} saved {verdict} quality feedback for {os.path.basename(str(job.get('src') or 'completed encode'))}.",
+            level="info" if verdict == "approve" else "warn",
+            job_id=str(job_id),
+            src=str(job.get("src") or ""),
+        )
+        return jsonify(ok=True, feedback=job["quality_feedback"], learning=feedback.get("learning"), continuous_learning=_autopilot_status_payload().get("continuous_learning"))
+
+    @app.route("/api/autopilot/completed/<job_id>/feedback", methods=["POST"])
+    def autopilot_completed_feedback_api(job_id):
+        return _autopilot_completed_feedback_response(job_id, actor="Web dashboard")
 
     @app.route("/api/beta/auto_scan/run", methods=["POST"])
     def beta_auto_scan_run_api():
@@ -5808,13 +6068,15 @@ def register_routes(app):
     def settings_page(settings_page="main"):
         """Render the settings page (global app settings)."""
         settings_page = str(settings_page or "main").strip().lower()
-        if settings_page not in {"main", "automation", "beta", "nodes"}:
+        if settings_page not in {"main", "automation", "ai", "beta", "nodes"}:
             abort(404)
+        if settings_page == "automation":
+            return redirect("/autopilot", code=302)
         settings = load_settings()
         preset_files = list_preset_files()
         return render_template(
             "settings.html",
-            settings=settings,
+            settings=_public_settings(settings),
             settings_page=settings_page,
             preset_files=preset_files,
             preset_dir=PRESET_DIR,
@@ -5844,11 +6106,39 @@ def register_routes(app):
         return jsonify(
             ok=healthy,
             status="healthy" if healthy else "degraded",
-            release="2.2.0",
+            release=APP_RELEASE,
             storage=storage,
             queue={"paused": get_queue_state(), "summary": get_job_summary()},
             schedulers={"node_monitor": monitor, "autopilot": _beta_load_autoscan_status(load_settings())},
         ), (200 if healthy else 503)
+
+    @app.route("/api/home/summary")
+    def home_summary_api():
+        library = _beta_load_library_cache(load_settings())
+        catalog = library.get("catalog") if isinstance(library.get("catalog"), dict) else {}
+        jobs = list_jobs_for_api()
+        active = [row for row in jobs if row.get("status") in {"running", "queued"}]
+        for row in active:
+            row.pop("smart_feedback_context", None)
+        autopilot = _autopilot_status_payload()
+        return jsonify(
+            ok=True,
+            queue={"paused": get_queue_state(), "summary": get_job_summary(), "active": active[:8]},
+            library={
+                "movies": int(catalog.get("movies") or len(library.get("movies") or [])),
+                "shows": int(catalog.get("shows") or len(library.get("shows") or [])),
+                "episodes": int(catalog.get("episodes") or 0),
+                "updated_at": library.get("generated_at") or library.get("scanned_at") or 0,
+            },
+            storage=get_storage_summary(),
+            nodes=list_nodes_public(),
+            autopilot={
+                "autopilot": autopilot.get("autopilot"),
+                "readiness": autopilot.get("readiness"),
+                "continuous_learning": autopilot.get("continuous_learning"),
+            },
+            events=load_events(limit=6),
+        )
 
     # ------------- Global settings (JSON API) -------------
 
@@ -5857,7 +6147,7 @@ def register_routes(app):
         """GET returns settings; POST updates settings."""
         if request.method == "GET":
             settings = load_settings()
-            return jsonify(settings=settings)
+            return jsonify(settings=_public_settings(settings))
 
         data = request.get_json(silent=True) or {}
         old_tmdb_tag = _beta_tmdb_auth_cache_tag(load_settings())
@@ -5866,7 +6156,44 @@ def register_routes(app):
         if tmdb_changed:
             BETA_POSTER_CACHE.clear()
             _beta_clear_library_cache()
-        return jsonify(settings=new_settings, tmdb_changed=tmdb_changed)
+        return jsonify(settings=_public_settings(new_settings), tmdb_changed=tmdb_changed)
+
+    @app.route("/api/ai/settings", methods=["GET", "POST"])
+    def wizard_ai_settings_api():
+        if request.method == "GET":
+            return jsonify(ok=True, **_wizard_ai_settings_payload())
+        data = request.get_json(silent=True) or {}
+        updates = {
+            "wizard_ai_provider": data.get("provider"),
+            "gemini_model": data.get("gemini_model"),
+            "openai_model": data.get("openai_model"),
+        }
+        if "gemini_api_key" in data and str(data.get("gemini_api_key") or "").strip():
+            updates["gemini_api_key"] = str(data.get("gemini_api_key") or "").strip()
+        if "openai_api_key" in data and str(data.get("openai_api_key") or "").strip():
+            updates["openai_api_key"] = str(data.get("openai_api_key") or "").strip()
+        if data.get("clear_gemini_key"):
+            updates["gemini_api_key"] = ""
+        if data.get("clear_openai_key"):
+            updates["openai_api_key"] = ""
+        settings = save_settings(updates)
+        return jsonify(ok=True, **_wizard_ai_settings_payload(settings))
+
+    @app.route("/api/ai/test", methods=["POST"])
+    def wizard_ai_test_api():
+        settings = load_settings()
+        result = run_wizard_llm(
+            "In one sentence, confirm that you can explain a safe balanced plan. Do not change settings.",
+            {
+                "src": "connection-test.mkv",
+                "probe": {"width": 1920, "height": 1080, "duration_sec": 5400, "source_size_bytes": 12 * 1024**3, "is_hdr": False, "source_type": "movie"},
+                "inputs": {"ai_goal": "balanced", "ai_risk": "safe", "target_mb": 5500, "video_codec": "h265", "encoder_family": "software", "resolution_mode": "keep", "audio_mode": "copy", "audio_tracks": "all", "subtitle_mode": "all"},
+                "estimates": {"encoder": "x265", "quality_label": "Good", "output_resolution": {"width": 1920, "height": 1080}, "ai_decisions": [], "ai_warnings": []},
+            },
+            settings,
+        )
+        status_code = 200 if result.get("ok") else 400
+        return jsonify(ok=bool(result.get("ok")), answer=result.get("answer") or "", error=result.get("error") or "", status=result.get("status") or wizard_llm_status(settings)), status_code
 
     # ------------- Future Android companion API (v1) -------------
 
@@ -5926,7 +6253,7 @@ def register_routes(app):
         shows = library.get("shows") if isinstance(library.get("shows"), list) else []
         return jsonify(
             ok=True,
-            release="2.2.0",
+            release=APP_RELEASE,
             device=device,
             queue={"paused": get_queue_state(), "summary": get_job_summary()},
             active_jobs=active_jobs[:8],
@@ -6151,6 +6478,7 @@ def register_routes(app):
             "autopilot_max_active_jobs",
             "autopilot_schedule_start",
             "autopilot_schedule_end",
+            "autopilot_continuous_learning_enabled",
             "beta_auto_scan_enabled",
             "beta_auto_scan_interval_minutes",
             "beta_auto_scan_skip_while_encoding",
@@ -6181,6 +6509,24 @@ def register_routes(app):
             settings=public_settings,
             status=_autopilot_status_payload(),
             scan_status=scan_status,
+        )
+
+    @app.route("/api/mobile/v1/autopilot/onboarding", methods=["POST"])
+    def mobile_autopilot_onboarding_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        data = request.get_json(silent=True) or {}
+        completed = bool(data.get("completed", True))
+        save_settings({"autopilot_tour_completed": completed})
+        log_event(
+            "mobile_autopilot_onboarding",
+            f"{device.get('name')} {'completed' if completed else 'restarted'} the Autopilot tour.",
+            level="info",
+        )
+        return jsonify(
+            ok=True,
+            onboarding=_autopilot_status_payload().get("onboarding"),
         )
 
     @app.route("/api/mobile/v1/storage")
@@ -7609,6 +7955,16 @@ def register_routes(app):
             return jsonify(error=str(exc)), 409
         return jsonify(ok=True, review=review)
 
+    @app.route("/api/mobile/v1/autopilot/completed/<job_id>/feedback", methods=["POST"])
+    def mobile_autopilot_completed_feedback_api(job_id):
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        return _autopilot_completed_feedback_response(
+            job_id,
+            actor=str(device.get("name") or "ByteSqueeze"),
+        )
+
     @app.route("/wizard_preview_accurate/start", methods=["POST"])
     def wizard_preview_accurate_start():
         data = request.get_json(force=True) or {}
@@ -7657,7 +8013,8 @@ def register_routes(app):
         except Exception as e:
             return jsonify(error=str(e)), 500
 
-        model_result = run_wizard_llm(question, initial_plan)
+        wizard_settings = load_settings()
+        model_result = run_wizard_llm(question, initial_plan, wizard_settings)
         rule_updates = _wizard_ai_chat_updates(question)
         model_updates = _wizard_ai_sanitize_model_updates(model_result.get("updates")) if model_result.get("ok") and rule_updates else {}
         updates = {**model_updates, **rule_updates}
@@ -7681,14 +8038,14 @@ def register_routes(app):
             inputs=plan["inputs"],
             estimates=plan["estimates"],
             model_used=bool(model_result.get("ok")),
-            model_status=model_result.get("status") or wizard_llm_status(),
+            model_status=model_result.get("status") or wizard_llm_status(wizard_settings),
             model_fallback_reason="" if model_result.get("ok") else str(model_result.get("error") or "model unavailable"),
             **reply,
         )
 
     @app.route("/wizard_ai_status")
     def wizard_ai_status_api():
-        return jsonify(wizard_llm_status())
+        return jsonify(wizard_llm_status(load_settings()))
 
 
 

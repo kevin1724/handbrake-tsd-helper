@@ -42,6 +42,85 @@
       margin-bottom: 14px;
     }
 
+    .wizard-quickstart {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .wizard-quickstart > div {
+      display: grid;
+      grid-template-columns: 30px 1fr;
+      gap: 10px;
+      align-items: start;
+      padding: 13px;
+      border: 1px solid rgba(255,255,255,.08);
+      border-radius: 13px;
+      background: rgba(255,255,255,.025);
+    }
+
+    .wizard-quickstart b {
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      color: #a5f3fc;
+      background: rgba(22,199,214,.13);
+    }
+
+    .wizard-quickstart strong,
+    .wizard-quickstart small { display: block; }
+    .wizard-quickstart small { margin-top: 4px; color: rgba(229,229,229,.58); }
+
+    @media (max-width: 720px) {
+      .wizard-quickstart { grid-template-columns: 1fr; }
+    }
+
+    .wizard-ai-setup-card {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 16px;
+      align-items: center;
+      margin-bottom: 14px;
+      border-color: rgba(22, 199, 214, .22);
+      background: linear-gradient(120deg, rgba(22, 199, 214, .08), rgba(52, 118, 255, .045));
+    }
+
+    .wizard-ai-setup-copy {
+      display: grid;
+      gap: 4px;
+    }
+
+    .wizard-ai-setup-copy strong {
+      color: #fff;
+      font-size: 17px;
+    }
+
+    .wizard-ai-setup-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+      justify-content: flex-end;
+    }
+
+    .wizard-ai-setup-card[data-state="ready"] {
+      border-color: rgba(56, 211, 159, .34);
+      background: linear-gradient(120deg, rgba(56, 211, 159, .08), rgba(22, 199, 214, .045));
+    }
+
+    .wizard-ai-setup-card[data-state="needs-setup"] {
+      border-color: rgba(255, 190, 74, .32);
+      background: linear-gradient(120deg, rgba(255, 190, 74, .08), rgba(52, 118, 255, .035));
+    }
+
+    @media (max-width: 760px) {
+      .wizard-ai-setup-card { grid-template-columns: 1fr; }
+      .wizard-ai-setup-actions { justify-content: flex-start; }
+    }
+
     .wizard-mode-copy {
       display: grid;
       gap: 4px;
@@ -950,11 +1029,13 @@
         <span>Media encode dashboard</span>
       </span>
     </a>
-    <div class="nav-links">
-      <a href="/dashboard" class="nav-link nav-jobs">Dashboard</a>
-      <a href="/size_wizard" class="nav-link nav-wizard nav-link-active">Size Wizard</a>
-      <a href="/" class="nav-link nav-library">Library</a>
-      <a href="/settings" class="nav-link nav-settings">Settings</a>
+      <div class="nav-links">
+        <a href="/" class="nav-link">Home</a>
+        <a href="/library" class="nav-link nav-library">Library</a>
+        <a href="/jobs" class="nav-link nav-jobs">Jobs</a>
+        <a href="/autopilot" class="nav-link">Autopilot</a>
+        <a href="/size_wizard" class="nav-link nav-wizard nav-link-active">Size Wizard</a>
+        <a href="/settings" class="nav-link nav-settings">Settings</a>
     </div>
     <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>
   </nav>
@@ -964,6 +1045,25 @@
       <h1>Size Wizard</h1>
       <div id="fileNameChip" class="file-chip">No file selected</div>
     </div>
+
+    <section class="wizard-quickstart" aria-label="Size Wizard steps">
+      <div><b>1</b><span><strong>Select a source</strong><small>Open a file from Jobs or the Library.</small></span></div>
+      <div><b>2</b><span><strong>Choose your goal</strong><small>Set target size, quality priority, audio, and subtitles.</small></span></div>
+      <div><b>3</b><span><strong>Review before queueing</strong><small>Inspect the recommendation and create an accurate preview when quality matters.</small></span></div>
+    </section>
+
+    <section id="wizardAiSetupCard" class="section-card wizard-ai-setup-card" data-state="checking" aria-labelledby="wizardAiSetupTitle">
+      <div class="wizard-ai-setup-copy">
+        <div class="eyebrow">Optional AI explanations</div>
+        <strong id="wizardAiSetupTitle">Checking Gemini, OpenAI, or local advisor setup...</strong>
+        <span id="wizardAiSetupDescription" class="small">The validated Size Wizard works without AI. Connect a provider when you want plain-language explanations and safe option suggestions.</span>
+      </div>
+      <div class="wizard-ai-setup-actions">
+        <span id="wizardAiSetupPill" class="ai-model-chip">Checking</span>
+        <a class="button-link" href="/settings/ai">Set up Gemini or OpenAI</a>
+        <a class="button-link ghost-btn" href="https://github.com/kevin1724/handbrake-tsd-helper/blob/main/docs/AI_ADVISOR.md" target="_blank" rel="noopener">Setup guide</a>
+      </div>
+    </section>
 
     <section class="section-card wizard-mode-card">
       <div class="wizard-mode-copy">
@@ -1077,7 +1177,7 @@
           <div id="simpleFileName" class="simple-file-name">No file selected</div>
           <div id="simpleFilePath" class="simple-file-path small">Pick a file from Jobs or use the last file opened here.</div>
           <div class="source-actions">
-            <a href="/" class="nav-link">Pick From Jobs</a>
+            <a href="/jobs" class="nav-link">Pick From Jobs</a>
             <button id="simpleUseLastFileBtn" type="button" class="ghost-btn">Use Last File</button>
             <span id="simpleSourceStatus" class="small status-text"></span>
           </div>
@@ -1122,7 +1222,7 @@
                 <option value="MB">MB</option>
               </select>
             </div>
-            <div class="help-text">The AI will try to make the best-looking file it can at this size.</div>
+            <div class="help-text">The planner will make the best-looking safe plan it can at this size. The optional AI advisor can explain its choices.</div>
           </div>
         </div>
 
@@ -1217,7 +1317,7 @@
           <label for="src">Selected file</label>
           <input id="src" type="text" readonly>
           <div class="source-actions">
-            <a href="/" class="nav-link">Pick From Jobs</a>
+            <a href="/jobs" class="nav-link">Pick From Jobs</a>
             <button id="useLastFileBtn" type="button" class="ghost-btn">Use Last File</button>
             <span id="sourceStatus" class="small status-text"></span>
           </div>
@@ -1234,7 +1334,7 @@
             <div class="ai-brain-panel">
               <div>
                 <strong>AI profile brain</strong>
-                <div class="help-text">This still uses the local planner for now. Later this section can become the place where an API-based profile builder plugs in.</div>
+                <div class="help-text">The validated planner always builds the encode. Your selected local, Gemini, or OpenAI advisor can explain and safely refine it.</div>
               </div>
               <div class="ai-brain-grid">
                 <div class="ai-brain-chip"><strong>Goal aware</strong><span class="help-text">Balances speed, size, quality, and archive behavior.</span></div>
@@ -1645,17 +1745,19 @@
           <div class="ai-assistant-header">
             <div class="ai-assistant-title">
               <strong id="aiAssistantHeading">Plan Assistant</strong>
-              <span>Grounded in this file, your hardware, and encode history</span>
+              <span>Grounded in this file, your hardware, encode history, and track policy</span>
             </div>
             <span id="aiModelChip" class="ai-model-chip" title="The local model loads only while answering">Checking model</span>
           </div>
+          <div class="small" style="margin:0 0 10px">Need a key? Open <a href="/settings/ai">Settings &rarr; AI &amp; API Keys</a>, paste it, then use <em>Save &amp; test selected provider</em>. Video and audio are never sent to a cloud model.</div>
           <div id="aiChatLog" class="ai-chat-log" aria-live="polite">
             <div class="ai-chat-message assistant">Select a file and I will explain the plan, compare tradeoffs, or safely change wizard settings.</div>
           </div>
           <div id="aiChatPrompts" class="ai-chat-prompts">
             <button type="button" class="ghost-btn ai-prompt-chip" data-ai-prompt="Why did you choose this codec?">Why this codec?</button>
-            <button type="button" class="ghost-btn ai-prompt-chip" data-ai-prompt="Will this keep the source resolution?">Keep resolution?</button>
-            <button type="button" class="ghost-btn ai-prompt-chip" data-ai-prompt="How risky is this target size?">Target risk?</button>
+            <button type="button" class="ghost-btn ai-prompt-chip" data-ai-prompt="Prioritize quality but keep the result under 6 GB.">Quality under 6 GB</button>
+            <button type="button" class="ghost-btn ai-prompt-chip" data-ai-prompt="Keep all English and Spanish audio and subtitles, and preserve surround sound.">Keep EN/ES tracks</button>
+            <button type="button" class="ghost-btn ai-prompt-chip" data-ai-prompt="Use E-AC3 5.1 only when surround passthrough is not possible.">Protect surround</button>
           </div>
           <div class="ai-chat-compose">
             <input id="aiChatInput" type="text" maxlength="500" placeholder="Ask why, or say: prioritize quality and keep 4K">
@@ -2517,6 +2619,10 @@
       if (el("simpleFileName")) el("simpleFileName").textContent = path ? basename(path) : "No file selected";
       if (el("simpleFilePath")) el("simpleFilePath").textContent = path || "Pick a file from Jobs or use the last file opened here.";
       if (el("simpleUseLastFileBtn")) el("simpleUseLastFileBtn").disabled = !readWizardHandoff();
+      if (el("smartBuildBtn")) el("smartBuildBtn").disabled = !path || smartBuildBusy;
+      if (!path && !smartCandidates.length) {
+        setStatus("smartPresetStatus", "Step 1: select a source file before building candidates.");
+      }
     }
 
     function updateControlStates() {
@@ -2582,7 +2688,7 @@
         preserve_audio: true,
         preserve_subtitles: true,
         automation_enabled: Boolean(el("smartAutomation")?.checked),
-        minimum_feedback: smartProfile?.minimum_feedback || 3,
+        minimum_feedback: smartProfile?.minimum_feedback || 2,
         confidence_threshold: smartProfile?.confidence_threshold || 0.72
       };
     }
@@ -2599,7 +2705,7 @@
     function renderSmartLearning(learning = {}) {
       smartLearning = learning;
       const needed = Number(learning.reviews_needed || 0);
-      const minimum = Number(smartProfile?.minimum_feedback || 3);
+      const minimum = Number(smartProfile?.minimum_feedback || 2);
       const count = Number(learning.feedback_count || 0);
       const progress = learning.automation_ready ? 100 : Math.min(100, Math.round((count / Math.max(1, minimum)) * 100));
       if (el("smartLearningFill")) el("smartLearningFill").style.width = `${progress}%`;
@@ -2988,13 +3094,40 @@
 
     function setAiModelState(status = {}, used = null) {
       const chip = el("aiModelChip");
-      if (!chip) return;
-      if (used === true) chip.textContent = "Local 0.5B used";
-      else if (status.ready) chip.textContent = "Local 0.5B ready";
-      else chip.textContent = "Planner fallback";
-      chip.title = status.ready
-        ? "Qwen2.5 0.5B loads into memory only while answering, then exits."
-        : "The local model is unavailable; the validated planner explanation is still active.";
+      const provider = status.provider || "local";
+      const providerLabel = provider === "gemini" ? "Gemini" : provider === "openai" ? "OpenAI" : provider === "off" ? "Planner" : "Local";
+      if (chip) {
+        if (used === true) chip.textContent = `${providerLabel} used`;
+        else if (status.ready) chip.textContent = `${providerLabel} ready`;
+        else chip.textContent = provider === "off" ? "Planner only" : `${providerLabel} fallback`;
+        chip.title = status.ready
+          ? `${status.model || providerLabel} is selected for grounded plan explanations.`
+          : "The selected model is unavailable; the validated deterministic planner remains active.";
+      }
+
+      const setupCard = el("wizardAiSetupCard");
+      const setupTitle = el("wizardAiSetupTitle");
+      const setupDescription = el("wizardAiSetupDescription");
+      const setupPill = el("wizardAiSetupPill");
+      if (!setupCard || !setupTitle || !setupDescription || !setupPill) return;
+      if (provider === "off") {
+        setupCard.dataset.state = "planner";
+        setupTitle.textContent = "Planner-only mode is active";
+        setupDescription.textContent = "Size Wizard will build and validate plans normally, but the conversational Plan Assistant is disabled.";
+        setupPill.textContent = "AI off";
+      } else if (status.ready) {
+        setupCard.dataset.state = "ready";
+        setupTitle.textContent = `${providerLabel} is connected and ready`;
+        setupDescription.textContent = `${status.model || providerLabel} can explain this file's plan after you select a source. The deterministic planner still validates every change.`;
+        setupPill.textContent = `${providerLabel} ready`;
+      } else {
+        setupCard.dataset.state = "needs-setup";
+        setupTitle.textContent = `${providerLabel} needs setup`;
+        setupDescription.textContent = provider === "local"
+          ? "The bundled local model is unavailable in this container. Connect Gemini or OpenAI for AI explanations, or keep using the validated planner without AI."
+          : `${providerLabel} is selected, but its API key is missing or unavailable. Open AI & API Keys, paste the key, then save and test it.`;
+        setupPill.textContent = "Action needed";
+      }
     }
 
     async function loadAiModelStatus() {
@@ -3031,7 +3164,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ ...payload, question })
-        }, 25000);
+        }, 45000);
         const data = await readJson(res);
         if (!res.ok) throw new Error(data.error || "AI assistant failed");
         setAiModelState(data.model_status || {}, data.model_used === true);

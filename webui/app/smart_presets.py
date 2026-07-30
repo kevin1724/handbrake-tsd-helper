@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import re
 import tempfile
 import threading
 import time
@@ -19,7 +20,7 @@ from .config import DATA_DIR
 
 
 SMART_PRESETS_FILE = os.path.join(DATA_DIR, "smart_presets.json")
-SMART_PRESET_VERSION = 2
+SMART_PRESET_VERSION = 3
 SMART_FEEDBACK_LIMIT = 1000
 SMART_LOCK = threading.RLock()
 
@@ -67,7 +68,7 @@ def default_profile() -> dict:
         "preserve_audio": True,
         "preserve_subtitles": True,
         "automation_enabled": False,
-        "minimum_feedback": 3,
+        "minimum_feedback": 2,
         "confidence_threshold": 0.72,
         "created_at": now,
         "updated_at": now,
@@ -115,7 +116,7 @@ def normalize_profile(values: dict | None, existing: dict | None = None) -> dict
                 values.get("automation_enabled"), base["automation_enabled"]
             ),
             "minimum_feedback": int(
-                round(_bounded(values.get("minimum_feedback"), base["minimum_feedback"], 3, 20))
+                round(_bounded(values.get("minimum_feedback"), base["minimum_feedback"], 2, 20))
             ),
             "confidence_threshold": round(
                 _bounded(values.get("confidence_threshold"), base["confidence_threshold"], 0.55, 0.95), 2
@@ -143,6 +144,16 @@ def load_state() -> dict:
 
         state = raw if isinstance(raw, dict) else {}
         profile = normalize_profile(state.get("profile"), state.get("profile"))
+        # Version 2 shipped with a hidden three-preview default. Version 3's
+        # dedicated training page makes the target visible and uses two
+        # consistent approvals, while preserving higher custom targets saved
+        # after this migration.
+        try:
+            previous_version = int(state.get("version") or 0)
+        except (TypeError, ValueError):
+            previous_version = 0
+        if previous_version < SMART_PRESET_VERSION and int(profile.get("minimum_feedback") or 0) == 3:
+            profile["minimum_feedback"] = 2
         rows = []
         for row in state.get("feedback") if isinstance(state.get("feedback"), list) else []:
             if not isinstance(row, dict):
@@ -195,6 +206,16 @@ def resolution_bucket(width, height) -> str:
     return "sd_hd"
 
 
+def _language_key(value) -> str:
+    if isinstance(value, str):
+        values = re.split(r"[\s,;]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        values = []
+    return ",".join(sorted({str(item).strip().lower() for item in values if str(item).strip()}))[:40]
+
+
 def feedback_context(plan: dict, candidate_id: str = "manual") -> dict:
     probe = plan.get("probe") if isinstance(plan.get("probe"), dict) else {}
     options = plan.get("options") if isinstance(plan.get("options"), dict) else {}
@@ -218,6 +239,9 @@ def feedback_context(plan: dict, candidate_id: str = "manual") -> dict:
             "speed": str(options.get("encoder_speed") or "")[:20],
             "output_resolution": resolution_bucket(output.get("width"), output.get("height")),
             "target_ratio": round(target_bytes / float(source_bytes), 4),
+            "audio_strategy": str(options.get("smart_audio_strategy") or options.get("audio_mode") or "")[:24],
+            "audio_languages": _language_key(options.get("audio_languages")),
+            "subtitle_languages": _language_key(options.get("subtitle_languages")),
         },
         "plan": {
             "preset": str(plan.get("preset") or "")[:20],
@@ -247,6 +271,9 @@ def _similarity(left: dict, right: dict) -> float:
         ("encoder_family", 0.08),
         ("quality", 0.07),
         ("output_resolution", 0.08),
+        ("audio_strategy", 0.05),
+        ("audio_languages", 0.03),
+        ("subtitle_languages", 0.03),
     ):
         if left_features.get(key) == right_features.get(key):
             score += weight
@@ -272,7 +299,28 @@ def candidate_learning(context: dict, state: dict | None = None) -> dict:
         if row.get("verdict") == "approve":
             positive += weight
         else:
-            negative += weight
+            reason = str(row.get("reason") or "")
+            candidate_features = context.get("features") if isinstance(context.get("features"), dict) else {}
+            saved_features = saved_context.get("features") if isinstance(saved_context.get("features"), dict) else {}
+            try:
+                candidate_ratio = float(candidate_features.get("target_ratio") or 0)
+                saved_ratio = float(saved_features.get("target_ratio") or 0)
+            except (TypeError, ValueError):
+                candidate_ratio = saved_ratio = 0.0
+
+            # A rejection teaches both what failed and which safe direction is
+            # more promising. Quality complaints favor a roomier target;
+            # size complaints favor a smaller one. The correction is weaker
+            # than an explicit approval and still requires later confirmation.
+            corrective = (
+                reason == "quality" and candidate_ratio > saved_ratio * 1.05
+            ) or (
+                reason == "size" and 0 < candidate_ratio < saved_ratio * 0.95
+            )
+            if corrective:
+                positive += weight * 0.65
+            else:
+                negative += weight
     evidence = positive + negative
     acceptance = (1.0 + positive) / (2.0 + evidence)
     confidence = min(1.0, evidence / max(1.0, float(state.get("profile", {}).get("minimum_feedback") or 3)))
@@ -321,12 +369,22 @@ def learning_status(state: dict | None = None) -> dict:
     }
 
 
-def record_feedback(context: dict, verdict: str, reason: str = "") -> dict:
+def record_feedback(
+    context: dict,
+    verdict: str,
+    reason: str = "",
+    *,
+    origin: str = "preview",
+    job_id: str = "",
+) -> dict:
     verdict = str(verdict or "").strip().lower()
     if verdict not in {"approve", "reject"}:
         raise ValueError("verdict must be approve or reject")
     reason = str(reason or ("looks_good" if verdict == "approve" else "other")).strip().lower()
-    allowed_reasons = {"looks_good", "quality", "size", "speed", "compatibility", "other"}
+    allowed_reasons = {
+        "looks_good", "quality", "size", "speed", "compatibility",
+        "audio", "subtitles", "playback", "other",
+    }
     if reason not in allowed_reasons:
         reason = "other"
     if not isinstance(context, dict) or not isinstance(context.get("features"), dict):
@@ -340,6 +398,8 @@ def record_feedback(context: dict, verdict: str, reason: str = "") -> dict:
             "verdict": verdict,
             "reason": reason,
             "context": context,
+            "origin": str(origin or "preview")[:40],
+            "job_id": str(job_id or "")[:80],
             "created_at": time.time(),
         }
         state["feedback"] = (state.get("feedback") or [])[-(SMART_FEEDBACK_LIMIT - 1):] + [row]
@@ -360,6 +420,8 @@ def public_state() -> dict:
                 "verdict": row.get("verdict"),
                 "reason": row.get("reason"),
                 "created_at": row.get("created_at"),
+                "origin": row.get("origin") or "preview",
+                "job_id": row.get("job_id") or "",
                 "source": source,
                 "plan": plan,
             }

@@ -22,19 +22,19 @@ jobs, tune automation, and watch node and storage health.
    reclaimed storage, and recent events.
 2. **Library** — searchable Movies and Shows poster rails, a complete catalog,
    show monitoring, seasons/episodes, and node-aware Smart Preset queueing.
-3. **Calendar** — upcoming episodes from TVmaze, tracked-show filtering, and a
-   clear explanation of when downloaded files become eligible for auto-queue.
-4. **Jobs** — active progress and ETA, queue pause/resume, reordering,
+3. **Jobs** — active progress and ETA, queue pause/resume, reordering,
    cancellation, and history.
-5. **Server** — worker/storage/event/connection controls plus a guided
-   Autopilot workspace with policy profiles and Smart Preset learning status.
+4. **Autopilot** — first-run and restartable tours, accurate preview training,
+   policy guardrails, decision explanations, and after-watch feedback.
+5. **More** — upcoming-episode calendar, worker, storage, event, and connection
+   controls.
 
 Wide screens use a navigation rail while phones use bottom navigation. This
 keeps tablets and a future iPad build useful without creating a second UI.
 
 ## Pairing
 
-1. Open **Settings → Automation & Apps** in the TSD web dashboard.
+1. Open **Settings > Linked Nodes** in the TSD web dashboard and find **Companion app access**.
 2. Generate a ByteSqueeze pairing code with read or control scope.
 3. Enter the controller URL and one-time code in ByteSqueeze.
 4. The access and refresh tokens are stored with platform secure storage.
@@ -77,9 +77,9 @@ ByteSqueeze uses bearer-authenticated routes under `/api/mobile/v1`:
 - dashboard and server status
 - jobs, queue state, job actions, and history cleanup
 - poster-rich library cache, refresh, queueing, and show tracking
-- release calendar and keyless metadata attribution
+- release calendar and TMDb-first/keyless-fallback metadata attribution
 - explicit local, best-worker, or selected-worker queue targets
-- Autopilot status, policy updates, and run-now
+- Autopilot onboarding, preview training, after-watch feedback, policy updates, and run-now
 - Smart Preset profile and learning state
 - nodes, storage statistics, and events
 

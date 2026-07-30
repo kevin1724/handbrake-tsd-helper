@@ -38,6 +38,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
             .toList();
     final stats = asMap(widget.controller.library['stats']);
     final configured = widget.controller.library['configured'] != false;
+    final tmdbConfigured = widget.controller.library['tmdb_configured'] == true;
 
     return RefreshIndicator(
       onRefresh: widget.controller.canControl
@@ -87,6 +88,32 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ],
                   ),
                   const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      StatusPill(
+                        label: tmdbConfigured
+                            ? 'TMDb preferred'
+                            : 'No-key artwork',
+                        color: tmdbConfigured
+                            ? ByteSqueezeColors.mint
+                            : ByteSqueezeColors.blue,
+                        icon: tmdbConfigured
+                            ? Icons.verified_outlined
+                            : Icons.image_search_rounded,
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: Text(
+                          tmdbConfigured
+                              ? 'TMDb posters are used first; other artwork fills any gaps.'
+                              : 'Local, TVmaze, and Apple artwork work without an API key.',
+                          style: const TextStyle(
+                              color: ByteSqueezeColors.muted, fontSize: 11.5),
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
                   SegmentedButton<bool>(
                     segments: const [
                       ButtonSegment(
@@ -470,6 +497,15 @@ class _MediaDetailsState extends State<_MediaDetails> {
   @override
   Widget build(BuildContext context) {
     final files = asList(widget.item['files']);
+    final posterSource = '${widget.item['poster_source'] ?? widget.item['metadata_source'] ?? widget.item['source'] ?? ''}'
+        .toLowerCase();
+    final artworkLabel = posterSource == 'tmdb'
+        ? 'Artwork: TMDb'
+        : (posterSource == 'tvmaze'
+            ? 'Artwork: TVmaze'
+            : (posterSource == 'apple'
+                ? 'Artwork: Apple'
+                : (posterSource == 'local' ? 'Artwork: local' : '')));
     return DraggableScrollableSheet(
       expand: false,
       initialChildSize: .88,
@@ -515,6 +551,13 @@ class _MediaDetailsState extends State<_MediaDetails> {
                           StatusPill(
                               label: '${widget.item['quality']}',
                               color: ByteSqueezeColors.mint),
+                        if (artworkLabel.isNotEmpty)
+                          StatusPill(
+                              label: artworkLabel,
+                              color: posterSource == 'tmdb'
+                                  ? ByteSqueezeColors.mint
+                                  : ByteSqueezeColors.blue,
+                              icon: Icons.image_outlined),
                       ],
                     ),
                   ],

@@ -591,11 +591,13 @@
         <span>Media encode dashboard</span>
       </span>
     </a>
-    <div class="nav-links">
-      <a href="/dashboard" class="nav-link nav-jobs">Dashboard</a>
-      <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
-      <a href="/" class="nav-link nav-library nav-link-active">Library</a>
-      <a href="/settings" class="nav-link nav-settings">Settings</a>
+      <div class="nav-links">
+        <a href="/" class="nav-link">Home</a>
+        <a href="/library" class="nav-link nav-library nav-link-active">Library</a>
+        <a href="/jobs" class="nav-link nav-jobs">Jobs</a>
+        <a href="/autopilot" class="nav-link">Autopilot</a>
+        <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
+        <a href="/settings" class="nav-link nav-settings">Settings</a>
     </div>
     <div id="appStatusChip" class="app-status status-idle"><span id="appStatusText">Idle</span></div>
   </nav>
@@ -1756,9 +1758,11 @@
       const problemText = posterProblemText(data);
       const keyless = data.metadata?.keyless !== false;
       const sourceText = keyless
-        ? "Keyless artwork is on: local sidecars first, then TVmaze for shows and Apple Search for movies."
-        : "Keyless artwork is disabled in Library Settings.";
-      const tmdbText = data.tmdb_configured ? " TMDb remains enabled as a fallback." : "";
+        ? "No-key fallback artwork is on: local sidecars, TVmaze for shows, and Apple Search for movies."
+        : "No-key fallback artwork is disabled in Library Settings.";
+      const tmdbText = data.tmdb_configured
+        ? " TMDb is configured and is the preferred artwork source."
+        : " Add TMDb in Library Settings for its more accurate poster matching.";
       el("tmdbNotice").textContent = sourceText + tmdbText + scanText + problemText;
     }
 

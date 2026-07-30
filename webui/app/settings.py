@@ -11,6 +11,7 @@ Settings are stored as JSON on disk in settings.json.
 
 import json
 import os
+import re
 import shutil
 import threading
 
@@ -40,14 +41,15 @@ DEFAULT_SETTINGS = {
     # drag_drop = grab rows and reorder visually
     "queue_ui_mode": "buttons",
 
-    # Keyless catalog metadata is enabled by default. Local sidecar artwork wins,
-    # then TVmaze supplies show art/schedules and Apple Search supplies movie art.
+    # Keyless catalog metadata is enabled by default. When TMDb credentials are
+    # configured its artwork wins; local/TVmaze/Apple artwork remains the
+    # automatic fallback and TVmaze continues to supply show schedules.
     "metadata_no_key_enabled": True,
     "metadata_country": "US",
     "episode_release_monitor_enabled": True,
     "episode_release_refresh_hours": 12,
 
-    # Optional legacy TMDb fallback for users who already configured it.
+    # Optional preferred TMDb artwork provider.
     "tmdb_api_key": "",
     "tmdb_bearer_token": "",
 
@@ -79,6 +81,16 @@ DEFAULT_SETTINGS = {
     "autopilot_max_active_jobs": 5,
     "autopilot_schedule_start": "00:00",
     "autopilot_schedule_end": "23:59",
+    "autopilot_continuous_learning_enabled": True,
+    "autopilot_tour_completed": False,
+
+    # Optional cloud advisor for Size Wizard. Keys remain server-side and are
+    # never needed by the deterministic planning/encoding path.
+    "wizard_ai_provider": "local",
+    "gemini_api_key": "",
+    "gemini_model": "gemini-3.6-flash",
+    "openai_api_key": "",
+    "openai_model": "gpt-5.6-luna",
 
     # Worker-side folder used for remote-transfer source downloads and
     # temporary encodes. Blank means DATA_DIR/node_transfer_work.
@@ -404,6 +416,31 @@ def _save_settings_unlocked(new_values: dict) -> dict:
     base["autopilot_schedule_end"] = _clock_value(
         new_values.get("autopilot_schedule_end", base.get("autopilot_schedule_end", "23:59")), "23:59"
     )
+    base["autopilot_continuous_learning_enabled"] = bool(
+        new_values.get(
+            "autopilot_continuous_learning_enabled",
+            base.get("autopilot_continuous_learning_enabled", True),
+        )
+    )
+    base["autopilot_tour_completed"] = bool(
+        new_values.get("autopilot_tour_completed", base.get("autopilot_tour_completed", False))
+    )
+
+    # ------------------------------------------------------------------
+    # Optional Size Wizard cloud advisor
+    # ------------------------------------------------------------------
+    provider = str(new_values.get("wizard_ai_provider", base.get("wizard_ai_provider", "local"))).strip().lower()
+    base["wizard_ai_provider"] = provider if provider in {"off", "local", "gemini", "openai"} else "local"
+    for key in ("gemini_api_key", "openai_api_key"):
+        if key in new_values:
+            base[key] = str(new_values.get(key) or "").strip()[:500]
+    model_rules = {
+        "gemini_model": ("gemini-3.6-flash", r"[A-Za-z0-9._-]{3,100}"),
+        "openai_model": ("gpt-5.6-luna", r"[A-Za-z0-9._-]{3,100}"),
+    }
+    for key, (default, pattern) in model_rules.items():
+        value = str(new_values.get(key, base.get(key, default)) or default).strip()
+        base[key] = value if re.fullmatch(pattern, value) else default
 
     # ------------------------------------------------------------------
     # Remote transfer worker temp folder

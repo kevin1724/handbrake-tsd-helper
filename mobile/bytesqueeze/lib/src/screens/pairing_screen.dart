@@ -246,7 +246,7 @@ class _PairingScreenState extends State<PairingScreen> {
                           SizedBox(width: 9),
                           Expanded(
                             child: Text(
-                              'Generate the code in TSD Settings → Automation & Apps. A Tailscale address can be saved as the automatic away-from-home fallback.',
+                              'Generate the code in TSD Settings > Linked Nodes, under Companion app access. A Tailscale address can be saved as the automatic away-from-home fallback.',
                               style: TextStyle(
                                   color: ByteSqueezeColors.muted,
                                   fontSize: 12.5,

@@ -7,6 +7,11 @@ import os
 import re
 import subprocess
 import threading
+from urllib.error import HTTPError, URLError
+from urllib.parse import quote
+from urllib.request import Request, urlopen
+
+from .settings import load_settings
 
 
 LLM_BIN = os.environ.get("HB_WIZARD_LLM_BIN", "/usr/local/bin/llama-cli")
@@ -49,22 +54,59 @@ _OUTPUT_SCHEMA = json.dumps(
 )
 
 
-def wizard_llm_status() -> dict:
+def _provider_config(settings: dict | None = None) -> dict:
+    settings = settings if isinstance(settings, dict) else load_settings()
+    provider = str(settings.get("wizard_ai_provider") or "local").strip().lower()
+    if provider not in {"off", "local", "gemini", "openai"}:
+        provider = "local"
+    gemini_key = str(os.environ.get("GEMINI_API_KEY") or settings.get("gemini_api_key") or "").strip()
+    openai_key = str(os.environ.get("OPENAI_API_KEY") or settings.get("openai_api_key") or "").strip()
+    return {
+        "provider": provider,
+        "gemini_key": gemini_key,
+        "gemini_model": str(settings.get("gemini_model") or "gemini-3.6-flash").strip(),
+        "openai_key": openai_key,
+        "openai_model": str(settings.get("openai_model") or "gpt-5.6-luna").strip(),
+    }
+
+
+def wizard_llm_status(settings: dict | None = None) -> dict:
+    config = _provider_config(settings)
     binary_ready = os.path.isfile(LLM_BIN) and os.access(LLM_BIN, os.X_OK)
     model_ready = os.path.isfile(LLM_MODEL)
     try:
         model_bytes = os.path.getsize(LLM_MODEL) if model_ready else 0
     except OSError:
         model_bytes = 0
+    local_ready = bool(LLM_ENABLED and binary_ready and model_ready)
+    provider = config["provider"]
+    selected_ready = {
+        "off": False,
+        "local": local_ready,
+        "gemini": bool(config["gemini_key"]),
+        "openai": bool(config["openai_key"]),
+    }[provider]
+    selected_model = {
+        "off": "Deterministic planner only",
+        "local": "Qwen2.5 0.5B Instruct Q4_0",
+        "gemini": config["gemini_model"],
+        "openai": config["openai_model"],
+    }[provider]
     return {
         "enabled": bool(LLM_ENABLED),
-        "ready": bool(LLM_ENABLED and binary_ready and model_ready),
+        "ready": selected_ready,
+        "provider": provider,
         "binary_ready": binary_ready,
         "model_ready": model_ready,
-        "model": "Qwen2.5 0.5B Instruct Q4_0",
+        "model": selected_model,
         "model_bytes": model_bytes,
         "on_demand": True,
         "threads": LLM_THREADS,
+        "providers": {
+            "local": {"configured": local_ready, "model": "Qwen2.5 0.5B Instruct Q4_0"},
+            "gemini": {"configured": bool(config["gemini_key"]), "model": config["gemini_model"]},
+            "openai": {"configured": bool(config["openai_key"]), "model": config["openai_model"]},
+        },
     }
 
 
@@ -142,10 +184,130 @@ def _clean_answer(value) -> str:
     return answer
 
 
-def run_wizard_llm(question: str, plan: dict) -> dict:
-    status = wizard_llm_status()
+def _cloud_prompt(question: str, plan: dict) -> tuple[str, str]:
+    system = (
+        "You are the optional Size Wizard advisor for a HandBrake media encoder. "
+        "Use only the supplied scan and plan facts. Explain tradeoffs in plain language in at most 80 words. "
+        "The deterministic ByteSqueeze planner is authoritative; never invent media facts or raw commands. "
+        "Keep all English and Spanish audio and subtitle tracks. Preserve surround sound by passthrough when possible, "
+        "otherwise recommend E-AC3 5.1. You may propose only these update keys: ai_goal, ai_hardware, "
+        "ai_codec_preference, ai_risk, resolution_mode, target_size_value, target_size_unit, target_size_auto, "
+        "ai_copy_audio, ai_audio_scope, ai_subtitle_scope. Return only JSON with answer, updates, and confidence."
+    )
+    prompt = (
+        "PLAN="
+        + json.dumps(_compact_plan_context(plan), separators=(",", ":"), ensure_ascii=True)
+        + "\nQUESTION="
+        + str(question or "")[:500]
+    )
+    return system, prompt
+
+
+def _http_json(request: Request, payload: dict) -> dict:
+    try:
+        with urlopen(request, data=json.dumps(payload).encode("utf-8"), timeout=35) as response:
+            value = json.loads(response.read().decode("utf-8", errors="replace"))
+    except HTTPError as exc:
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except Exception:
+            detail = str(exc)
+        raise RuntimeError(f"provider returned HTTP {exc.code}: {detail[:220]}") from exc
+    except (URLError, TimeoutError, OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(str(exc)[:240]) from exc
+    if not isinstance(value, dict):
+        raise RuntimeError("provider returned an invalid response")
+    return value
+
+
+def _openai_output_text(payload: dict) -> str:
+    direct = payload.get("output_text")
+    if direct:
+        return str(direct)
+    parts = []
+    for item in payload.get("output") if isinstance(payload.get("output"), list) else []:
+        if not isinstance(item, dict):
+            continue
+        for content in item.get("content") if isinstance(item.get("content"), list) else []:
+            if isinstance(content, dict) and content.get("text"):
+                parts.append(str(content["text"]))
+    return "\n".join(parts)
+
+
+def _run_cloud_provider(provider: str, question: str, plan: dict, config: dict, status: dict) -> dict:
+    system, prompt = _cloud_prompt(question, plan)
+    if provider == "gemini":
+        model = quote(config["gemini_model"], safe="-._")
+        request = Request(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent",
+            method="POST",
+            headers={"Content-Type": "application/json", "x-goog-api-key": config["gemini_key"]},
+        )
+        payload = _http_json(
+            request,
+            {
+                "systemInstruction": {"parts": [{"text": system}]},
+                "contents": [{"role": "user", "parts": [{"text": prompt}]}],
+                "generationConfig": {"responseMimeType": "application/json", "maxOutputTokens": 500},
+            },
+        )
+        try:
+            text = payload["candidates"][0]["content"]["parts"][0]["text"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError("Gemini returned no text response") from exc
+    else:
+        request = Request(
+            "https://api.openai.com/v1/responses",
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {config['openai_key']}",
+            },
+        )
+        payload = _http_json(
+            request,
+            {
+                "model": config["openai_model"],
+                "instructions": system,
+                "input": prompt,
+                "max_output_tokens": 500,
+            },
+        )
+        text = _openai_output_text(payload)
+        if not text:
+            raise RuntimeError("OpenAI returned no text response")
+
+    parsed = _extract_json(text)
+    answer = _clean_answer(parsed.get("answer"))
+    if not answer:
+        raise ValueError("provider returned an empty answer")
+    return {
+        "ok": True,
+        "answer": answer,
+        "updates": parsed.get("updates") if isinstance(parsed.get("updates"), dict) else {},
+        "confidence": str(parsed.get("confidence") or "model").strip()[:40],
+        "status": status,
+    }
+
+
+def run_wizard_llm(question: str, plan: dict, settings: dict | None = None) -> dict:
+    config = _provider_config(settings)
+    status = wizard_llm_status(settings)
+    provider = config["provider"]
     if not status["ready"]:
-        return {"ok": False, "error": "local model is not installed", "status": status}
+        message = {
+            "off": "cloud advisor is disabled",
+            "local": "local model is not installed",
+            "gemini": "Gemini API key is not configured",
+            "openai": "OpenAI API key is not configured",
+        }[provider]
+        return {"ok": False, "error": message, "status": status}
+
+    if provider in {"gemini", "openai"}:
+        try:
+            return _run_cloud_provider(provider, question, plan, config, status)
+        except Exception as exc:
+            return {"ok": False, "error": str(exc)[:300], "status": status}
 
     system = (
         "You are the local Size Wizard AI for a HandBrake media encoder. "

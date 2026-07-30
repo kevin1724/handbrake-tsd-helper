@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../app_controller.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'calendar_screen.dart';
 
 class MoreScreen extends StatelessWidget {
   const MoreScreen({super.key, required this.controller});
@@ -83,6 +84,14 @@ class MoreScreen extends StatelessWidget {
                 child: Column(
                   children: [
                     _MoreTile(
+                      icon: Icons.calendar_month_rounded,
+                      color: ByteSqueezeColors.blue,
+                      title: 'Upcoming episodes',
+                      subtitle: 'Release calendar for tracked shows',
+                      onTap: () => _open(
+                          context, CalendarScreen(controller: controller)),
+                    ),
+                    _MoreTile(
                       icon: Icons.hub_rounded,
                       color: ByteSqueezeColors.cyan,
                       title: 'Encoding nodes',
@@ -128,11 +137,11 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.info_outline_rounded,
                       color: ByteSqueezeColors.muted,
                       title: 'About',
-                      subtitle: 'ByteSqueeze 0.3.0 · TSD mobile API v1',
+                      subtitle: 'ByteSqueeze 0.3.12 · TSD 3.12',
                       onTap: () => showAboutDialog(
                         context: context,
                         applicationName: 'ByteSqueeze',
-                        applicationVersion: '0.3.0',
+                        applicationVersion: '0.3.12',
                         applicationIcon: ClipRRect(
                           borderRadius: BorderRadius.circular(18),
                           child: Image.asset(

@@ -11,7 +11,7 @@ Completed output files are tagged with `-TSD`, short for "Transcoded", so the ap
 ## Highlights
 
 - Web dashboard for local and remote HandBrake encoding
-- Modern dark UI for Jobs, Size Wizard, Library, and Settings
+- Modern dark UI with a clean Home overview plus Library, Jobs, Autopilot, Size Wizard, and Settings workspaces
 - One-shot encoder, batch tools, queue history, and live progress
 - Size Wizard with Simple Mode, Advanced Mode, previews, and AI-assisted recommendations
 - Library scanner for mapped movie and show folders
@@ -26,17 +26,20 @@ Completed output files are tagged with `-TSD`, short for "Transcoded", so the ap
 - Versioned mobile API with hashed tokens, refresh, read/control scopes, and device revocation
 - Safer cleanup behavior for failed or canceled jobs
 
-## Release 2.0 Refresh
+## Release 3.12 Autopilot Refresh
 
-The 2.0 control center is designed for set-it-up-and-let-it-run operation without giving automation unlimited control:
+The 3.12 experience is designed for set-it-up-and-let-it-run operation without making users hunt through Settings or giving automation unlimited control:
 
 - **Observe mode** scans and explains what it would queue without changing the queue.
 - **Manage mode** queues only stable, allowed media within the configured schedule, batch limit, and maximum active-job count.
 - **Readiness checks** call out missing library mappings, presets, durable storage, hardware acceleration, and worker availability.
+- **Dedicated Autopilot workspace** keeps the guided tour, preview training, guardrails, decisions, and completed-encode feedback together.
+- **Continuous learning** lets you correct picture, playback, audio, subtitle, or size choices after watching a completed learned encode.
 - **Decision history** shows why each item was eligible, skipped, or left waiting.
+- **Optional AI advisor** supports local planning, Gemini Flash, OpenAI, or planner-only operation while the validated Size Wizard remains authoritative.
 - **Production runtime** uses a single Gunicorn process with threaded HTTP handling so queue and scheduler ownership stays deterministic.
 
-Autopilot is disabled and set to Observe by default. Start with a few manual test encodes so prediction history can learn your presets and hardware.
+Autopilot is disabled and set to Observe by default. Its page now creates and displays the short accurate previews needed to train Smart Presets, with a visible review counter and no hidden prerequisite. See the [complete Autopilot guide](docs/AUTOPILOT.md).
 
 ## ByteSqueeze Mobile
 
@@ -46,7 +49,8 @@ The same Flutter project includes an iOS target so networking, secure pairing, a
 
 - Source: [`mobile/bytesqueeze`](mobile/bytesqueeze)
 - Product and mobile API notes: [`docs/BYTESQUEEZE.md`](docs/BYTESQUEEZE.md)
-- Pairing: open **Settings → Automation & Apps** and generate a one-time read or control code
+- Latest Android APK: [GitHub Releases](https://github.com/kevin1724/handbrake-tsd-helper/releases/latest)
+- Pairing: open **Settings > Linked Nodes** and generate a one-time read or control code under Companion app access
 
 LAN HTTP is supported for home-server use. Use a trusted HTTPS reverse proxy when connecting from outside the home network; do not expose the controller directly to the public internet.
 
@@ -105,19 +109,17 @@ Recommended first setup:
 2. Select your CPU profile.
 3. Confirm or upload your HandBrake presets.
 4. Map movie and show folders.
-5. Leave keyless artwork enabled (local sidecars, TVmaze, and Apple Search require no API key).
+5. Optionally add TMDb credentials for preferred artwork. Leave keyless artwork enabled so local sidecars, TVmaze, and Apple Search can fill any gaps without an API key.
 6. Run a Library scan and track the shows you want in the release calendar.
 7. Queue a few test encodes.
-8. Open **Settings → Automation & Apps**, review readiness, and enable Autopilot in Observe mode.
+8. Open **Autopilot**, complete the guided preview training, and save the Safe starter or Balanced policy in Observe mode.
 
 ## Core Pages
 
-### Dashboard
+### Home and Jobs
 
-The Library is the default page. Open `/dashboard` for the operations and encode view.
+Home is the default page and is also available at `/dashboard`. It is a quiet overview of queue health, storage savings, library totals, workers, Autopilot readiness, and recent activity. Open `/jobs` for file and folder search plus queue operations.
 
-- Review Autopilot readiness, schedule, worker capacity, and potential savings
-- Run a bounded decision cycle and jump to its policy settings
 - Browse folders and video files
 - Select a file and encode it with presets
 - Open a file in the Size Wizard
@@ -155,7 +157,7 @@ Advanced Mode keeps the full technical surface available:
 - Saved wizard presets
 - Fast and accurate previews
 
-The wizard also includes AI-assisted recommendations. It can suggest a best overall plan, a best-compression plan, a faster plan, or a 1080p space-saving plan for large 4K files.
+The wizard also includes an optional AI advisor. Open **Settings > AI & API Keys** to paste and test a Google Gemini or OpenAI key, or choose built-in local or planner-only operation. Cloud providers receive compact probe facts and selected options, never video or audio content. The deterministic planner continues to validate and own the final HandBrake plan. The complete [AI Advisor setup guide](docs/AI_ADVISOR.md) includes Gemini and OpenAI walkthroughs, Docker Compose examples, privacy details, sample questions, and troubleshooting.
 
 Smart Presets add a learning loop on top of that safe planner:
 
@@ -166,9 +168,10 @@ Smart Presets add a learning loop on top of that safe planner:
 - Apply a candidate and inspect the same short HandBrake encode that a real job will use
 - Approve the preview or mark quality, size, speed, or compatibility concerns
 - Keep all preference history local in `data/smart_presets.json`
-- Unlock automatic selection only after the configured minimum number of consistent reviews
+- Unlock automatic selection after the visible minimum of consistent reviews, currently two approvals for the default profile
+- Keep learning after playback by rating completed learned jobs on the Autopilot page
 
-The learned model is intentionally explainable. It uses similar source type, HDR state, resolution, codec, encoder family, target ratio, and output resolution to weight past reviews. The deterministic Size Wizard remains authoritative over HandBrake arguments, while the AI planner and optional local model help evaluate and explain the safe choices. When learning is ready, **Smart learned preset** is available from Jobs and Library, and Autopilot Manage mode can choose it automatically.
+The learned model is intentionally explainable. It uses similar source type, HDR state, resolution, codec, encoder family, target ratio, and output resolution to weight preview and post-encode reviews. The deterministic Size Wizard remains authoritative over HandBrake arguments, while the selected optional advisor helps evaluate and explain safe choices. When learning is ready, **Smart learned preset** is available from Jobs and Library, and Autopilot Manage mode can choose it automatically.
 
 ### Library
 
@@ -177,7 +180,7 @@ The Library page scans the movie and show folders you map in Settings.
 - Cached scans
 - Movie poster grid
 - Show cards with seasons and episodes
-- Keyless artwork: local `poster.jpg`/`folder.jpg`/`cover.jpg`, TVmaze show art, and Apple movie art
+- Artwork priority: TMDb when configured, then local `poster.jpg`/`folder.jpg`/`cover.jpg`, TVmaze show art, and Apple movie art
 - Upcoming episode calendar for tracked and untracked library shows
 - Complete title catalog plus recently added rails
 - Sort by likely storage savings
@@ -196,10 +199,10 @@ Settings are split into cleaner sections:
 - Preset management
 - CPU profile
 - Intel QSV availability
+- Optional local, Gemini Flash, OpenAI, or planner-only Size Wizard advisor
 - Library folder mapping
-- Keyless artwork and episode-release metadata (optional TMDb fallback remains available)
+- TMDb-first artwork when configured, with keyless artwork and episode-release metadata as the automatic fallback
 - Auto scan
-- Autopilot policy and decision status
 - Companion-app access and device revocation
 - Linked nodes
 - Events
@@ -253,13 +256,7 @@ Autopilot reuses the incremental Library index and existing file-safety checks. 
 
 Autopilot does not weaken the existing output verification or original-file protections.
 
-The web and mobile setup tutorial recommends a five-step path: map folders,
-observe decisions, teach Smart Presets with preview feedback, set guardrails,
-then enable Manage mode. Running a decision cycle while learning is incomplete
-opens the shared accurate-preview training flow: compare the original and
-proposed frames, approve or reject the choice, and repeat until the readiness
-check unlocks learned automation. The Safe starter, Balanced, and Hands-off
-policy profiles provide editable starting points.
+The dedicated web workspace provides a first-time tour, an explicit accurate-preview training panel, a visible review target, editable Safe starter/Balanced/Hands-off profiles, decision reasons, and optional feedback after a completed learned encode has actually been watched. Running a decision cycle does not silently start training. See [`docs/AUTOPILOT.md`](docs/AUTOPILOT.md) for the full workflow and troubleshooting guide.
 
 ## Headless Worker Encoding
 
@@ -489,9 +486,10 @@ Open Settings and map at least one movie folder or show folder.
 
 ### Posters do not show
 
-Make sure keyless metadata is enabled, then refresh the Library. ByteSqueeze
-prefers `poster.jpg`, `folder.jpg`, or `cover.jpg` beside the media before
-trying TVmaze/Apple. Existing TMDb credentials are only an optional fallback.
+Refresh the Library after changing poster settings. ByteSqueeze prefers TMDb
+when a key or read token is configured. Otherwise, or when no TMDb poster is
+available, it uses `poster.jpg`, `folder.jpg`, or `cover.jpg` beside the media
+before trying TVmaze/Apple.
 
 ### QSV does not show up
 

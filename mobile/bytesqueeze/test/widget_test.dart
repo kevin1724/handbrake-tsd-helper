@@ -11,7 +11,7 @@ void main() {
     expect(find.text('ByteSqueeze'), findsNothing);
     expect(find.text('Your media pipeline is under control.'), findsOneWidget);
     expect(find.text('Library'), findsOneWidget);
-    expect(find.text('Calendar'), findsOneWidget);
-    expect(find.text('Server'), findsWidgets);
+    expect(find.text('Autopilot'), findsOneWidget);
+    expect(find.text('More'), findsOneWidget);
   });
 }

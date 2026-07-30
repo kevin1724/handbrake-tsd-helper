@@ -16,9 +16,11 @@
       </span>
     </a>
     <div class="nav-links">
-      <a href="/dashboard" class="nav-link nav-jobs nav-link-active">Dashboard</a>
+      <a href="/" class="nav-link">Home</a>
+      <a href="/library" class="nav-link">Library</a>
+      <a href="/jobs" class="nav-link nav-jobs nav-link-active">Jobs</a>
+      <a href="/autopilot" class="nav-link">Autopilot</a>
       <a href="/size_wizard" class="nav-link nav-wizard">Size Wizard</a>
-      <a href="/" class="nav-link nav-library">Library</a>
       <a href="/settings" class="nav-link nav-settings">Settings</a>
     </div>
     <div class="app-status-actions">
@@ -30,11 +32,13 @@
   <main class="app-page jobs-shell">
     <header class="page-hero">
       <div>
-        <h1>Operations Dashboard</h1>
-        <p class="page-subtitle">See what the system is doing, why it made each automation decision, and what needs attention.</p>
+        <h1>Jobs &amp; Queue</h1>
+        <p class="page-subtitle">Find a folder or file, add one-off encodes, and manage work already in the queue.</p>
       </div>
     </header>
 
+    {# Autopilot now has a dedicated guided workspace. #}
+    {% if false %}
     <section class="section-card operations-control-card">
       <div class="section-heading-row">
         <div>
@@ -57,6 +61,7 @@
       </div>
       <div id="operationsRecommendation" class="operations-recommendation small">Autopilot is checking the current configuration.</div>
     </section>
+    {% endif %}
 
     <section class="section-card browser-card">
       <div class="section-heading-row">

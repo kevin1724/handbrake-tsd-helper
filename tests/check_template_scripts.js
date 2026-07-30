@@ -1,7 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 
-const templates = ["index.html", "settings.html", "beta.html", "size_wizard.html"];
+const templates = ["home.html", "index.html", "autopilot.html", "settings.html", "beta.html", "size_wizard.html"];
 let checked = 0;
 
 for (const name of templates) {

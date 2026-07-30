@@ -2,11 +2,11 @@ import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
 import '../theme.dart';
-import 'calendar_screen.dart';
+import 'automation_screen.dart';
 import 'dashboard_screen.dart';
 import 'jobs_screen.dart';
 import 'library_screen.dart';
-import 'server_screen.dart';
+import 'more_screen.dart';
 
 class AppShell extends StatelessWidget {
   const AppShell({super.key, required this.controller});
@@ -23,17 +23,17 @@ class AppShell extends StatelessWidget {
         selectedIcon: Icon(Icons.video_library_rounded),
         label: 'Library'),
     NavigationDestination(
-        icon: Icon(Icons.calendar_month_outlined),
-        selectedIcon: Icon(Icons.calendar_month_rounded),
-        label: 'Calendar'),
-    NavigationDestination(
         icon: Icon(Icons.motion_photos_on_outlined),
         selectedIcon: Icon(Icons.motion_photos_on_rounded),
         label: 'Jobs'),
     NavigationDestination(
-        icon: Icon(Icons.dns_outlined),
-        selectedIcon: Icon(Icons.dns_rounded),
-        label: 'Server'),
+        icon: Icon(Icons.auto_awesome_outlined),
+        selectedIcon: Icon(Icons.auto_awesome_rounded),
+        label: 'Autopilot'),
+    NavigationDestination(
+        icon: Icon(Icons.more_horiz_rounded),
+        selectedIcon: Icon(Icons.apps_rounded),
+        label: 'More'),
   ];
 
   @override
@@ -41,9 +41,9 @@ class AppShell extends StatelessWidget {
     final pages = [
       DashboardScreen(controller: controller),
       LibraryScreen(controller: controller),
-      CalendarScreen(controller: controller),
       JobsScreen(controller: controller),
-      ServerScreen(controller: controller),
+      AutomationScreen(controller: controller),
+      MoreScreen(controller: controller),
     ];
     final width = MediaQuery.sizeOf(context).width;
     final wide = width >= 880;

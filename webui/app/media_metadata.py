@@ -1,14 +1,16 @@
-"""Keyless media artwork and TV release metadata.
+"""Fallback media artwork and TV release metadata.
 
-The catalog prefers artwork stored beside the user's media. When no sidecar is
-available it uses public, no-key services: TVmaze for shows and Apple Search
-for movies. Responses are cached on disk so normal incremental scans do not
-hammer either provider or make the UI depend on a live request.
+The catalog's outer resolver prefers TMDb whenever credentials are configured.
+This module supplies the no-key fallback: artwork stored beside the user's
+media, TVmaze for shows, and Apple Search for movies. Responses are cached on
+disk so normal incremental scans do not hammer providers or make the UI depend
+on a live request.
 """
 
 from __future__ import annotations
 
 import copy
+import difflib
 import hashlib
 import html
 import json
@@ -36,6 +38,7 @@ APPLE_ATTRIBUTION = {
     "name": "Apple Search",
     "url": "https://www.apple.com/apple-tv-app/",
 }
+METADATA_CACHE_VERSION = 2
 
 _CACHE_LOCK = threading.RLock()
 _REQUEST_LOCK = threading.Lock()
@@ -68,7 +71,7 @@ _VIDEO_EXTENSIONS = {
 
 
 def _empty_cache() -> dict:
-    return {"version": 1, "entries": {}, "updated_at": 0.0}
+    return {"version": METADATA_CACHE_VERSION, "entries": {}, "updated_at": 0.0}
 
 
 def _load_cache() -> dict:
@@ -78,6 +81,10 @@ def _load_cache() -> dict:
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         return _empty_cache()
     if not isinstance(data, dict):
+        return _empty_cache()
+    if data.get("version") != METADATA_CACHE_VERSION:
+        # Version 1 could cache year-only Apple matches, including unrelated
+        # movies. Rebuild those entries using the strict title matcher.
         return _empty_cache()
     data.setdefault("entries", {})
     if not isinstance(data["entries"], dict):
@@ -96,12 +103,16 @@ def _save_cache(data: dict) -> None:
     os.replace(temp_path, METADATA_CACHE_FILE)
 
 
-def _cache_key(kind: str, title: str, year=None) -> str:
-    return f"{kind}:{_normal_title(title)}:{str(year or '')}"
+def _cache_key(kind: str, title: str, year=None, country: str = "") -> str:
+    return f"{kind}:{_normal_title(title)}:{str(year or '')}:{str(country or '').lower()}"
 
 
 def _normal_title(value: str) -> str:
     return re.sub(r"[^a-z0-9]+", "", str(value or "").lower())
+
+
+def _title_tokens(value: str) -> list[str]:
+    return [token for token in re.findall(r"[a-z0-9]+", str(value or "").lower()) if token not in {"the", "a", "an"}]
 
 
 def _strip_markup(value: str) -> str:
@@ -124,7 +135,7 @@ def _http_json(url: str, *, timeout: int = 10) -> dict | list:
             url,
             headers={
                 "accept": "application/json",
-                "user-agent": "ByteSqueeze/0.2 (+https://github.com/kevina1724/handbrake-tsd-helper)",
+                "user-agent": "ByteSqueeze/3.12 (+https://github.com/kevina1724/handbrake-tsd-helper)",
             },
         )
         try:
@@ -289,21 +300,36 @@ def _show_remote(title: str, year=None) -> dict:
 
 def _choose_movie(rows: list, title: str, year=None) -> dict | None:
     wanted = _normal_title(title)
+    wanted_tokens = set(_title_tokens(title))
     wanted_year = _year(year)
     ranked = []
     for movie in rows if isinstance(rows, list) else []:
         if not isinstance(movie, dict):
             continue
         candidate = _normal_title(movie.get("trackName"))
+        candidate_tokens = set(_title_tokens(movie.get("trackName")))
+        if not wanted or not candidate:
+            continue
         candidate_year = _year(movie.get("releaseDate"))
         exact = candidate == wanted
-        year_fit = wanted_year is None or candidate_year is None or abs(candidate_year - wanted_year) <= 1
-        score = (5 if exact else 0) + (2 if year_fit else -3)
-        if wanted and candidate and (wanted in candidate or candidate in wanted):
-            score += 1
-        ranked.append((score, movie))
+        similarity = difflib.SequenceMatcher(None, wanted, candidate).ratio()
+        shared = len(wanted_tokens & candidate_tokens)
+        coverage = shared / max(1, len(wanted_tokens))
+        candidate_coverage = shared / max(1, len(candidate_tokens))
+        title_fit = exact or similarity >= 0.72 or (coverage >= 0.75 and candidate_coverage >= 0.6)
+        if not title_fit:
+            continue
+        if wanted_year is not None and candidate_year is not None:
+            year_delta = abs(candidate_year - wanted_year)
+            if year_delta > 1:
+                continue
+            year_score = 1.5 if year_delta == 0 else 0.5
+        else:
+            year_score = 0.25
+        score = (5.0 if exact else 0.0) + similarity * 4.0 + coverage * 2.0 + candidate_coverage + year_score
+        ranked.append((score, similarity, movie))
     ranked.sort(key=lambda row: row[0], reverse=True)
-    return ranked[0][1] if ranked and ranked[0][0] >= 2 else None
+    return ranked[0][2] if ranked else None
 
 
 def _apple_artwork_url(value: str) -> str:
@@ -326,6 +352,9 @@ def _movie_remote(title: str, year=None, country: str = "US") -> dict:
         "summary": str(movie.get("longDescription") or movie.get("shortDescription") or "")[:900],
         "genres": [movie.get("primaryGenreName")] if movie.get("primaryGenreName") else [],
         "release_date": movie.get("releaseDate") or "",
+        "metadata_match_title": movie.get("trackName") or "",
+        "metadata_match_year": _year(movie.get("releaseDate")),
+        "metadata_provider_id": movie.get("trackId") or movie.get("collectionId"),
     }
 
 
@@ -334,7 +363,7 @@ def lookup(kind: str, title: str, year=None, paths: list[str] | None = None, *, 
     kind = "show" if str(kind).lower() == "show" else "movie"
     paths = paths or []
     local = _cache_sidecar(paths, include_common=kind == "show")
-    key = _cache_key(kind, title, year)
+    key = _cache_key(kind, title, year, country if kind == "movie" else "")
     now = time.time()
 
     with _CACHE_LOCK:
@@ -369,6 +398,10 @@ def enrich_library(data: dict, settings: dict | None = None) -> dict:
 
     for movie in data.get("movies") or []:
         if not isinstance(movie, dict):
+            continue
+        # TMDb was already resolved by the catalog pipeline. Avoid an unused
+        # Apple request when the preferred provider supplied valid artwork.
+        if movie.get("poster_source") == "tmdb" and movie.get("poster_url"):
             continue
         paths = [movie.get("path")] + list(movie.get("paths") or [])
         metadata = lookup("movie", movie.get("title") or "", movie.get("year"), paths, country=country, refresh_hours=max(24, refresh_hours))
