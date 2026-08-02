@@ -20,3 +20,8 @@ data/
 # Files that are not needed in the runtime image
 README.md
 docker-compose*.yml
+mobile/
+tests/
+docs/
+.codex/
+.codex-worker-*/

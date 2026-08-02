@@ -154,7 +154,10 @@
       alert.textContent = pending ? `${pending} completed encode${pending === 1 ? " needs" : "s need"} your quality feedback.` : (readiness.recommendations?.[0] || "Autopilot setup needs attention.");
     }
 
+    let homeLoadInFlight = false;
     async function loadHome() {
+      if (homeLoadInFlight || document.hidden) return;
+      homeLoadInFlight = true;
       const button = document.getElementById("homeRefreshBtn"); if (button) button.disabled = true;
       try {
         const response = await fetch("/api/home/summary", { cache: "no-store" });
@@ -163,9 +166,17 @@
       } catch (error) {
         homeText("homeSystemStatus", "Needs attention");
         const status = document.getElementById("homeSystemStatus"); if (status) status.style.cssText = "color:#fecaca;border-color:rgba(239,68,68,.25);background:rgba(239,68,68,.08)";
-      } finally { if (button) button.disabled = false; }
+      } finally {
+        homeLoadInFlight = false;
+        if (button) button.disabled = false;
+      }
     }
-    document.addEventListener("DOMContentLoaded", () => { document.getElementById("homeRefreshBtn").onclick = loadHome; loadHome(); window.setInterval(loadHome, 12000); });
+    document.addEventListener("DOMContentLoaded", () => {
+      document.getElementById("homeRefreshBtn").onclick = loadHome;
+      document.addEventListener("visibilitychange", () => { if (!document.hidden) loadHome(); });
+      loadHome();
+      window.setInterval(loadHome, 30000);
+    });
   </script>
 </body>
 </html>

@@ -23,6 +23,7 @@ os.environ["FLASK_ENV"] = "production"
 
 from webui.app import create_app  # noqa: E402
 from webui.app import config as app_config  # noqa: E402
+from webui.app import events as app_events  # noqa: E402
 from webui.app import jobs as app_jobs  # noqa: E402
 from webui.app import routes as app_routes  # noqa: E402
 from webui.app import wizard_llm as app_wizard_llm  # noqa: E402
@@ -90,6 +91,117 @@ class ApiRouteSmokeTests(unittest.TestCase):
         jobs_page = self.client.get("/jobs")
         self.assertEqual(jobs_page.status_code, 200)
         self.assertIn(b"Jobs &amp; Queue", jobs_page.data)
+
+        job_id = "jobs-dashboard-route-regression"
+        app_jobs.jobs[job_id] = {
+            "id": job_id,
+            "src": os.path.join(TEST_MEDIA, "Dashboard.Movie.2026.mkv"),
+            "preset": "test-preset",
+            "status": "done",
+            "created_at": 1,
+        }
+        try:
+            jobs_data = self.client.get("/api/jobs")
+            self.assertEqual(jobs_data.status_code, 200)
+            self.assertTrue(jobs_data.is_json)
+            self.assertIn(
+                job_id,
+                [job["id"] for job in jobs_data.get_json()["jobs"]],
+            )
+        finally:
+            app_jobs.jobs.pop(job_id, None)
+
+    def test_home_summary_uses_lightweight_catalog_and_autopilot_data(self):
+        lightweight_library = {"movies": 12, "shows": 4, "episodes": 88, "updated_at": 123.0}
+        compact_autopilot = {
+            "autopilot": {"enabled": True, "mode": "observe"},
+            "readiness": {"ready": True, "score": 100, "recommendations": []},
+            "continuous_learning": {"enabled": True, "pending": 0},
+        }
+        with (
+            patch("webui.app.routes._beta_load_library_cache", side_effect=AssertionError("full catalog loaded")),
+            patch("webui.app.routes._beta_load_library_summary", return_value=lightweight_library),
+            patch("webui.app.routes._autopilot_status_payload", return_value=compact_autopilot) as autopilot_status,
+        ):
+            response = self.client.get("/api/home/summary")
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertEqual(payload["library"]["movies"], 12)
+        self.assertEqual(payload["library"]["episodes"], 88)
+        autopilot_status.assert_called_once_with(compact=True)
+
+    def test_event_history_is_compacted_once_and_cached(self):
+        events_path = os.path.join(TEST_DATA, "performance-events.json")
+        oversized = [
+            {
+                "ts": float(index),
+                "level": "info",
+                "type": "beta_auto_scan",
+                "message": f"Scan {index}",
+                "decisions": [{"path": "x" * 400, "reason": "y" * 400} for _ in range(20)],
+            }
+            for index in range(app_events.MAX_EVENTS + 10)
+        ]
+        with open(events_path, "w", encoding="utf-8") as handle:
+            json.dump(oversized, handle, indent=2)
+        original_size = os.path.getsize(events_path)
+        original_file = app_events.EVENTS_FILE
+        original_cache = app_events._events_cache
+        original_signature = app_events._events_signature
+        try:
+            app_events.EVENTS_FILE = events_path
+            app_events._events_cache = None
+            app_events._events_signature = None
+            first = app_events.load_events(limit=app_events.MAX_EVENTS + 50)
+            compacted_size = os.path.getsize(events_path)
+            compacted_signature = app_events._events_signature
+            second = app_events.load_events(limit=5)
+            summaries = app_events.load_event_summaries(limit=5)
+            self.assertEqual(len(first), app_events.MAX_EVENTS)
+            self.assertEqual(len(second), 5)
+            self.assertNotIn("decisions", summaries[0])
+            self.assertLess(compacted_size, original_size)
+            self.assertEqual(app_events._events_signature, compacted_signature)
+        finally:
+            app_events.EVENTS_FILE = original_file
+            app_events._events_cache = original_cache
+            app_events._events_signature = original_signature
+            try:
+                os.remove(events_path)
+            except FileNotFoundError:
+                pass
+
+    def test_cold_home_summary_releases_expanded_library_cache(self):
+        original_library_cache = app_routes.BETA_LIBRARY_MEMORY_CACHE.copy()
+        original_summary_cache = app_routes.BETA_LIBRARY_SUMMARY_CACHE.copy()
+
+        def load_catalog(_settings):
+            catalog = {
+                "movies": [{"title": "Example"}],
+                "shows": [{"title": "Show", "episode_count": 3}],
+                "stats": {"episodes": 3},
+            }
+            app_routes.BETA_LIBRARY_MEMORY_CACHE.update({"signature": ("loaded",), "data": catalog})
+            return catalog
+
+        try:
+            app_routes.BETA_LIBRARY_MEMORY_CACHE.update({"signature": None, "data": None})
+            app_routes.BETA_LIBRARY_SUMMARY_CACHE.update({"signature": None, "data": None})
+            with (
+                patch("webui.app.routes._beta_file_signature", return_value=None),
+                patch("webui.app.routes._beta_mapped_roots", return_value=[]),
+                patch("webui.app.routes._beta_load_library_cache", side_effect=load_catalog),
+            ):
+                summary = app_routes._beta_load_library_summary({})
+            self.assertEqual(summary["movies"], 1)
+            self.assertEqual(summary["episodes"], 3)
+            self.assertIsNone(app_routes.BETA_LIBRARY_MEMORY_CACHE["data"])
+        finally:
+            app_routes.BETA_LIBRARY_MEMORY_CACHE.clear()
+            app_routes.BETA_LIBRARY_MEMORY_CACHE.update(original_library_cache)
+            app_routes.BETA_LIBRARY_SUMMARY_CACHE.clear()
+            app_routes.BETA_LIBRARY_SUMMARY_CACHE.update(original_summary_cache)
 
     def test_ai_settings_are_secret_safe_and_provider_test_is_grounded(self):
         page = self.client.get("/settings/ai")
@@ -472,7 +584,13 @@ class ApiRouteSmokeTests(unittest.TestCase):
             "scanned_at": 123.0,
         }
 
-        with patch("webui.app.routes._beta_load_library_cache", return_value=library):
+        with (
+            patch("webui.app.routes._beta_load_library_cache", return_value=library),
+            patch(
+                "webui.app.routes._beta_load_library_summary",
+                return_value={"movies": 1, "shows": 1, "episodes": 0, "updated_at": 123.0, "configured": True},
+            ),
+        ):
             dashboard = self.client.get("/api/mobile/v1/dashboard", headers=headers)
             mobile_library = self.client.get("/api/mobile/v1/library", headers=headers)
 

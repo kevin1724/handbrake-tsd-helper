@@ -87,6 +87,7 @@ RUN set -eux; \
     cd /tmp/HandBrake; \
     ./configure --disable-gtk --enable-qsv --launch-jobs="$(nproc)" --launch; \
     install -m 0755 build/HandBrakeCLI /usr/local/bin/HandBrakeCLI; \
+    strip --strip-unneeded /usr/local/bin/HandBrakeCLI; \
     /usr/local/bin/HandBrakeCLI --version
 
 FROM ${PYTHON_IMAGE} AS runtime-base
@@ -139,7 +140,6 @@ RUN set -eux; \
       bash \
       ca-certificates \
       ffmpeg \
-      intel-gpu-tools \
       libass9 \
       libbz2-1.0 \
       libdrm2 \
@@ -164,7 +164,7 @@ RUN set -eux; \
       vainfo \
       zlib1g \
       $qsv_runtime_deps; \
-    rm -rf /var/lib/apt/lists/*
+    rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
 
 COPY --from=handbrake-builder /usr/local/bin/HandBrakeCLI /usr/local/bin/HandBrakeCLI
 
@@ -173,7 +173,8 @@ WORKDIR /app
 # -------------------------------
 # Python dependencies
 # -------------------------------
-RUN pip install --no-cache-dir flask gunicorn
+RUN pip install --no-cache-dir --no-compile flask gunicorn; \
+    find /usr/local/lib/python3.11/site-packages -type d -name __pycache__ -prune -exec rm -rf '{}' +
 
 # -------------------------------
 # QSV diagnostics helper
@@ -219,12 +220,13 @@ ENV PYTHONPATH=/app
 ENV FLASK_ENV=production
 ENV FLASK_DEBUG=0
 ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
 
 # -------------------------------
 # Expose port & start app
 # -------------------------------
 EXPOSE 8080
-HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
+HEALTHCHECK --interval=60s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4)" || exit 1
 
 # -------------------------------
@@ -257,7 +259,7 @@ COPY presets /presets
 RUN chmod 0755 /worker/encode-one.sh
 VOLUME ["/work"]
 
-CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=8", "--timeout=300", "--graceful-timeout=30", "--access-logfile=-", "--error-logfile=-", "worker.app:create_worker_app()"]
+CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=4", "--timeout=300", "--graceful-timeout=30", "--error-logfile=-", "worker.app:create_worker_app()"]
 
 # -------------------------------
 # Full controller + web UI
@@ -274,4 +276,4 @@ RUN chmod 0755 /worker/encode-one.sh
 
 # One process owns the durable queue and background schedulers. Gunicorn's
 # threads provide concurrent HTTP handling without starting duplicate workers.
-CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=8", "--timeout=300", "--graceful-timeout=30", "--access-logfile=-", "--error-logfile=-", "webui.app:create_app()"]
+CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=4", "--timeout=300", "--graceful-timeout=30", "--error-logfile=-", "webui.app:create_app()"]

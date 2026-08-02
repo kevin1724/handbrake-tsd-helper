@@ -1065,8 +1065,11 @@ function clearErrorStatus() {
 }
 
 function refreshJobs() {
-  fetch('/jobs')
-    .then(r => r.json())
+  fetch('/api/jobs')
+    .then(r => {
+      if (!r.ok) throw new Error(`Jobs request failed (${r.status})`);
+      return r.json();
+    })
     .then(data => {
       if (data.error) return;
 
@@ -1251,6 +1254,7 @@ function refreshJobs() {
     })
     .catch(err => {
       console.error(err);
+      if (window.setAppStatus) setAppStatus('Jobs unavailable', 'error');
     });
 }
 

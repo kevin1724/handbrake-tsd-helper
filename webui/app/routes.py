@@ -125,7 +125,7 @@ from .smart_presets import (
     save_profile as save_smart_preset_profile,
 )
 
-from .events import load_events, clear_events, log_event
+from .events import load_event_summaries, load_events, clear_events, log_event
 from .storage_stats import get_summary as get_storage_summary, list_encodes as list_storage_encodes, clear_stats as clear_storage_stats, record_encode
 from .media_metadata import artwork_path as media_artwork_path, enrich_library as enrich_media_library
 from .node_linking import (
@@ -2686,11 +2686,15 @@ def _create_smart_job(
 
 
 BETA_LIBRARY_CACHE_FILE = os.path.join(DATA_DIR, "beta_library_cache.json")
+BETA_LIBRARY_SUMMARY_FILE = os.path.join(DATA_DIR, "beta_library_summary.json")
 BETA_TRACKED_SHOWS_FILE = os.path.join(DATA_DIR, "beta_tracked_shows.json")
 BETA_SCAN_INDEX_FILE = os.path.join(DATA_DIR, "beta_scan_index.json")
 BETA_AUTOSCAN_STATUS_FILE = os.path.join(DATA_DIR, "beta_autoscan_status.json")
 NODE_TRANSFER_TMP_DIR = os.path.join(DATA_DIR, "node_transfer_uploads")
 BETA_POSTER_CACHE: dict[tuple, dict] = {}
+BETA_LIBRARY_CACHE_LOCK = threading.RLock()
+BETA_LIBRARY_MEMORY_CACHE = {"signature": None, "data": None}
+BETA_LIBRARY_SUMMARY_CACHE = {"signature": None, "data": None}
 BETA_AUTOSCAN_THREAD = None
 BETA_AUTOSCAN_STOP = threading.Event()
 BETA_AUTOSCAN_RUN_NOW = threading.Event()
@@ -2724,6 +2728,63 @@ HDR_PATH_RE = re.compile(
     r")(?=$|[ ._\-\]\)\+])",
     re.IGNORECASE,
 )
+
+
+def _beta_file_signature(path: str) -> tuple[int, int] | None:
+    try:
+        stat = os.stat(path)
+        return int(stat.st_mtime_ns), int(stat.st_size)
+    except OSError:
+        return None
+
+
+def _beta_write_json(path: str, value) -> None:
+    """Atomically persist compact JSON so readers never see partial state."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    temp_path = f"{path}.tmp.{os.getpid()}.{threading.get_ident()}"
+    try:
+        with open(temp_path, "w", encoding="utf-8") as handle:
+            json.dump(value, handle, ensure_ascii=False, separators=(",", ":"))
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+    finally:
+        try:
+            os.remove(temp_path)
+        except FileNotFoundError:
+            pass
+
+
+def _beta_invalidate_library_memory_cache() -> None:
+    with BETA_LIBRARY_CACHE_LOCK:
+        BETA_LIBRARY_MEMORY_CACHE.update({"signature": None, "data": None})
+        BETA_LIBRARY_SUMMARY_CACHE.update({"signature": None, "data": None})
+
+
+def _beta_library_dependency_signature(settings=None) -> tuple:
+    settings = settings or {}
+    return (
+        _beta_file_signature(BETA_LIBRARY_CACHE_FILE),
+        _beta_file_signature(BETA_TRACKED_SHOWS_FILE),
+        _beta_file_signature(os.path.join(DATA_DIR, "storage_stats.json")),
+        bool(_beta_tmdb_config(settings)),
+    )
+
+
+def _beta_library_summary_from_data(data: dict, settings=None) -> dict:
+    data = data if isinstance(data, dict) else {}
+    catalog = data.get("catalog") if isinstance(data.get("catalog"), dict) else {}
+    stats = data.get("stats") if isinstance(data.get("stats"), dict) else {}
+    movies = int(catalog.get("movies") or len(data.get("movies") or []))
+    shows = int(catalog.get("shows") or len(data.get("shows") or []))
+    episodes = int(catalog.get("episodes") or stats.get("episodes") or 0)
+    return {
+        "movies": movies,
+        "shows": shows,
+        "episodes": episodes,
+        "updated_at": data.get("generated_at") or data.get("scanned_at") or data.get("updated_at") or 0,
+        "configured": bool(_beta_mapped_roots(settings or {})),
+    }
 HDR_SIZE_HINT_RE = re.compile(r"(?:^|[ ._\-\[\(])(?:2160p|4320p|4k|8k|uhd)(?=$|[ ._\-\]\)])", re.IGNORECASE)
 HDR_REMUX_HINT_RE = re.compile(r"(?:^|[ ._\-\[\(])(?:remux|uhd[ ._\-]*blu[ ._\-]*ray|uhd[ ._\-]*bd)(?=$|[ ._\-\]\)])", re.IGNORECASE)
 HDR_VIDEO_HINT_RE = re.compile(r"(?:^|[ ._\-\[\(])(?:hevc|x265|h[ ._\-]*265|main[ ._\-]*10|10[ ._\-]*bit)(?=$|[ ._\-\]\)])", re.IGNORECASE)
@@ -3192,9 +3253,8 @@ def _beta_load_tracking() -> dict:
 def _beta_save_tracking(data: dict) -> None:
     data = data if isinstance(data, dict) else _beta_empty_tracking()
     data["updated_at"] = time.time()
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(BETA_TRACKED_SHOWS_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    _beta_write_json(BETA_TRACKED_SHOWS_FILE, data)
+    _beta_invalidate_library_memory_cache()
 
 
 def _beta_apply_tracking(data: dict, tracking: dict | None = None) -> dict:
@@ -3307,27 +3367,78 @@ def _beta_auto_queue_tracked_episodes(data: dict, tracking: dict) -> dict:
 
 def _beta_load_library_cache(settings=None) -> dict:
     settings = settings or {}
-    try:
-        with open(BETA_LIBRARY_CACHE_FILE, "r", encoding="utf-8") as f:
-            data = json.load(f)
-    except FileNotFoundError:
-        return _beta_empty_library(settings)
-    except Exception as e:
-        print(f"[WARN] Failed to load beta library cache: {e}", flush=True)
-        return _beta_empty_library(settings)
+    with BETA_LIBRARY_CACHE_LOCK:
+        signature = _beta_library_dependency_signature(settings)
+        if BETA_LIBRARY_MEMORY_CACHE.get("data") is not None and BETA_LIBRARY_MEMORY_CACHE.get("signature") == signature:
+            return BETA_LIBRARY_MEMORY_CACHE["data"]
 
-    if not isinstance(data, dict):
-        return _beta_empty_library(settings)
+        try:
+            with open(BETA_LIBRARY_CACHE_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+        except FileNotFoundError:
+            data = _beta_empty_library(settings)
+        except Exception as e:
+            print(f"[WARN] Failed to load beta library cache: {e}", flush=True)
+            data = _beta_empty_library(settings)
 
-    data.setdefault("movies", [])
-    data.setdefault("shows", [])
-    data.setdefault("stats", {})
-    if _beta_sanitize_duplicate_artwork(data):
-        # Repair older caches in place. Otherwise an incremental scan can copy
-        # the poisoned poster assignments back into every newly scanned row.
-        _beta_save_library_cache(data)
-    data["tmdb_configured"] = bool(_beta_tmdb_config(settings))
-    return _beta_apply_tracking(_beta_refresh_predictions(_beta_finalize_catalog(data)), _beta_load_tracking())
+        if not isinstance(data, dict):
+            data = _beta_empty_library(settings)
+
+        data.setdefault("movies", [])
+        data.setdefault("shows", [])
+        data.setdefault("stats", {})
+        if _beta_sanitize_duplicate_artwork(data):
+            # Repair older caches in place. Otherwise an incremental scan can copy
+            # the poisoned poster assignments back into every newly scanned row.
+            _beta_save_library_cache(data)
+        data["tmdb_configured"] = bool(_beta_tmdb_config(settings))
+        data = _beta_apply_tracking(_beta_refresh_predictions(_beta_finalize_catalog(data)), _beta_load_tracking())
+        BETA_LIBRARY_MEMORY_CACHE.update({
+            "signature": _beta_library_dependency_signature(settings),
+            "data": data,
+        })
+        return data
+
+
+def _beta_load_library_summary(settings=None) -> dict:
+    """Load title counts from a tiny sidecar instead of the full media catalog."""
+    settings = settings or {}
+    source_signature = _beta_file_signature(BETA_LIBRARY_CACHE_FILE)
+    configured_roots = tuple(
+        (str(row.get("kind") or ""), str(row.get("path") or ""))
+        for row in _beta_mapped_roots(settings)
+    )
+    cache_signature = (source_signature, configured_roots)
+    with BETA_LIBRARY_CACHE_LOCK:
+        if BETA_LIBRARY_SUMMARY_CACHE.get("data") is not None and BETA_LIBRARY_SUMMARY_CACHE.get("signature") == cache_signature:
+            return BETA_LIBRARY_SUMMARY_CACHE["data"].copy()
+
+        summary = None
+        try:
+            with open(BETA_LIBRARY_SUMMARY_FILE, "r", encoding="utf-8") as handle:
+                sidecar = json.load(handle)
+            saved_signature = tuple(sidecar.get("source_signature") or []) if isinstance(sidecar, dict) else ()
+            if saved_signature == tuple(source_signature or ()) and isinstance(sidecar.get("summary"), dict):
+                summary = sidecar["summary"].copy()
+        except (FileNotFoundError, json.JSONDecodeError, OSError, TypeError):
+            summary = None
+
+        if summary is None:
+            library_was_cached = BETA_LIBRARY_MEMORY_CACHE.get("data") is not None
+            summary = _beta_library_summary_from_data(_beta_load_library_cache(settings), settings)
+            if not library_was_cached:
+                # Home needed the catalog once to create its sidecar. Release
+                # it again so idle Home-only installations do not retain the
+                # expanded multi-megabyte library in memory.
+                BETA_LIBRARY_MEMORY_CACHE.update({"signature": None, "data": None})
+            if source_signature:
+                _beta_write_json(BETA_LIBRARY_SUMMARY_FILE, {
+                    "source_signature": list(source_signature),
+                    "summary": summary,
+                })
+        summary["configured"] = bool(configured_roots)
+        BETA_LIBRARY_SUMMARY_CACHE.update({"signature": cache_signature, "data": summary.copy()})
+        return summary
 
 
 def _autopilot_review_samples() -> list[dict]:
@@ -3427,10 +3538,16 @@ def _autopilot_review_summary() -> dict:
 
 
 def _beta_save_library_cache(data: dict) -> None:
-    _beta_sanitize_duplicate_artwork(data)
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(BETA_LIBRARY_CACHE_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2)
+    with BETA_LIBRARY_CACHE_LOCK:
+        _beta_sanitize_duplicate_artwork(data)
+        _beta_write_json(BETA_LIBRARY_CACHE_FILE, data)
+        source_signature = _beta_file_signature(BETA_LIBRARY_CACHE_FILE)
+        summary = _beta_library_summary_from_data(data, load_settings())
+        _beta_write_json(BETA_LIBRARY_SUMMARY_FILE, {
+            "source_signature": list(source_signature or ()),
+            "summary": summary,
+        })
+        _beta_invalidate_library_memory_cache()
 
 
 def _beta_sanitize_duplicate_artwork(data: dict) -> bool:
@@ -3467,12 +3584,14 @@ def _beta_sanitize_duplicate_artwork(data: dict) -> bool:
 
 
 def _beta_clear_library_cache() -> None:
-    try:
-        os.remove(BETA_LIBRARY_CACHE_FILE)
-    except FileNotFoundError:
-        pass
-    except Exception as e:
-        print(f"[WARN] Failed to clear beta library cache: {e}", flush=True)
+    for path in (BETA_LIBRARY_CACHE_FILE, BETA_LIBRARY_SUMMARY_FILE):
+        try:
+            os.remove(path)
+        except FileNotFoundError:
+            pass
+        except Exception as e:
+            print(f"[WARN] Failed to clear {os.path.basename(path)}: {e}", flush=True)
+    _beta_invalidate_library_memory_cache()
 
 
 def _beta_clean_title(value: str) -> str:
@@ -4104,9 +4223,7 @@ def _beta_load_scan_index() -> dict:
 def _beta_save_scan_index(index: dict) -> None:
     index = index if isinstance(index, dict) else _beta_empty_scan_index()
     index["generated_at"] = time.time()
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(BETA_SCAN_INDEX_FILE, "w", encoding="utf-8") as f:
-        json.dump(index, f, indent=2)
+    _beta_write_json(BETA_SCAN_INDEX_FILE, index)
 
 
 def _beta_empty_autoscan_status(settings=None) -> dict:
@@ -4140,9 +4257,7 @@ def _beta_load_autoscan_status(settings=None) -> dict:
 
 def _beta_save_autoscan_status(status: dict) -> dict:
     status = status if isinstance(status, dict) else {}
-    os.makedirs(DATA_DIR, exist_ok=True)
-    with open(BETA_AUTOSCAN_STATUS_FILE, "w", encoding="utf-8") as f:
-        json.dump(status, f, indent=2)
+    _beta_write_json(BETA_AUTOSCAN_STATUS_FILE, status)
     return status
 
 
@@ -4684,7 +4799,7 @@ def _autopilot_completed_feedback_jobs(limit: int = 24) -> list[dict]:
     return rows[: max(1, min(100, int(limit or 24)))]
 
 
-def _autopilot_status_payload() -> dict:
+def _autopilot_status_payload(*, compact: bool = False) -> dict:
     settings = load_settings()
     scan = _beta_load_autoscan_status(settings)
     autopilot = (scan.get("last_summary") or {}).get("autopilot")
@@ -4704,12 +4819,33 @@ def _autopilot_status_payload() -> dict:
             "estimated_selected_savings_bytes": 0,
         }
     feedback_jobs = _autopilot_completed_feedback_jobs()
-    smart_state = public_smart_preset_state()
     continuous_learning_enabled = bool(settings.get("autopilot_continuous_learning_enabled", True))
+    readiness = _autopilot_readiness(settings)
+    if compact:
+        compact_autopilot = {
+            key: autopilot.get(key)
+            for key in (
+                "enabled", "mode", "schedule_open", "eligible", "queued",
+                "active_jobs", "max_active_jobs", "capacity",
+                "estimated_selected_savings_bytes",
+            )
+            if key in autopilot
+        }
+        return {
+            "release": APP_RELEASE,
+            "autopilot": compact_autopilot,
+            "readiness": readiness,
+            "continuous_learning": {
+                "enabled": continuous_learning_enabled,
+                "pending": sum(1 for row in feedback_jobs if row.get("needs_feedback")) if continuous_learning_enabled else 0,
+            },
+        }
+
+    smart_state = public_smart_preset_state()
     return {
         "release": APP_RELEASE,
         "autopilot": autopilot,
-        "readiness": _autopilot_readiness(settings),
+        "readiness": readiness,
         "scan": scan,
         "queue": {"paused": get_queue_state(), "summary": get_job_summary()},
         "nodes": list_nodes_public(),
@@ -4793,6 +4929,32 @@ def _beta_encoding_is_running() -> bool:
         return False
 
 
+def _beta_autoscan_event_summary(summary: dict) -> dict:
+    """Keep the activity feed useful without duplicating full decision reports."""
+    summary = summary if isinstance(summary, dict) else {}
+    compact = {
+        key: summary.get(key)
+        for key in (
+            "scanned", "new", "changed", "removed", "unchanged", "skipped_tsd",
+            "queue_queued", "queue_skipped_unstable", "queue_skipped_active",
+            "queue_skipped_missing_mapping", "error",
+        )
+        if key in summary
+    }
+    autopilot = summary.get("autopilot") if isinstance(summary.get("autopilot"), dict) else {}
+    if autopilot:
+        compact["autopilot"] = {
+            key: autopilot.get(key)
+            for key in (
+                "enabled", "mode", "schedule_open", "considered", "eligible",
+                "selected", "queued", "active_jobs", "max_active_jobs",
+                "estimated_selected_savings_bytes",
+            )
+            if key in autopilot
+        }
+    return compact
+
+
 def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = False) -> dict:
     if not BETA_AUTOSCAN_LOCK.acquire(blocking=False):
         status = _beta_load_autoscan_status(load_settings())
@@ -4861,7 +5023,7 @@ def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = Fals
             f"{scan_summary['removed']} removed, "
             f"{queue_summary.get('queued', 0) + autopilot_summary.get('queued', 0)} queued."
         )
-        log_event("beta_auto_scan", message, level="info", extra=summary)
+        log_event("beta_auto_scan", message, level="info", extra=_beta_autoscan_event_summary(summary))
         status.update({
             "running": False,
             "last_finished_at": time.time(),
@@ -4968,7 +5130,6 @@ def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
             "last_error": "",
             "last_success_at": time.time(),
             "consecutive_failures": 0,
-            "next_heartbeat_at": time.time() + 30,
             "paired_controllers": paired_controllers,
             "jobs": data.get("jobs") if isinstance(data.get("jobs"), list) else [],
             "prediction_profile": data.get("prediction_profile") if isinstance(data.get("prediction_profile"), dict) else {},
@@ -4976,6 +5137,9 @@ def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
             "worker_mode": str(data.get("worker_mode") or row.get("worker_mode") or "full").strip().lower(),
             "requires_remote_transfer": bool(data.get("requires_remote_transfer") or row.get("requires_remote_transfer")),
         })
+        # Active encodes retain fast progress reporting. Idle workers back off
+        # to one heartbeat per minute to avoid constant network and disk churn.
+        row["next_heartbeat_at"] = time.time() + (15 if node_has_running_work(row) else 60)
         if reported_controller_url:
             row["controller_url"] = reported_controller_url
     except Exception as e:
@@ -6114,21 +6278,21 @@ def register_routes(app):
 
     @app.route("/api/home/summary")
     def home_summary_api():
-        library = _beta_load_library_cache(load_settings())
-        catalog = library.get("catalog") if isinstance(library.get("catalog"), dict) else {}
+        settings = load_settings()
+        library = _beta_load_library_summary(settings)
         jobs = list_jobs_for_api()
         active = [row for row in jobs if row.get("status") in {"running", "queued"}]
         for row in active:
             row.pop("smart_feedback_context", None)
-        autopilot = _autopilot_status_payload()
+        autopilot = _autopilot_status_payload(compact=True)
         return jsonify(
             ok=True,
             queue={"paused": get_queue_state(), "summary": get_job_summary(), "active": active[:8]},
             library={
-                "movies": int(catalog.get("movies") or len(library.get("movies") or [])),
-                "shows": int(catalog.get("shows") or len(library.get("shows") or [])),
-                "episodes": int(catalog.get("episodes") or 0),
-                "updated_at": library.get("generated_at") or library.get("scanned_at") or 0,
+                "movies": int(library.get("movies") or 0),
+                "shows": int(library.get("shows") or 0),
+                "episodes": int(library.get("episodes") or 0),
+                "updated_at": library.get("updated_at") or 0,
             },
             storage=get_storage_summary(),
             nodes=list_nodes_public(),
@@ -6137,7 +6301,7 @@ def register_routes(app):
                 "readiness": autopilot.get("readiness"),
                 "continuous_learning": autopilot.get("continuous_learning"),
             },
-            events=load_events(limit=6),
+            events=load_event_summaries(limit=6),
         )
 
     # ------------- Global settings (JSON API) -------------
@@ -6248,9 +6412,7 @@ def register_routes(app):
             row for row in jobs
             if str(row.get("status") or "").lower() in {"queued", "running", "waiting_to_upload"}
         ]
-        library = _beta_load_library_cache(settings)
-        movies = library.get("movies") if isinstance(library.get("movies"), list) else []
-        shows = library.get("shows") if isinstance(library.get("shows"), list) else []
+        library = _beta_load_library_summary(settings)
         return jsonify(
             ok=True,
             release=APP_RELEASE,
@@ -6264,14 +6426,14 @@ def register_routes(app):
                 "online": sum(1 for node in nodes if node.get("online")),
             },
             library={
-                "movies": len(movies),
-                "shows": len(shows),
-                "last_scan_at": library.get("scanned_at") or library.get("updated_at") or 0,
-                "configured": bool(_beta_mapped_roots(settings)),
+                "movies": int(library.get("movies") or 0),
+                "shows": int(library.get("shows") or 0),
+                "last_scan_at": library.get("updated_at") or 0,
+                "configured": bool(library.get("configured")),
             },
-            automation=_autopilot_status_payload(),
+            automation=_autopilot_status_payload(compact=True),
             storage=get_storage_summary(),
-            events=load_events(limit=8),
+            events=load_event_summaries(limit=8),
         )
 
     @app.route("/api/mobile/v1/jobs")
@@ -6328,7 +6490,7 @@ def register_routes(app):
         if not _authenticated_mobile("read"):
             return jsonify(error="unauthorized mobile device"), 401
         settings = load_settings()
-        data = _beta_load_library_cache(settings)
+        data = _beta_load_library_cache(settings).copy()
         data["configured"] = bool(_beta_mapped_roots(settings))
         data["roots"] = [
             {"label": row.get("label") or row.get("kind") or "Media", "kind": row.get("kind") or ""}
@@ -8092,7 +8254,7 @@ def register_routes(app):
 
     # ------------- Job list -------------
 
-    @app.route("/jobs")
+    @app.route("/api/jobs")
     def jobs_list():
         """Return a simplified list of all jobs for the history table."""
         items = list_jobs_for_api()
