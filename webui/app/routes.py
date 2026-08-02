@@ -75,6 +75,7 @@ from .jobs import (
     create_remote_transfer_job,
     get_job,
     list_jobs_for_api,
+    list_job_history_for_api,
     cancel_job,
     clear_error_status,
     remove_queued_job,
@@ -6440,7 +6441,7 @@ def register_routes(app):
     def mobile_jobs_api():
         if not _authenticated_mobile("read"):
             return jsonify(error="unauthorized mobile device"), 401
-        return jsonify(ok=True, jobs=list_jobs_for_api(), summary=get_job_summary(), paused=get_queue_state())
+        return jsonify(ok=True, jobs=list_job_history_for_api(), summary=get_job_summary(), paused=get_queue_state())
 
     @app.route("/api/mobile/v1/jobs/<job_id>/action", methods=["POST"])
     def mobile_job_action_api(job_id):
@@ -6467,7 +6468,7 @@ def register_routes(app):
             level="warn" if action in {"cancel", "remove"} else "info",
             job_id=job_id,
         )
-        return jsonify(ok=True, job_id=job_id, action=action, jobs=list_jobs_for_api(), summary=get_job_summary())
+        return jsonify(ok=True, job_id=job_id, action=action, jobs=list_job_history_for_api(), summary=get_job_summary())
 
     @app.route("/api/mobile/v1/jobs/clear", methods=["POST"])
     def mobile_jobs_clear_api():
@@ -8256,9 +8257,13 @@ def register_routes(app):
 
     @app.route("/api/jobs")
     def jobs_list():
-        """Return a simplified list of all jobs for the history table."""
-        items = list_jobs_for_api()
-        return jsonify(jobs=items)
+        """Return one coherent queue, summary, and durable-history snapshot."""
+        items = list_job_history_for_api()
+        return jsonify(
+            jobs=items,
+            summary=get_job_summary(),
+            paused=get_queue_state(),
+        )
 
     @app.route("/jobs/summary")
     def jobs_summary():

@@ -111,6 +111,93 @@ class ApiRouteSmokeTests(unittest.TestCase):
         finally:
             app_jobs.jobs.pop(job_id, None)
 
+    def test_jobs_api_merges_durable_encode_history_and_summary(self):
+        live_id = "jobs-live-complete"
+        queued_id = "jobs-live-queued"
+        archived_id = "jobs-durable-complete"
+        live_src = os.path.join(TEST_MEDIA, "Live.Movie.2026.mkv")
+        queued_src = os.path.join(TEST_MEDIA, "Queued.Movie.2026.mkv")
+        archived_src = os.path.join(TEST_MEDIA, "Archived.Movie.2025.mkv")
+        app_jobs.jobs[live_id] = {
+            "src": live_src,
+            "preset": "1080",
+            "status": "done",
+            "progress": 100,
+            "created_at": 200,
+            "finished_at": 300,
+            "duration_seconds": 100,
+            "saved_bytes": 500,
+        }
+        app_jobs.jobs[queued_id] = {
+            "src": queued_src,
+            "preset": "1080",
+            "status": "queued",
+            "progress": 0,
+            "created_at": 400,
+        }
+        app_jobs.job_queue.append(queued_id)
+        ledger = [
+            {
+                "ts": 300,
+                "job_id": live_id,
+                "src": live_src,
+                "out": os.path.join(TEST_MEDIA, "Live.Movie.2026-TSD.mkv"),
+                "preset": "1080",
+                "src_bytes": 1000,
+                "out_bytes": 500,
+                "saved_bytes": 500,
+                "duration_seconds": 100,
+            },
+            {
+                "ts": 250,
+                "job_id": archived_id,
+                "src": archived_src,
+                "out": os.path.join(TEST_MEDIA, "Archived.Movie.2025-TSD.mkv"),
+                "preset": "4k",
+                "src_bytes": 4000,
+                "out_bytes": 1000,
+                "saved_bytes": 3000,
+                "duration_seconds": 120,
+                "is_hdr": True,
+                "encode_method": "x265_10bit",
+            },
+        ]
+        try:
+            with patch.object(app_jobs, "list_encodes", return_value=ledger):
+                response = self.client.get("/api/jobs")
+        finally:
+            app_jobs.jobs.pop(live_id, None)
+            app_jobs.jobs.pop(queued_id, None)
+            while queued_id in app_jobs.job_queue:
+                app_jobs.job_queue.remove(queued_id)
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertIn("summary", payload)
+        self.assertIn("paused", payload)
+        ids = [job["id"] for job in payload["jobs"]]
+        self.assertEqual(ids.count(live_id), 1, "live and ledger copies must be deduplicated")
+        self.assertIn(archived_id, ids)
+        self.assertEqual(ids[0], queued_id, "active queue records stay above terminal history")
+        archived = next(job for job in payload["jobs"] if job["id"] == archived_id)
+        self.assertEqual(archived["status"], "done")
+        self.assertTrue(archived["archived"])
+        self.assertEqual(archived["saved_bytes"], 3000)
+        self.assertEqual(archived["history_source"], "encode_ledger")
+
+    def test_jobs_page_starts_critical_data_load_before_optional_work(self):
+        response = self.client.get("/jobs")
+        self.assertEqual(response.status_code, 200)
+        html = response.get_data(as_text=True)
+        init_at = html.index("document.addEventListener('DOMContentLoaded'")
+        first_jobs_load = html.index("refreshJobs();", init_at)
+        optional_browser_init = html.index("populateRoots();", init_at)
+        self.assertLess(first_jobs_load, optional_browser_init)
+        self.assertIn("renderJobsSummary(data.summary || {})", html)
+        self.assertIn("Completed encodes persist across restarts", html)
+        self.assertIn("if (dashboardAutopilotButton)", html)
+        self.assertIn("if (operationsStatusLine)", html)
+
     def test_home_summary_uses_lightweight_catalog_and_autopilot_data(self):
         lightweight_library = {"movies": 12, "shows": 4, "episodes": 88, "updated_at": 123.0}
         compact_autopilot = {
