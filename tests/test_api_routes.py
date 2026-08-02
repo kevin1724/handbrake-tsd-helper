@@ -112,6 +112,8 @@ class ApiRouteSmokeTests(unittest.TestCase):
             app_jobs.jobs.pop(job_id, None)
 
     def test_jobs_api_merges_durable_encode_history_and_summary(self):
+        original_history_cutoff = app_jobs.history_cleared_before
+        app_jobs.history_cleared_before = 0.0
         live_id = "jobs-live-complete"
         queued_id = "jobs-live-queued"
         archived_id = "jobs-durable-complete"
@@ -170,6 +172,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
             app_jobs.jobs.pop(queued_id, None)
             while queued_id in app_jobs.job_queue:
                 app_jobs.job_queue.remove(queued_id)
+            app_jobs.history_cleared_before = original_history_cutoff
 
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         payload = response.get_json()
@@ -185,6 +188,114 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(archived["saved_bytes"], 3000)
         self.assertEqual(archived["history_source"], "encode_ledger")
 
+    def test_clear_finished_hides_queue_rows_but_keeps_lifetime_totals(self):
+        original_jobs = dict(app_jobs.jobs)
+        original_queue = list(app_jobs.job_queue)
+        original_paused = app_jobs.queue_paused
+        original_totals = dict(app_jobs.dashboard_totals)
+        original_history_cutoff = app_jobs.history_cleared_before
+        state_path = os.path.join(TEST_DATA, "clear-finished-state.json")
+        finished_id = "finished-before-clear"
+        queued_id = "queued-during-clear"
+        future_id = "finished-after-clear"
+        ledger = [
+            {
+                "ts": 900,
+                "job_id": finished_id,
+                "src": os.path.join(TEST_MEDIA, "Old.Movie.mkv"),
+                "out": os.path.join(TEST_MEDIA, "Old.Movie-TSD.mkv"),
+                "preset": "1080",
+                "src_bytes": 5000,
+                "out_bytes": 2000,
+                "saved_bytes": 3000,
+                "duration_seconds": 100,
+            },
+            {
+                "ts": 1100,
+                "job_id": future_id,
+                "src": os.path.join(TEST_MEDIA, "New.Movie.mkv"),
+                "out": os.path.join(TEST_MEDIA, "New.Movie-TSD.mkv"),
+                "preset": "4k",
+                "src_bytes": 6000,
+                "out_bytes": 2000,
+                "saved_bytes": 4000,
+                "duration_seconds": 60,
+            },
+        ]
+        storage_summary = {
+            "count": 2,
+            "saved_bytes": 7000,
+            "saved_gb": 0.0,
+            "total_runtime_seconds": 160.0,
+        }
+
+        app_jobs.jobs.clear()
+        app_jobs.jobs.update(
+            {
+                finished_id: {
+                    "src": ledger[0]["src"],
+                    "preset": "1080",
+                    "status": "done",
+                    "progress": 100,
+                    "created_at": 800,
+                    "finished_at": 900,
+                    "duration_seconds": 100,
+                    "saved_bytes": 3000,
+                },
+                queued_id: {
+                    "src": os.path.join(TEST_MEDIA, "Queued.Movie.mkv"),
+                    "preset": "1080",
+                    "status": "queued",
+                    "progress": 0,
+                    "created_at": 950,
+                },
+            }
+        )
+        app_jobs.job_queue[:] = [queued_id]
+        app_jobs.queue_paused = False
+        app_jobs.dashboard_totals = app_jobs._empty_dashboard_totals()
+        app_jobs.history_cleared_before = 0.0
+
+        try:
+            with (
+                patch.object(app_jobs, "JOBS_FILE", state_path),
+                patch.object(app_jobs, "_now_ts", return_value=1000.0),
+                patch.object(app_jobs, "list_encodes", return_value=ledger),
+                patch.object(app_jobs, "get_storage_summary", return_value=storage_summary),
+            ):
+                removed = app_jobs.clear_finished_jobs()
+                self.assertEqual(removed, 1)
+                self.assertEqual(app_jobs.history_cleared_before, 1000.0)
+
+                visible_ids = [row["id"] for row in app_jobs.list_job_history_for_api()]
+                self.assertNotIn(finished_id, visible_ids)
+                self.assertIn(queued_id, visible_ids)
+                self.assertIn(future_id, visible_ids, "jobs completed after Clear must remain visible")
+
+                summary = app_jobs.get_job_summary()
+                self.assertEqual(summary["counts"]["done"], 2)
+                self.assertEqual(summary["saved_bytes"], 7000)
+                self.assertEqual(summary["total_runtime_seconds"], 160.0)
+
+                # Prove the clear boundary survives a controller restart.
+                app_jobs.jobs.clear()
+                app_jobs.job_queue.clear()
+                app_jobs.dashboard_totals = app_jobs._empty_dashboard_totals()
+                app_jobs.history_cleared_before = 0.0
+                app_jobs.load_jobs()
+                self.assertEqual(app_jobs.history_cleared_before, 1000.0)
+                restarted_ids = [row["id"] for row in app_jobs.list_job_history_for_api()]
+                self.assertNotIn(finished_id, restarted_ids)
+                self.assertIn(queued_id, restarted_ids)
+                self.assertIn(future_id, restarted_ids)
+        finally:
+            app_jobs.jobs.clear()
+            app_jobs.jobs.update(original_jobs)
+            app_jobs.job_queue[:] = original_queue
+            app_jobs.queue_paused = original_paused
+            app_jobs.dashboard_totals = original_totals
+            app_jobs.history_cleared_before = original_history_cutoff
+
     def test_jobs_page_starts_critical_data_load_before_optional_work(self):
         response = self.client.get("/jobs")
         self.assertEqual(response.status_code, 200)
@@ -194,7 +305,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
         optional_browser_init = html.index("populateRoots();", init_at)
         self.assertLess(first_jobs_load, optional_browser_init)
         self.assertIn("renderJobsSummary(data.summary || {})", html)
-        self.assertIn("Completed encodes persist across restarts", html)
+        self.assertIn("Lifetime totals above are never reset", html)
         self.assertIn("if (dashboardAutopilotButton)", html)
         self.assertIn("if (operationsStatusLine)", html)
 
