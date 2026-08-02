@@ -201,7 +201,7 @@
     <div class="jobs-toolbar">
       <div>
         <h2 style="margin-bottom:6px;">Job History</h2>
-        <div class="jobs-toolbar-subtitle small">Persists across restarts, queued</div>
+        <div class="jobs-toolbar-subtitle small">Completed encodes persist across restarts; active queue records update live.</div>
       </div>
 
       <div class="jobs-toolbar-actions">
@@ -214,7 +214,7 @@
       <button id="pauseQueueBtn">Pause queue</button>
       <span id="queueStatusLabel" class="small"></span>
       <button id="clearQueuedBtn">Clear queued / canceled jobs</button>
-      <button id="clearFinishedBtn" style="margin-left:auto;">Clear finished jobs (done/error)</button>
+      <button id="clearFinishedBtn" style="margin-left:auto;">Clear finished queue records</button>
     </div>
 
     <div class="row jobs-filter-bar" style="display:flex; gap:10px; align-items:center; flex-wrap:wrap;">
@@ -1027,24 +1027,29 @@ function enableQueueDragAndDrop(row, job) {
   });
 }
 
+function renderJobsSummary(summary) {
+  const s = summary || {};
+  const counts = s.counts || {};
+  document.getElementById('summaryQueued').textContent = s.queued_count ?? counts.queued ?? 0;
+  document.getElementById('summaryRunning').textContent = counts.running ?? 0;
+  document.getElementById('summaryDone').textContent = counts.done ?? 0;
+  document.getElementById('summaryError').textContent = counts.error ?? 0;
+  document.getElementById('summarySaved').textContent = `${Number(s.saved_gb || 0).toFixed(2)} GB`;
+  document.getElementById('summaryRuntime').textContent = formatDuration(s.total_runtime_seconds || 0);
+  if (window.setAppStatus) {
+    if ((s.active_error_count || 0) > 0) setAppStatus('Error', 'error');
+    else if ((counts.running || 0) > 0) setAppStatus('Encoding', 'encoding');
+    else setAppStatus('Idle', 'idle');
+  }
+}
+
 function refreshJobsSummary() {
-  fetch('/jobs/summary')
-    .then(r => r.json())
-    .then(data => {
-      const s = data.summary || {};
-      const counts = s.counts || {};
-      document.getElementById('summaryQueued').textContent = s.queued_count ?? counts.queued ?? 0;
-      document.getElementById('summaryRunning').textContent = counts.running ?? 0;
-      document.getElementById('summaryDone').textContent = counts.done ?? 0;
-      document.getElementById('summaryError').textContent = counts.error ?? 0;
-      document.getElementById('summarySaved').textContent = `${Number(s.saved_gb || 0).toFixed(2)} GB`;
-      document.getElementById('summaryRuntime').textContent = formatDuration(s.total_runtime_seconds || 0);
-      if (window.setAppStatus) {
-        if ((s.active_error_count || 0) > 0) setAppStatus('Error', 'error');
-        else if ((counts.running || 0) > 0) setAppStatus('Encoding', 'encoding');
-        else setAppStatus('Idle', 'idle');
-      }
+  return fetch('/jobs/summary')
+    .then(r => {
+      if (!r.ok) throw new Error(`Jobs summary request failed (${r.status})`);
+      return r.json();
     })
+    .then(data => renderJobsSummary(data.summary || {}))
     .catch(err => console.error(err));
 }
 
@@ -1056,7 +1061,6 @@ function clearErrorStatus() {
       if (data.error) throw new Error(data.error);
       if (window.appToast) appToast(`Cleared ${data.cleared || 0} error item(s).`, 'success');
       refreshJobs();
-      refreshJobsSummary();
     })
     .catch(err => {
       console.error(err);
@@ -1071,7 +1075,9 @@ function refreshJobs() {
       return r.json();
     })
     .then(data => {
-      if (data.error) return;
+      if (data.error) throw new Error(data.error);
+
+      renderJobsSummary(data.summary || {});
 
       const tbody = document.getElementById('jobsTableBody');
       tbody.innerHTML = '';
@@ -1080,15 +1086,28 @@ function refreshJobs() {
       const searchFilter = (document.getElementById('jobSearchInput')?.value || '').trim().toLowerCase();
       const queueUiMode = getQueueUiMode();
 
-      (data.jobs || [])
+      const visibleJobs = (data.jobs || [])
         .filter(job => {
           const fileName = (job.src || '').split(/[\/]/).pop().toLowerCase();
           const id = (job.id || '').toLowerCase();
           const matchesStatus = statusFilter === 'all' || (job.status || '').toLowerCase() === statusFilter;
           const matchesSearch = !searchFilter || fileName.includes(searchFilter) || id.includes(searchFilter);
           return matchesStatus && matchesSearch;
-        })
-        .forEach(job => {
+        });
+
+      if (!visibleJobs.length) {
+        const emptyRow = document.createElement('tr');
+        const emptyCell = document.createElement('td');
+        emptyCell.colSpan = 12;
+        emptyCell.className = 'jobs-empty-state small';
+        emptyCell.textContent = (data.jobs || []).length
+          ? 'No jobs match the current filter.'
+          : 'No queued or completed jobs have been recorded yet.';
+        emptyRow.appendChild(emptyCell);
+        tbody.appendChild(emptyRow);
+      }
+
+      visibleJobs.forEach(job => {
           const tr = document.createElement('tr');
           if (job.status === 'queued' && queueUiMode === 'drag_drop') {
             enableQueueDragAndDrop(tr, job);
@@ -1254,6 +1273,17 @@ function refreshJobs() {
     })
     .catch(err => {
       console.error(err);
+      const tbody = document.getElementById('jobsTableBody');
+      if (tbody) {
+        tbody.innerHTML = '';
+        const errorRow = document.createElement('tr');
+        const errorCell = document.createElement('td');
+        errorCell.colSpan = 12;
+        errorCell.className = 'jobs-empty-state jobs-load-error small';
+        errorCell.textContent = `Job history could not load: ${err.message || 'unknown error'}`;
+        errorRow.appendChild(errorCell);
+        tbody.appendChild(errorRow);
+      }
       if (window.setAppStatus) setAppStatus('Jobs unavailable', 'error');
     });
 }
@@ -1442,7 +1472,7 @@ function batchEncode(folderOnly) {
 }
 
 function clearFinishedJobs() {
-  if (!confirm("This will remove all jobs with status 'done' or 'error' from history and delete their log files. Continue?")) {
+  if (!confirm("This removes finished records and logs from the active queue. Successful encodes remain visible in the durable Job History. Continue?")) {
     return;
   }
 
@@ -1454,7 +1484,7 @@ function clearFinishedJobs() {
         return;
       }
       refreshJobs();
-      if (window.appToast) appToast('Finished jobs cleared.', 'success');
+      if (window.appToast) appToast('Finished queue records cleared. Durable encode history was kept.', 'success');
     })
     .catch(err => {
       console.error(err);
@@ -1524,6 +1554,11 @@ function toggleQueuePause() {
 // DOMContentLoaded init
 // --------------------------
 document.addEventListener('DOMContentLoaded', () => {
+  // Start the critical Jobs request first. File browsing, optional controls,
+  // or node-status initialization must never prevent queue/history data from
+  // appearing on this page.
+  refreshJobs();
+
   populateRoots();
   safeInitCurrentPath();
 
@@ -1553,7 +1588,10 @@ document.addEventListener('DOMContentLoaded', () => {
   document.getElementById('clearErrorStatusBtn').onclick = clearErrorStatus;
   document.getElementById('clearErrorStatusTopBtn').onclick = clearErrorStatus;
   document.getElementById('refreshLinkedNodesBtn').onclick = refreshLinkedNodesStatus;
-  document.getElementById('runDashboardAutopilotBtn').onclick = runDashboardAutopilot;
+  const dashboardAutopilotButton = document.getElementById('runDashboardAutopilotBtn');
+  if (dashboardAutopilotButton) {
+    dashboardAutopilotButton.onclick = runDashboardAutopilot;
+  }
 
   document.getElementById('searchBtn').onclick = searchMedia;
   document.getElementById('searchInput').addEventListener('keypress', (e) => {
@@ -1575,19 +1613,21 @@ document.addEventListener('DOMContentLoaded', () => {
   }
 
   updateWizardBtn();
-  refreshJobs();
-  refreshJobsSummary();
   refreshQueueState();
   refreshLinkedNodesStatus();
-  refreshOperationsStatus();
+  const operationsStatusLine = document.getElementById('operationsStatusLine');
+  if (operationsStatusLine) {
+    refreshOperationsStatus();
+  }
 
   jobsTimer = setInterval(() => {
     refreshJobs();
-    refreshJobsSummary();
     refreshQueueState();
   }, 5000);
   linkedNodesTimer = setInterval(refreshLinkedNodesStatus, 10000);
-  operationsTimer = setInterval(refreshOperationsStatus, 30000);
+  if (operationsStatusLine) {
+    operationsTimer = setInterval(refreshOperationsStatus, 30000);
+  }
 });
 </script>
 </body>

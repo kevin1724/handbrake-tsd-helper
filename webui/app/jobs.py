@@ -43,7 +43,7 @@ from .config import (
 from .presets import resolve_preset_file_and_name
 from .settings import load_settings  # pull in global settings (hb_threads, etc.)
 from .events import log_event
-from .storage_stats import get_summary as get_storage_summary, record_encode
+from .storage_stats import get_summary as get_storage_summary, list_encodes, record_encode
 
 # -------------------------------------------------------------------
 # Global in-memory job state
@@ -1381,6 +1381,125 @@ def list_jobs_for_api() -> list[dict]:
     # Keep the visible queue aligned with the real queue order.
     job_items.sort(key=_sort_key)
     return job_items
+
+
+def _encode_history_job(row: dict, index: int) -> dict:
+    """Convert one durable storage-ledger row into the Jobs API shape."""
+    row = row if isinstance(row, dict) else {}
+
+    try:
+        finished_at = max(0.0, float(row.get("ts") or 0.0))
+    except (TypeError, ValueError):
+        finished_at = 0.0
+    try:
+        duration_seconds = max(0.0, float(row.get("duration_seconds") or 0.0))
+    except (TypeError, ValueError):
+        duration_seconds = 0.0
+    try:
+        src_bytes = max(0, int(row.get("src_bytes") or 0))
+    except (TypeError, ValueError):
+        src_bytes = 0
+    try:
+        out_bytes = max(0, int(row.get("out_bytes") or 0))
+    except (TypeError, ValueError):
+        out_bytes = 0
+    try:
+        saved_bytes = max(0, int(row.get("saved_bytes") or (src_bytes - out_bytes)))
+    except (TypeError, ValueError):
+        saved_bytes = max(0, src_bytes - out_bytes)
+
+    job_id = str(row.get("job_id") or "").strip()
+    if not job_id:
+        job_id = f"history-{int(finished_at * 1000)}-{index}"
+    started_at = max(0.0, finished_at - duration_seconds) if finished_at else 0.0
+
+    return {
+        "id": job_id,
+        "src": row.get("src"),
+        "out_path": row.get("out"),
+        "preset": row.get("preset"),
+        "encode_method": row.get("encode_method") or "",
+        "encoder": row.get("encoder") or "",
+        "video_codec": row.get("video_codec") or "",
+        "encoder_family": row.get("encoder_family") or "",
+        "bit_depth": row.get("bit_depth") or "",
+        "mode": "linked_node" if row.get("node_id") else "local",
+        "node_id": row.get("node_id") or "",
+        "node_name": row.get("node_name") or "",
+        "transfer": None,
+        "status": "done",
+        "returncode": 0,
+        "progress": 100.0,
+        "eta_seconds": None,
+        # Queue log files are intentionally pruned independently of the
+        # durable encode ledger. Do not advertise a download that the job-log
+        # route cannot serve anymore.
+        "has_log": False,
+        "estimated_out_bytes": out_bytes or None,
+        "estimated_out_gb": round(out_bytes / (1024**3), 3) if out_bytes else None,
+        "estimated_out_current_bytes": None,
+        "estimated_out_checked_progress": None,
+        "estimated_out_updated_at": None,
+        "auto_stop_triggered": False,
+        "auto_stop_details": None,
+        "cancel_reason": "",
+        "src_bytes": src_bytes,
+        "out_bytes": out_bytes,
+        "saved_bytes": saved_bytes,
+        "saved_gb": round(saved_bytes / (1024**3), 3) if saved_bytes else 0.0,
+        "is_hdr": bool(row.get("is_hdr", False) or _looks_like_hdr_path(row.get("src", ""))),
+        "created_at": started_at or finished_at,
+        "started_at": started_at or None,
+        "finished_at": finished_at or None,
+        "duration_seconds": duration_seconds,
+        "queue_position": None,
+        "archived": True,
+        "history_source": "encode_ledger",
+    }
+
+
+def list_job_history_for_api(limit: int = 5000) -> list[dict]:
+    """Return active queue records plus durable completed encode history.
+
+    ``jobs.json`` is the operational queue and may be intentionally pruned.
+    Successful encodes are also written to ``storage_stats.json``; that ledger
+    is the authoritative long-term source for the Job History table.
+    """
+    current_items = list_jobs_for_api()
+    current_ids = {str(item.get("id") or "") for item in current_items}
+    try:
+        history_limit = max(0, min(5000, int(limit or 0)))
+    except (TypeError, ValueError):
+        history_limit = 5000
+
+    archived_items = []
+    for index, row in enumerate(list_encodes(limit=history_limit)):
+        item = _encode_history_job(row, index)
+        if item["id"] in current_ids:
+            continue
+        current_ids.add(item["id"])
+        archived_items.append(item)
+
+    active_states = {"queued", "running", "waiting_to_upload"}
+    active_items = [
+        item for item in current_items
+        if str(item.get("status") or "").lower() in active_states
+    ]
+    terminal_items = [
+        item for item in current_items
+        if str(item.get("status") or "").lower() not in active_states
+    ]
+    terminal_items.extend(archived_items)
+
+    def _finished_key(item: dict):
+        try:
+            timestamp = float(item.get("finished_at") or item.get("created_at") or 0.0)
+        except (TypeError, ValueError):
+            timestamp = 0.0
+        return (-timestamp, str(item.get("id") or ""))
+
+    terminal_items.sort(key=_finished_key)
+    return active_items + terminal_items
 
 
 # -------------------------------------------------------------------
