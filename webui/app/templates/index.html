@@ -201,7 +201,7 @@
     <div class="jobs-toolbar">
       <div>
         <h2 style="margin-bottom:6px;">Job History</h2>
-        <div class="jobs-toolbar-subtitle small">Completed encodes persist across restarts; active queue records update live.</div>
+        <div class="jobs-toolbar-subtitle small">Finished rows stay until cleared. Lifetime totals above are never reset by this button.</div>
       </div>
 
       <div class="jobs-toolbar-actions">
@@ -1472,7 +1472,7 @@ function batchEncode(folderOnly) {
 }
 
 function clearFinishedJobs() {
-  if (!confirm("This removes finished records and logs from the active queue. Successful encodes remain visible in the durable Job History. Continue?")) {
+  if (!confirm("This removes finished rows and logs from the queue table. Lifetime totals above stay unchanged, and new jobs will appear when they finish. Continue?")) {
     return;
   }
 
@@ -1484,7 +1484,7 @@ function clearFinishedJobs() {
         return;
       }
       refreshJobs();
-      if (window.appToast) appToast('Finished queue records cleared. Durable encode history was kept.', 'success');
+      if (window.appToast) appToast('Finished queue rows cleared. Lifetime totals were kept.', 'success');
     })
     .catch(err => {
       console.error(err);

@@ -72,6 +72,10 @@ queue_paused: bool = False
 dispatcher_started: bool = False
 transfer_retry_started: bool = False
 dashboard_totals: dict[str, float | int] = {}
+# Completed rows at or before this timestamp remain part of lifetime storage
+# totals, but are hidden from the operational queue/history table after the
+# user chooses "Clear finished queue records".
+history_cleared_before: float = 0.0
 JOBS_SAVE_LOCK = threading.RLock()
 TRANSFER_WORK_DIR = os.path.join(DATA_DIR, "node_transfer_work")
 PRESET_WORK_DIR = os.path.join(DATA_DIR, "node_job_presets")
@@ -854,7 +858,7 @@ def save_jobs():
     Writes a JSON file to JOBS_FILE. We intentionally do NOT persist pids,
     because the OS process won't survive container restarts anyway.
     """
-    global queue_paused, dashboard_totals
+    global queue_paused, dashboard_totals, history_cleared_before
 
     try:
         serializable = {}
@@ -905,6 +909,7 @@ def save_jobs():
             "queue": list(job_queue),
             "queue_paused": queue_paused,
             "dashboard_totals": _normalize_dashboard_totals(dashboard_totals),
+            "history_cleared_before": max(0.0, float(history_cleared_before or 0.0)),
         }
 
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -928,13 +933,14 @@ def load_jobs():
       again (since the process is gone after restart).
     - We also restore the queue order and queue_paused flag.
     """
-    global jobs, job_queue, queue_paused, dashboard_totals
+    global jobs, job_queue, queue_paused, dashboard_totals, history_cleared_before
 
     if not os.path.isfile(JOBS_FILE):
         jobs = {}
         job_queue = []
         queue_paused = False
         dashboard_totals = _empty_dashboard_totals()
+        history_cleared_before = 0.0
         return
 
     try:
@@ -949,6 +955,10 @@ def load_jobs():
         q = state.get("queue") or []
         queue_paused = bool(state.get("queue_paused", False))
         dashboard_totals = _normalize_dashboard_totals(state.get("dashboard_totals"))
+        try:
+            history_cleared_before = max(0.0, float(state.get("history_cleared_before") or 0.0))
+        except (TypeError, ValueError):
+            history_cleared_before = 0.0
 
         jobs = {}
         for jid, j in data.items():
@@ -1015,6 +1025,7 @@ def load_jobs():
         job_queue = []
         queue_paused = False
         dashboard_totals = _empty_dashboard_totals()
+        history_cleared_before = 0.0
 
 
 def initialize_jobs_system():
@@ -1474,6 +1485,12 @@ def list_job_history_for_api(limit: int = 5000) -> list[dict]:
 
     archived_items = []
     for index, row in enumerate(list_encodes(limit=history_limit)):
+        try:
+            encoded_at = max(0.0, float(row.get("ts") or 0.0)) if isinstance(row, dict) else 0.0
+        except (TypeError, ValueError):
+            encoded_at = 0.0
+        if history_cleared_before > 0.0 and encoded_at <= history_cleared_before:
+            continue
         item = _encode_history_job(row, index)
         if item["id"] in current_ids:
             continue
@@ -2466,7 +2483,11 @@ def clear_finished_jobs() -> int:
     Returns:
         int: number of jobs removed
     """
-    global jobs, job_queue, dashboard_totals
+    global jobs, job_queue, dashboard_totals, history_cleared_before
+
+    # Capture the boundary before scanning the live queue. An encode that
+    # finishes after the user presses Clear must remain visible as new work.
+    clear_boundary = _now_ts()
 
     to_remove = []
     for jid, j in list(jobs.items()):
@@ -2518,6 +2539,7 @@ def clear_finished_jobs() -> int:
             print(f"[WARN] Failed to remove log for {jid}: {e}", flush=True)
 
     dashboard_totals = archived
+    history_cleared_before = max(float(history_cleared_before or 0.0), clear_boundary)
     save_jobs()
     return removed
 
