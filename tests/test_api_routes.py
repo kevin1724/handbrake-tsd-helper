@@ -91,6 +91,25 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(jobs_page.status_code, 200)
         self.assertIn(b"Jobs &amp; Queue", jobs_page.data)
 
+        job_id = "jobs-dashboard-route-regression"
+        app_jobs.jobs[job_id] = {
+            "id": job_id,
+            "src": os.path.join(TEST_MEDIA, "Dashboard.Movie.2026.mkv"),
+            "preset": "test-preset",
+            "status": "done",
+            "created_at": 1,
+        }
+        try:
+            jobs_data = self.client.get("/api/jobs")
+            self.assertEqual(jobs_data.status_code, 200)
+            self.assertTrue(jobs_data.is_json)
+            self.assertIn(
+                job_id,
+                [job["id"] for job in jobs_data.get_json()["jobs"]],
+            )
+        finally:
+            app_jobs.jobs.pop(job_id, None)
+
     def test_ai_settings_are_secret_safe_and_provider_test_is_grounded(self):
         page = self.client.get("/settings/ai")
         self.assertEqual(page.status_code, 200)

@@ -8092,7 +8092,7 @@ def register_routes(app):
 
     # ------------- Job list -------------
 
-    @app.route("/jobs")
+    @app.route("/api/jobs")
     def jobs_list():
         """Return a simplified list of all jobs for the history table."""
         items = list_jobs_for_api()
