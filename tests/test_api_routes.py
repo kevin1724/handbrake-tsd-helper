@@ -78,15 +78,16 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.12.0")
+        self.assertEqual(status.get_json()["release"], "3.13.0")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
         library_page = self.client.get("/library")
         self.assertEqual(library_page.status_code, 200)
-        self.assertIn(b"Your complete media catalog", library_page.data)
+        self.assertIn(b"From Library to queue in three steps", library_page.data)
         self.assertIn(b"Smart Queue", library_page.data)
         self.assertIn(b"Fine tune queue", library_page.data)
+        self.assertIn(b"Real encode preview", library_page.data)
         self.assertIn(b'id="quickFilterSelect"', library_page.data)
         home_page = self.client.get("/")
         self.assertEqual(home_page.status_code, 200)
@@ -801,6 +802,13 @@ class ApiRouteSmokeTests(unittest.TestCase):
         control = self.client.post("/api/mobile/v1/queue", json={"paused": True}, headers=headers)
         self.assertEqual(control.status_code, 403)
 
+        preview = self.client.post(
+            "/api/mobile/v1/library/preview",
+            json={"src": os.path.join(TEST_MEDIA, "read-only.mkv")},
+            headers=headers,
+        )
+        self.assertEqual(preview.status_code, 403)
+
     def test_bytesqueeze_dashboard_library_and_control_surface(self):
         pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "control"})
         self.assertEqual(pairing_response.status_code, 200)
@@ -836,7 +844,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.12.0")
+        self.assertEqual(dashboard_payload["release"], "3.13.0")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)
@@ -989,6 +997,66 @@ class ApiRouteSmokeTests(unittest.TestCase):
             self.assertEqual(candidate["options"]["resolution_mode"], "1080")
             self.assertEqual(candidate["options"]["audio_mode"], "copy")
             self.assertEqual(candidate["options"]["subtitle_mode"], "none")
+
+    def test_library_preview_starts_real_smart_plan_and_exposes_status(self):
+        media_path = os.path.join(TEST_MEDIA, "Preview.Movie.2160p.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"preview-source")
+        tuning = {
+            "goal": "quality",
+            "resolution_mode": "1080",
+            "target_scale": 1.1,
+        }
+        recommendation = {
+            "selected_plan": {
+                "options": {
+                    "resolution_mode": "1080",
+                    "audio_mode": "copy",
+                    "subtitle_mode": "all",
+                },
+                "inputs": {"target_mb": 4096},
+            },
+            "recommended_id": "quality",
+            "candidates": [
+                {
+                    "id": "quality",
+                    "name": "Quality guard",
+                    "summary": "Protects detail",
+                }
+            ],
+            "tuning": tuning,
+        }
+
+        with (
+            patch("webui.app.routes._smart_recommendation", return_value=recommendation),
+            patch("webui.app.routes.threading.Thread") as thread_class,
+        ):
+            started = self.client.post(
+                "/api/library/preview",
+                json={"src": media_path, "smart_tuning": tuning},
+            )
+
+        self.assertEqual(started.status_code, 202, started.get_data(as_text=True))
+        preview = started.get_json()["preview"]
+        self.assertTrue(preview["preview_id"].startswith("library_"))
+        self.assertEqual(preview["candidate_name"], "Quality guard")
+        self.assertEqual(preview["tuning"], tuning)
+        thread_class.assert_called_once()
+        thread_class.return_value.start.assert_called_once()
+        preview_payload = thread_class.call_args.kwargs["args"][1]
+        self.assertEqual(preview_payload["src"], media_path)
+        self.assertEqual(preview_payload["resolution_mode"], "1080")
+        self.assertEqual(preview_payload["target_size_value"], 4096)
+
+        status = self.client.get(f"/api/library/preview/{preview['preview_id']}")
+        self.assertEqual(status.status_code, 200, status.get_data(as_text=True))
+        self.assertEqual(status.get_json()["preview"]["state"], "queued")
+
+        missing = self.client.post(
+            "/api/library/preview",
+            json={"src": os.path.join(TEST_MEDIA, "missing.mkv")},
+        )
+        self.assertEqual(missing.status_code, 400)
 
     def test_smart_presets_generate_candidates_and_unlock_after_feedback(self):
         try:

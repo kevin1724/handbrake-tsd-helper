@@ -185,6 +185,8 @@ The Library page scans the movie and show folders you map in Settings.
 - Complete title catalog plus recently added rails
 - Sort by likely storage savings
 - Filter by title, quality, type, and status
+- Generate a real matched-frame and side-by-side Smart encode preview without leaving the Library
+- Apply one-time Smart guardrails for resolution, compatibility, audio, subtitles, encoder, and size/detail balance
 - Queue movies, episodes, seasons, shows, or selected batches
 - Track show release dates and optionally auto-queue new episodes after their downloaded files become stable
 - Send jobs to local encoding or linked workers
@@ -313,8 +315,9 @@ encode.
 - Discovery: `GET /api/mobile/v1/discovery`
 - Pairing: `POST /api/mobile/v1/pair`
 - Token rotation: `POST /api/mobile/v1/token/refresh`
-- Read endpoints for status, jobs, nodes, events, library, and release calendar
+- Read endpoints for status, jobs, nodes, events, library, release calendar, and Library preview progress
 - Scoped queue, node-target, show-monitoring, and Autopilot controls
+- Matched Library preview frames, per-season Smart Queue actions, and transient tuning from the phone
 - Shared accurate-preview review and Smart Preset feedback from the phone
 - Primary home address plus an optional Tailscale/away address with automatic connection failover
 - Browser-admin controls for creating pairing codes and revoking devices

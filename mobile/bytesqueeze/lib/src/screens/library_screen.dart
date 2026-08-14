@@ -1,3 +1,5 @@
+import 'dart:convert';
+
 import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
@@ -16,6 +18,8 @@ class LibraryScreen extends StatefulWidget {
 class _LibraryScreenState extends State<LibraryScreen> {
   final _search = TextEditingController();
   bool _shows = false;
+  String _quickFilter = 'all';
+  String _sort = 'recommended';
 
   @override
   void dispose() {
@@ -29,13 +33,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
         .map(asMap)
         .toList();
     final query = _search.text.trim().toLowerCase();
-    final items = query.isEmpty
-        ? all
-        : all
-            .where((item) => '${item['title'] ?? ''} ${item['year'] ?? ''}'
-                .toLowerCase()
-                .contains(query))
-            .toList();
+    final items = all.where((item) {
+      final files = asList(item['files'])
+          .map((row) => '${asMap(row)['path'] ?? ''}')
+          .join(' ');
+      final matchesSearch = query.isEmpty ||
+          '${item['title'] ?? ''} ${item['year'] ?? ''} $files'
+              .toLowerCase()
+              .contains(query);
+      return matchesSearch && _matchesQuickFilter(item);
+    }).toList()
+      ..sort(_compareItems);
     final stats = asMap(widget.controller.library['stats']);
     final configured = widget.controller.library['configured'] != false;
     final tmdbConfigured = widget.controller.library['tmdb_configured'] == true;
@@ -88,6 +96,35 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ],
                   ),
                   const SizedBox(height: 16),
+                  SurfaceCard(
+                    borderColor: ByteSqueezeColors.cyan.withValues(alpha: .38),
+                    child: const Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Icon(Icons.auto_awesome_rounded,
+                            color: ByteSqueezeColors.cyan),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Text('Preview, tune, then queue',
+                                  style:
+                                      TextStyle(fontWeight: FontWeight.w800)),
+                              SizedBox(height: 4),
+                              Text(
+                                'Open a title to compare a real Smart encode. Shows also support one-tap season previews and queues.',
+                                style: TextStyle(
+                                    color: ByteSqueezeColors.muted,
+                                    fontSize: 12.5),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  const SizedBox(height: 12),
                   Row(
                     children: [
                       StatusPill(
@@ -151,6 +188,61 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             ),
                     ),
                   ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SingleChildScrollView(
+                          scrollDirection: Axis.horizontal,
+                          child: Row(
+                            children: [
+                              for (final filter in const [
+                                ('all', 'All', Icons.apps_rounded),
+                                ('savings', 'Best savings', Icons.compress_rounded),
+                                ('hdr', 'HDR', Icons.hdr_on_rounded),
+                                ('tracked', 'Tracked', Icons.notifications_active_outlined),
+                              ]) ...[
+                                FilterChip(
+                                  selected: _quickFilter == filter.$1,
+                                  onSelected: (_) => setState(
+                                      () => _quickFilter = filter.$1),
+                                  avatar: Icon(filter.$3, size: 17),
+                                  label: Text(filter.$2),
+                                ),
+                                const SizedBox(width: 7),
+                              ],
+                            ],
+                          ),
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      PopupMenuButton<String>(
+                        tooltip: 'Sort library',
+                        initialValue: _sort,
+                        onSelected: (value) => setState(() => _sort = value),
+                        itemBuilder: (context) => const [
+                          PopupMenuItem(
+                              value: 'recommended',
+                              child: Text('Recommended savings')),
+                          PopupMenuItem(
+                              value: 'size', child: Text('Largest source')),
+                          PopupMenuItem(
+                              value: 'title', child: Text('Title A–Z')),
+                        ],
+                        child: DecoratedBox(
+                          decoration: BoxDecoration(
+                            color: ByteSqueezeColors.surface,
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: ByteSqueezeColors.line),
+                          ),
+                          child: const Padding(
+                            padding: EdgeInsets.all(12),
+                            child: Icon(Icons.sort_rounded),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
                   if (!configured) ...[
                     const SizedBox(height: 14),
                     const SurfaceCard(
@@ -195,6 +287,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ),
                   ],
                   const SizedBox(height: 16),
+                  if (items.isNotEmpty)
+                    Padding(
+                      padding: const EdgeInsets.only(bottom: 10),
+                      child: Text(
+                        '${items.length} ${_shows ? 'show${items.length == 1 ? '' : 's'}' : 'movie${items.length == 1 ? '' : 's'}'} shown',
+                        style: const TextStyle(
+                            color: ByteSqueezeColors.muted,
+                            fontWeight: FontWeight.w700,
+                            fontSize: 12),
+                      ),
+                    ),
                   if (items.isEmpty)
                     EmptyState(
                       icon: _shows
@@ -262,6 +365,41 @@ class _LibraryScreenState extends State<LibraryScreen> {
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('$error')));
     }
+  }
+
+  bool _matchesQuickFilter(Map<String, dynamic> item) {
+    if (_quickFilter == 'all') return true;
+    if (_quickFilter == 'savings') {
+      final prediction = asMap(item['prediction']);
+      return prediction['available'] == true &&
+          ((prediction['savings_percent'] as num?)?.toDouble() ?? 0) >= 10;
+    }
+    if (_quickFilter == 'hdr') {
+      return item['is_hdr'] == true ||
+          asList(item['files']).map(asMap).any((row) => row['is_hdr'] == true);
+    }
+    if (_quickFilter == 'tracked') {
+      return _shows && item['tracked'] == true;
+    }
+    return true;
+  }
+
+  int _compareItems(Map<String, dynamic> a, Map<String, dynamic> b) {
+    final aTitle = '${a['title'] ?? ''}'.toLowerCase();
+    final bTitle = '${b['title'] ?? ''}'.toLowerCase();
+    if (_sort == 'title') return aTitle.compareTo(bTitle);
+    int bytes(Map<String, dynamic> item) =>
+        ((item['total_size_bytes'] ?? item['size_bytes']) as num?)?.toInt() ??
+        0;
+    if (_sort == 'size') {
+      final result = bytes(b).compareTo(bytes(a));
+      return result != 0 ? result : aTitle.compareTo(bTitle);
+    }
+    int saved(Map<String, dynamic> item) =>
+        (asMap(item['prediction'])['estimated_saved_bytes'] as num?)?.toInt() ??
+        (bytes(item) * .35).round();
+    final result = saved(b).compareTo(saved(a));
+    return result != 0 ? result : aTitle.compareTo(bTitle);
   }
 }
 
@@ -421,7 +559,10 @@ class _MediaDetails extends StatefulWidget {
 
 class _MediaDetailsState extends State<_MediaDetails> {
   bool _working = false;
+  bool _previewWorking = false;
   String _queueTarget = 'local:';
+  Map<String, dynamic> _smartTuning = <String, dynamic>{};
+  Map<String, dynamic> _preview = <String, dynamic>{};
 
   List<String> get _paths {
     if (widget.isShow) {
@@ -439,25 +580,31 @@ class _MediaDetailsState extends State<_MediaDetails> {
     return values;
   }
 
-  Future<void> _queue(String preset) async {
+  Future<void> _queue(
+    String preset, {
+    List<String>? paths,
+    String? scopeLabel,
+  }) async {
+    final queuePaths = paths ?? _paths;
     setState(() => _working = true);
     try {
       final parts = _queueTarget.split(':');
       final mode = parts.first;
       final nodeId = parts.length > 1 ? parts.sublist(1).join(':') : '';
       await widget.controller.queuePaths(
-        _paths,
+        queuePaths,
         preset: preset,
         mode: mode,
         nodeId: nodeId,
+        smartTuning: preset == 'smart' ? _smartTuning : null,
       );
       if (!mounted) return;
       final messenger = ScaffoldMessenger.of(context);
       Navigator.pop(context);
       messenger.showSnackBar(
         SnackBar(
-          content:
-              Text('${widget.item['title']} queued for ${_targetLabel()}.'),
+          content: Text(
+              '${scopeLabel ?? widget.item['title']} queued for ${_targetLabel()}.'),
         ),
       );
     } catch (error) {
@@ -468,6 +615,80 @@ class _MediaDetailsState extends State<_MediaDetails> {
       if (mounted) setState(() => _working = false);
     }
   }
+
+  Future<void> _editSmartTuning() async {
+    final tuning = await showModalBottomSheet<Map<String, dynamic>>(
+      context: context,
+      isScrollControlled: true,
+      useSafeArea: true,
+      showDragHandle: true,
+      backgroundColor: ByteSqueezeColors.navy,
+      builder: (context) => _SmartTuneSheet(initial: _smartTuning),
+    );
+    if (tuning == null || !mounted) return;
+    setState(() {
+      _smartTuning = tuning;
+      _preview = <String, dynamic>{};
+    });
+    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      content: Text('Smart guardrails applied to this queue only.'),
+    ));
+  }
+
+  Future<void> _generatePreview({List<String>? paths}) async {
+    final previewPaths = paths ?? _paths;
+    if (previewPaths.isEmpty || _previewWorking) return;
+    setState(() {
+      _previewWorking = true;
+      _preview = <String, dynamic>{
+        'state': 'queued',
+        'progress': 0,
+        'message': 'Starting a real Smart comparison…',
+      };
+    });
+    try {
+      final result = await widget.controller.generateLibraryPreview(
+        previewPaths.first,
+        smartTuning: _smartTuning,
+        onProgress: (value) {
+          if (mounted) setState(() => _preview = value);
+        },
+      );
+      if (mounted) setState(() => _preview = result);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _preview = <String, dynamic>{
+            'state': 'error',
+            'message': '$error',
+          });
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$error')));
+    } finally {
+      if (mounted) setState(() => _previewWorking = false);
+    }
+  }
+
+  Map<int, List<Map<String, dynamic>>> _seasonGroups(
+      List<dynamic> values) {
+    final groups = <int, List<Map<String, dynamic>>>{};
+    for (final value in values) {
+      final file = asMap(value);
+      final season = (file['season'] as num?)?.toInt() ?? 0;
+      groups.putIfAbsent(season, () => <Map<String, dynamic>>[]).add(file);
+    }
+    for (final rows in groups.values) {
+      rows.sort((a, b) =>
+          ((a['episode'] as num?)?.toInt() ?? 0)
+              .compareTo((b['episode'] as num?)?.toInt() ?? 0));
+    }
+    return Map.fromEntries(groups.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key)));
+  }
+
+  List<String> _filePaths(Iterable<Map<String, dynamic>> files) => files
+      .map((row) => '${row['path'] ?? ''}')
+      .where((path) => path.isNotEmpty)
+      .toList();
 
   String _targetLabel() {
     if (_queueTarget == 'local:') return 'this server';
@@ -497,6 +718,9 @@ class _MediaDetailsState extends State<_MediaDetails> {
   @override
   Widget build(BuildContext context) {
     final files = asList(widget.item['files']);
+    final seasons = widget.isShow
+        ? _seasonGroups(files)
+        : <int, List<Map<String, dynamic>>>{};
     final posterSource = '${widget.item['poster_source'] ?? widget.item['metadata_source'] ?? widget.item['source'] ?? ''}'
         .toLowerCase();
     final artworkLabel = posterSource == 'tmdb'
@@ -624,8 +848,85 @@ class _MediaDetailsState extends State<_MediaDetails> {
               ),
           ],
           const SectionHeader(
-              title: 'Remote encode',
-              subtitle: 'The Docker server performs all encoding work'),
+              title: 'Smart plan',
+              subtitle: 'Preview first or send the complete scope to queue'),
+          SurfaceCard(
+            borderColor: ByteSqueezeColors.cyan.withValues(alpha: .34),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    DecoratedBox(
+                      decoration: BoxDecoration(
+                        color: ByteSqueezeColors.cyan.withValues(alpha: .12),
+                        shape: BoxShape.circle,
+                      ),
+                      child: const Padding(
+                        padding: EdgeInsets.all(10),
+                        child: Icon(Icons.auto_awesome_rounded,
+                            color: ByteSqueezeColors.cyan),
+                      ),
+                    ),
+                    const SizedBox(width: 11),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            widget.isShow
+                                ? '${_paths.length} episodes in full-show scope'
+                                : 'One movie in queue scope',
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w800),
+                          ),
+                          const SizedBox(height: 3),
+                          Text(
+                            _smartTuning.isEmpty
+                                ? 'Using your learned Smart profile'
+                                : '${_smartTuning.length} temporary guardrails applied',
+                            style: const TextStyle(
+                                color: ByteSqueezeColors.muted,
+                                fontSize: 12),
+                          ),
+                        ],
+                      ),
+                    ),
+                    TextButton.icon(
+                      onPressed: widget.controller.canControl && !_working
+                          ? _editSmartTuning
+                          : null,
+                      icon: const Icon(Icons.tune_rounded, size: 18),
+                      label: const Text('Tune'),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 12),
+                OutlinedButton.icon(
+                  onPressed: widget.controller.canControl &&
+                          !_previewWorking &&
+                          _paths.isNotEmpty
+                      ? _generatePreview
+                      : null,
+                  icon: _previewWorking
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2))
+                      : const Icon(Icons.compare_rounded),
+                  label: Text(_preview.isEmpty
+                      ? 'Preview real Smart encode'
+                      : 'Refresh Smart preview'),
+                ),
+              ],
+            ),
+          ),
+          if (_preview.isNotEmpty)
+            _LibraryPreviewCard(
+                preview: _preview, working: _previewWorking),
+          const SectionHeader(
+              title: 'Queue destination',
+              subtitle: 'All encoding stays on the server or selected worker'),
           DropdownButtonFormField<String>(
             initialValue: _queueTarget,
             decoration: const InputDecoration(
@@ -670,7 +971,9 @@ class _MediaDetailsState extends State<_MediaDetails> {
                           height: 18,
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.auto_awesome_rounded),
-                  label: const Text('Queue Smart Preset'),
+                  label: Text(widget.isShow
+                      ? 'Smart Queue Full Show'
+                      : 'Smart Queue Movie'),
                 ),
               ),
               const SizedBox(width: 9),
@@ -694,28 +997,102 @@ class _MediaDetailsState extends State<_MediaDetails> {
               ),
             ],
           ),
-          if (files.isNotEmpty) ...[
+          if (widget.isShow && seasons.isNotEmpty) ...[
             SectionHeader(
-                title: widget.isShow ? 'Episodes' : 'Files',
-                subtitle: '${files.length} media files'),
+                title: 'Seasons',
+                subtitle: 'Preview or Smart Queue one complete season'),
+            ...seasons.entries.map((entry) {
+              final season = entry.key;
+              final rows = entry.value;
+              final paths = _filePaths(rows);
+              final totalBytes = rows.fold<int>(
+                  0,
+                  (sum, row) =>
+                      sum + ((row['size_bytes'] as num?)?.toInt() ?? 0));
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 10),
+                child: SurfaceCard(
+                  padding: EdgeInsets.zero,
+                  child: ExpansionTile(
+                    tilePadding: const EdgeInsets.fromLTRB(14, 5, 8, 5),
+                    childrenPadding: const EdgeInsets.only(bottom: 8),
+                    leading: CircleAvatar(
+                      backgroundColor:
+                          ByteSqueezeColors.blue.withValues(alpha: .14),
+                      child: Text(season > 0 ? '$season' : '—',
+                          style: const TextStyle(
+                              color: ByteSqueezeColors.cyan,
+                              fontWeight: FontWeight.w800)),
+                    ),
+                    title: Text(season > 0 ? 'Season $season' : 'Specials',
+                        style: const TextStyle(fontWeight: FontWeight.w800)),
+                    subtitle: Text(
+                      '${rows.length} episode${rows.length == 1 ? '' : 's'} · ${formatBytes(totalBytes)}',
+                      style: const TextStyle(
+                          color: ByteSqueezeColors.muted, fontSize: 12),
+                    ),
+                    trailing: Wrap(
+                      spacing: 3,
+                      children: [
+                        IconButton(
+                          tooltip: 'Preview this season',
+                          onPressed: widget.controller.canControl &&
+                                  !_previewWorking &&
+                                  paths.isNotEmpty
+                              ? () => _generatePreview(paths: paths)
+                              : null,
+                          icon: const Icon(Icons.compare_rounded),
+                        ),
+                        IconButton.filledTonal(
+                          tooltip: 'Smart Queue this season',
+                          onPressed: widget.controller.canControl &&
+                                  !_working &&
+                                  paths.isNotEmpty
+                              ? () => _queue(
+                                    'smart',
+                                    paths: paths,
+                                    scopeLabel: season > 0
+                                        ? '${widget.item['title']} Season $season'
+                                        : '${widget.item['title']} Specials',
+                                  )
+                              : null,
+                          icon: const Icon(Icons.add_to_queue_rounded),
+                        ),
+                      ],
+                    ),
+                    children: rows.take(100).map((file) {
+                      return ListTile(
+                        dense: true,
+                        leading: Text(
+                          'E${file['episode'] ?? '—'}',
+                          style: const TextStyle(
+                              color: ByteSqueezeColors.cyan,
+                              fontWeight: FontWeight.w800),
+                        ),
+                        title: Text(fileName(file['path']),
+                            maxLines: 1, overflow: TextOverflow.ellipsis),
+                        subtitle: Text(formatBytes(file['size_bytes']),
+                            style: const TextStyle(
+                                color: ByteSqueezeColors.muted)),
+                      );
+                    }).toList(),
+                  ),
+                ),
+              );
+            }),
+          ] else if (files.isNotEmpty) ...[
+            SectionHeader(title: 'Files', subtitle: '${files.length} media files'),
             SurfaceCard(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(
                 children: files.take(100).map((row) {
                   final file = asMap(row);
                   return ListTile(
-                    leading: CircleAvatar(
-                      backgroundColor:
-                          ByteSqueezeColors.blue.withValues(alpha: .12),
-                      child: Text('${file['episode'] ?? '•'}',
-                          style: const TextStyle(
-                              color: ByteSqueezeColors.cyan,
-                              fontWeight: FontWeight.w700)),
-                    ),
+                    leading: const Icon(Icons.movie_outlined,
+                        color: ByteSqueezeColors.cyan),
                     title: Text(fileName(file['path']),
                         maxLines: 1, overflow: TextOverflow.ellipsis),
-                    subtitle: Text(
-                        'Season ${file['season'] ?? '—'} · ${formatBytes(file['size_bytes'])}',
+                    subtitle: Text(formatBytes(file['size_bytes']),
                         style: const TextStyle(color: ByteSqueezeColors.muted)),
                   );
                 }).toList(),
@@ -723,6 +1100,419 @@ class _MediaDetailsState extends State<_MediaDetails> {
             ),
           ],
         ],
+      ),
+    );
+  }
+}
+
+class _LibraryPreviewCard extends StatelessWidget {
+  const _LibraryPreviewCard({required this.preview, required this.working});
+
+  final Map<String, dynamic> preview;
+  final bool working;
+
+  @override
+  Widget build(BuildContext context) {
+    final result = asMap(preview['result']);
+    final progress =
+        (((preview['progress'] as num?)?.toDouble() ?? 0) / 100)
+            .clamp(0, 1)
+            .toDouble();
+    final oldFrame = '${result['old_b64'] ?? ''}';
+    final newFrame = '${result['new_b64'] ?? ''}';
+    final ready = preview['state'] == 'done';
+    final encoder = '${result['encoder_label'] ?? result['encoder'] ?? ''}';
+    final dimensions = result['out_width'] != null && result['out_height'] != null
+        ? '${result['out_width']}×${result['out_height']}'
+        : '';
+    return Padding(
+      padding: const EdgeInsets.only(top: 10),
+      child: SurfaceCard(
+        borderColor:
+            ready ? ByteSqueezeColors.mint : ByteSqueezeColors.line,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  ready ? Icons.check_circle_rounded : Icons.movie_filter_rounded,
+                  color: ready
+                      ? ByteSqueezeColors.mint
+                      : ByteSqueezeColors.cyan,
+                ),
+                const SizedBox(width: 9),
+                Expanded(
+                  child: Text(
+                    ready ? 'Smart preview ready' : 'Building Smart preview',
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
+                ),
+                if (ready && (encoder.isNotEmpty || dimensions.isNotEmpty))
+                  StatusPill(
+                    label: [encoder, dimensions]
+                        .where((value) => value.isNotEmpty)
+                        .join(' · '),
+                    color: ByteSqueezeColors.mint,
+                  ),
+              ],
+            ),
+            const SizedBox(height: 9),
+            LinearProgressIndicator(value: ready ? 1.0 : progress),
+            const SizedBox(height: 8),
+            Text(
+              '${preview['message'] ?? (working ? 'Encoding a short matched sample…' : 'Preview finished.')}',
+              style: const TextStyle(
+                  color: ByteSqueezeColors.muted, fontSize: 12),
+            ),
+            if (ready && oldFrame.isNotEmpty && newFrame.isNotEmpty) ...[
+              const SizedBox(height: 12),
+              LayoutBuilder(builder: (context, constraints) {
+                final frames = [
+                  _LibraryPreviewFrame(label: 'Original', value: oldFrame),
+                  _LibraryPreviewFrame(label: 'Smart proposal', value: newFrame),
+                ];
+                if (constraints.maxWidth >= 520) {
+                  return Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(child: frames[0]),
+                      const SizedBox(width: 9),
+                      Expanded(child: frames[1]),
+                    ],
+                  );
+                }
+                return Column(
+                  children: [
+                    frames[0],
+                    const SizedBox(height: 9),
+                    frames[1],
+                  ],
+                );
+              }),
+              const SizedBox(height: 8),
+              const Text(
+                'Frames are captured at the same moment so faces, text, motion detail, and dark areas are easy to compare.',
+                style: TextStyle(
+                    color: ByteSqueezeColors.muted, fontSize: 11.5),
+              ),
+            ] else if (ready) ...[
+              const SizedBox(height: 8),
+              const Text(
+                'Demo preview metadata is ready. Connect to your server to render matched source and proposal frames.',
+                style: TextStyle(
+                    color: ByteSqueezeColors.muted, fontSize: 11.5),
+              ),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _LibraryPreviewFrame extends StatelessWidget {
+  const _LibraryPreviewFrame({required this.label, required this.value});
+
+  final String label;
+  final String value;
+
+  @override
+  Widget build(BuildContext context) {
+    Widget image;
+    try {
+      image = Image.memory(
+        base64Decode(value),
+        fit: BoxFit.contain,
+        gaplessPlayback: true,
+      );
+    } catch (_) {
+      image = const SizedBox(
+        height: 120,
+        child: Center(child: Icon(Icons.broken_image_outlined)),
+      );
+    }
+    return ClipRRect(
+      borderRadius: BorderRadius.circular(14),
+      child: DecoratedBox(
+        decoration: BoxDecoration(
+          color: const Color(0xFF020713),
+          border: Border.all(color: ByteSqueezeColors.line),
+          borderRadius: BorderRadius.circular(14),
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(10, 8, 10, 7),
+              child: Text(label.toUpperCase(),
+                  style: const TextStyle(
+                      color: ByteSqueezeColors.muted,
+                      fontSize: 10,
+                      fontWeight: FontWeight.w900,
+                      letterSpacing: 1)),
+            ),
+            image,
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _SmartTuneSheet extends StatefulWidget {
+  const _SmartTuneSheet({required this.initial});
+
+  final Map<String, dynamic> initial;
+
+  @override
+  State<_SmartTuneSheet> createState() => _SmartTuneSheetState();
+}
+
+class _SmartTuneSheetState extends State<_SmartTuneSheet> {
+  late String _goal;
+  late String _resolution;
+  late String _hardware;
+  late String _compatibility;
+  late String _audio;
+  late String _subtitles;
+  late double _targetScale;
+
+  @override
+  void initState() {
+    super.initState();
+    _goal = '${widget.initial['goal'] ?? 'learned'}';
+    _resolution = '${widget.initial['resolution_mode'] ?? 'learned'}';
+    _hardware = '${widget.initial['hardware'] ?? 'learned'}';
+    _compatibility = '${widget.initial['compatibility'] ?? 'learned'}';
+    _audio = '${widget.initial['audio_strategy'] ?? 'learned'}';
+    _subtitles = '${widget.initial['subtitle_mode'] ?? 'learned'}';
+    _targetScale =
+        ((widget.initial['target_scale'] as num?)?.toDouble() ?? 1)
+            .clamp(.7, 1.3)
+            .toDouble();
+  }
+
+  Map<String, dynamic> _value() {
+    final value = <String, dynamic>{'target_scale': _targetScale};
+    void add(String key, String candidate) {
+      if (candidate != 'learned') value[key] = candidate;
+    }
+
+    add('goal', _goal);
+    add('resolution_mode', _resolution);
+    add('hardware', _hardware);
+    add('compatibility', _compatibility);
+    add('audio_strategy', _audio);
+    add('subtitle_mode', _subtitles);
+    return value;
+  }
+
+  void _reset() {
+    setState(() {
+      _goal = 'learned';
+      _resolution = 'learned';
+      _hardware = 'learned';
+      _compatibility = 'learned';
+      _audio = 'learned';
+      _subtitles = 'learned';
+      _targetScale = 1;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return FractionallySizedBox(
+      heightFactor: .94,
+      child: Column(
+        children: [
+          Padding(
+            padding: const EdgeInsets.fromLTRB(20, 4, 20, 14),
+            child: Row(
+              children: [
+                const Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('Fine-tune Smart Queue',
+                          style: TextStyle(
+                              fontSize: 21, fontWeight: FontWeight.w900)),
+                      SizedBox(height: 3),
+                      Text('Guardrails for this queue only',
+                          style: TextStyle(color: ByteSqueezeColors.muted)),
+                    ],
+                  ),
+                ),
+                TextButton(onPressed: _reset, child: const Text('Reset')),
+              ],
+            ),
+          ),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
+              children: [
+                const SurfaceCard(
+                  borderColor: ByteSqueezeColors.cyan,
+                  child: Text(
+                    'Smart Preset still creates a separate validated plan for every file. These choices guide it without changing your learned profile.',
+                    style: TextStyle(
+                        color: ByteSqueezeColors.muted, fontSize: 12.5),
+                  ),
+                ),
+                _tuningDropdown(
+                  label: 'Priority',
+                  value: _goal,
+                  values: const {
+                    'learned': 'Use learned profile',
+                    'balanced': 'Balanced',
+                    'quality': 'Protect detail',
+                    'small': 'Save more space',
+                    'speed': 'Finish faster',
+                    'archive': 'Archive quality',
+                  },
+                  onChanged: (value) => setState(() => _goal = value),
+                ),
+                _tuningDropdown(
+                  label: 'Resolution guardrail',
+                  value: _resolution,
+                  values: const {
+                    'learned': 'Smart automatic',
+                    'keep': 'Keep source resolution',
+                    '2160': 'Cap at 2160p',
+                    '1440': 'Cap at 1440p',
+                    '1080': 'Cap at 1080p',
+                    '720': 'Cap at 720p',
+                  },
+                  onChanged: (value) => setState(() => _resolution = value),
+                ),
+                _tuningDropdown(
+                  label: 'Encoder',
+                  value: _hardware,
+                  values: const {
+                    'learned': 'Use learned profile',
+                    'auto': 'Best available',
+                    'software': 'Software quality',
+                    'qsv': 'Intel Quick Sync',
+                  },
+                  onChanged: (value) => setState(() => _hardware = value),
+                ),
+                _tuningDropdown(
+                  label: 'Playback compatibility',
+                  value: _compatibility,
+                  values: const {
+                    'learned': 'Use learned profile',
+                    'broad': 'Broad / H.264 friendly',
+                    'modern': 'Modern / H.265',
+                    'maximum': 'Maximum compression',
+                  },
+                  onChanged: (value) =>
+                      setState(() => _compatibility = value),
+                ),
+                _tuningDropdown(
+                  label: 'Audio',
+                  value: _audio,
+                  values: const {
+                    'learned': 'Use learned profile',
+                    'copy': 'Copy original tracks',
+                    'eac3_surround': 'E-AC3 surround',
+                  },
+                  onChanged: (value) => setState(() => _audio = value),
+                ),
+                _tuningDropdown(
+                  label: 'Subtitles',
+                  value: _subtitles,
+                  values: const {
+                    'learned': 'Use learned profile',
+                    'all': 'Keep all matching',
+                    'first': 'First matching track',
+                    'none': 'No subtitles',
+                  },
+                  onChanged: (value) => setState(() => _subtitles = value),
+                ),
+                const SizedBox(height: 14),
+                SurfaceCard(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: [
+                      Row(
+                        children: [
+                          const Expanded(
+                            child: Text('Size vs. detail',
+                                style: TextStyle(fontWeight: FontWeight.w800)),
+                          ),
+                          Text(
+                            _targetScale == 1
+                                ? 'Learned target'
+                                : (_targetScale < 1
+                                    ? '${((1 - _targetScale) * 100).round()}% smaller'
+                                    : '${((_targetScale - 1) * 100).round()}% more detail'),
+                            style: const TextStyle(
+                                color: ByteSqueezeColors.cyan,
+                                fontWeight: FontWeight.w700),
+                          ),
+                        ],
+                      ),
+                      Slider(
+                        value: _targetScale,
+                        min: .7,
+                        max: 1.3,
+                        divisions: 12,
+                        onChanged: (value) =>
+                            setState(() => _targetScale = value),
+                      ),
+                      const Row(
+                        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                        children: [
+                          Text('Smaller',
+                              style: TextStyle(
+                                  color: ByteSqueezeColors.muted,
+                                  fontSize: 11)),
+                          Text('More detail',
+                              style: TextStyle(
+                                  color: ByteSqueezeColors.muted,
+                                  fontSize: 11)),
+                        ],
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          SafeArea(
+            top: false,
+            minimum: const EdgeInsets.fromLTRB(20, 10, 20, 14),
+            child: FilledButton.icon(
+              onPressed: () => Navigator.pop(context, _value()),
+              icon: const Icon(Icons.check_rounded),
+              label: const Text('Use these guardrails'),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _tuningDropdown({
+    required String label,
+    required String value,
+    required Map<String, String> values,
+    required ValueChanged<String> onChanged,
+  }) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 11),
+      child: DropdownButtonFormField<String>(
+        initialValue: value,
+        decoration: InputDecoration(labelText: label),
+        items: values.entries
+            .map((entry) => DropdownMenuItem(
+                  value: entry.key,
+                  child: Text(entry.value),
+                ))
+            .toList(),
+        onChanged: (next) {
+          if (next != null) onChanged(next);
+        },
       ),
     );
   }

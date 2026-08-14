@@ -2769,7 +2769,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.12.0"
+APP_RELEASE = "3.13.0"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -8023,6 +8023,125 @@ def register_routes(app):
                     os.rmdir(tmpdir)
                 except Exception:
                     pass
+
+    def _start_library_smart_preview(data: dict | None = None, *, actor: str = "web") -> dict:
+        """Start a real Smart Preset comparison for one Library source."""
+        data = data if isinstance(data, dict) else {}
+        src = str(data.get("src") or "").strip()
+        if not src or not os.path.isfile(src):
+            raise ValueError("The selected Library file is no longer available.")
+        if not is_allowed_path(src):
+            raise ValueError("The selected file is outside the mapped Library folders.")
+        if not src.lower().endswith(VIDEO_EXTS):
+            raise ValueError("The selected Library item is not a supported video file.")
+
+        recommendation = _smart_recommendation(
+            {
+                "src": src,
+                "preset": "auto",
+                "smart_tuning": data.get("smart_tuning") or {},
+            }
+        )
+        plan = recommendation.pop("selected_plan")
+        candidate_id = str(recommendation.get("recommended_id") or "balanced")
+        candidate = next(
+            (row for row in recommendation.get("candidates") or [] if row.get("id") == candidate_id),
+            (recommendation.get("candidates") or [{}])[0],
+        )
+        preview_data = {
+            "src": src,
+            **_wizard_public_options(plan.get("options") or {}),
+            "target_size_auto": False,
+            "target_size_value": float((plan.get("inputs") or {}).get("target_mb") or 1.0),
+            "target_size_unit": "MB",
+            "smart_candidate_id": candidate_id,
+            "accurate_preview_layout": "side_by_side",
+        }
+        preview_id = f"library_{uuid.uuid4().hex}"
+        _kill_preview_by_id(preview_id)
+        _preview_set_task(
+            preview_id,
+            state="queued",
+            progress=0.0,
+            message="Queued Library Smart preview.",
+            result=None,
+            error="",
+        )
+        thread = threading.Thread(
+            target=_run_accurate_preview_task,
+            args=(preview_id, preview_data),
+            name=f"library-preview-{preview_id[-8:]}",
+            daemon=True,
+        )
+        thread.start()
+        title = os.path.splitext(os.path.basename(src))[0]
+        log_event(
+            "library_preview_started",
+            f"{actor} started a Smart Preset preview for {title}.",
+            level="info",
+        )
+        return {
+            "preview_id": preview_id,
+            "title": title,
+            "candidate_id": candidate_id,
+            "candidate_name": candidate.get("name") or candidate_id,
+            "candidate_summary": candidate.get("summary") or "",
+            "tuning": recommendation.get("tuning") or {},
+        }
+
+    def _library_preview_status(preview_id: str) -> dict:
+        clean_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(preview_id or ""))
+        if not clean_id or not clean_id.startswith("library_"):
+            raise KeyError("preview not found")
+        row = _preview_get_task(clean_id)
+        if not row:
+            raise KeyError("preview not found")
+        return row
+
+    @app.route("/api/library/preview", methods=["POST"])
+    def library_preview_start_api():
+        try:
+            preview = _start_library_smart_preview(
+                request.get_json(silent=True) or {},
+                actor="Web Library",
+            )
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except Exception as exc:
+            return jsonify(error=f"Could not start Library preview: {exc}"), 500
+        return jsonify(ok=True, preview=preview), 202
+
+    @app.route("/api/library/preview/<preview_id>")
+    def library_preview_status_api(preview_id):
+        try:
+            return jsonify(ok=True, preview=_library_preview_status(preview_id))
+        except KeyError:
+            return jsonify(error="preview not found"), 404
+
+    @app.route("/api/mobile/v1/library/preview", methods=["POST"])
+    def mobile_library_preview_start_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        try:
+            preview = _start_library_smart_preview(
+                request.get_json(silent=True) or {},
+                actor=str(device.get("name") or "ByteSqueeze"),
+            )
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except Exception as exc:
+            return jsonify(error=f"Could not start Library preview: {exc}"), 500
+        return jsonify(ok=True, preview=preview), 202
+
+    @app.route("/api/mobile/v1/library/preview/<preview_id>")
+    def mobile_library_preview_status_api(preview_id):
+        if not _authenticated_mobile("read"):
+            return jsonify(error="unauthorized mobile device"), 401
+        try:
+            return jsonify(ok=True, preview=_library_preview_status(preview_id))
+        except KeyError:
+            return jsonify(error="preview not found"), 404
 
     def _start_autopilot_review(data: dict | None = None, *, actor: str = "web") -> dict:
         data = data if isinstance(data, dict) else {}

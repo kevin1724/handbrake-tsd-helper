@@ -233,6 +233,7 @@ class AppController extends ChangeNotifier {
     String preset = 'smart',
     String mode = 'local',
     String? nodeId,
+    Map<String, dynamic>? smartTuning,
   }) async {
     _requireControl();
     if (paths.isEmpty) {
@@ -246,9 +247,67 @@ class AppController extends ChangeNotifier {
           'preset': preset,
           'mode': mode,
           if (nodeId != null && nodeId.isNotEmpty) 'node_id': nodeId,
+          if (preset == 'smart' && smartTuning != null)
+            'smart_tuning': smartTuning,
         },
         timeout: const Duration(minutes: 2));
     await refreshJobsAndDashboard();
+  }
+
+  Future<Map<String, dynamic>> generateLibraryPreview(
+    String path, {
+    Map<String, dynamic>? smartTuning,
+    ValueChanged<Map<String, dynamic>>? onProgress,
+  }) async {
+    _requireControl();
+    if (path.isEmpty) {
+      throw const ApiFailure('No media file is available to preview.');
+    }
+    if (demoMode) {
+      final preview = <String, dynamic>{
+        'state': 'done',
+        'progress': 100,
+        'message': 'Demo Smart preview ready.',
+        'result': {
+          'encoder_label': 'Smart H.265 10-bit',
+          'out_width': 3840,
+          'out_height': 2160,
+        },
+      };
+      onProgress?.call(preview);
+      return preview;
+    }
+
+    final started = await api.post(
+      '/library/preview',
+      {
+        'src': path,
+        'smart_tuning': smartTuning ?? <String, dynamic>{},
+      },
+      timeout: const Duration(minutes: 2),
+    );
+    final previewId = '${_map(started['preview'])['preview_id'] ?? ''}';
+    if (previewId.isEmpty) {
+      throw const ApiFailure('The server did not return a preview id.');
+    }
+
+    for (var attempt = 0; attempt < 240; attempt++) {
+      await Future<void>.delayed(const Duration(milliseconds: 1400));
+      final value = await api.get(
+        '/library/preview/$previewId',
+        timeout: const Duration(seconds: 30),
+      );
+      final preview = _map(value['preview']);
+      onProgress?.call(preview);
+      final state = '${preview['state'] ?? ''}';
+      if (state == 'done') return preview;
+      if (state == 'error' || state == 'canceled' || state == 'expired') {
+        throw ApiFailure(
+          '${preview['error'] ?? preview['message'] ?? 'Preview failed.'}',
+        );
+      }
+    }
+    throw const ApiFailure('The Smart preview took too long to finish.');
   }
 
   Future<void> trackShow(Map<String, dynamic> show, bool tracked) async {

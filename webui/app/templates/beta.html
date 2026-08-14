@@ -648,6 +648,65 @@
       letter-spacing: 0.08em;
     }
 
+    .library-guide {
+      display: grid;
+      grid-template-columns: minmax(210px, 1.2fr) repeat(3, minmax(150px, 1fr));
+      gap: 10px;
+      margin-bottom: 14px;
+      padding: 14px;
+      border: 1px solid rgba(34,211,238,0.2);
+      border-radius: 14px;
+      background:
+        radial-gradient(circle at 0 0, rgba(34,211,238,0.11), transparent 40%),
+        rgba(255,255,255,0.025);
+    }
+
+    .library-guide-intro h2 {
+      margin: 3px 0 6px;
+      font-size: 18px;
+    }
+
+    .library-guide-intro p,
+    .library-guide-step small {
+      margin: 0;
+      color: rgba(229,229,229,0.62);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .library-guide-step {
+      display: grid;
+      grid-template-columns: auto minmax(0, 1fr);
+      gap: 9px;
+      align-content: start;
+      padding: 10px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      background: rgba(0,0,0,0.12);
+    }
+
+    .library-guide-step b {
+      display: grid;
+      place-items: center;
+      width: 25px;
+      height: 25px;
+      border-radius: 999px;
+      background: rgba(34,211,238,0.14);
+      color: #a5f3fc;
+      font-size: 11px;
+    }
+
+    .library-guide-step strong,
+    .library-guide-step small {
+      display: block;
+    }
+
+    .library-guide-step strong {
+      margin-bottom: 3px;
+      color: #fff;
+      font-size: 12px;
+    }
+
     .smart-queue-backdrop[hidden] {
       display: none;
     }
@@ -779,6 +838,94 @@
       font-size: 10px;
     }
 
+    .smart-preview-section {
+      margin-top: 16px;
+      padding: 14px;
+      border: 1px solid rgba(99,102,241,0.28);
+      border-radius: 12px;
+      background: rgba(49,46,129,0.09);
+    }
+
+    .smart-preview-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+    }
+
+    .smart-preview-heading strong,
+    .smart-preview-heading span {
+      display: block;
+    }
+
+    .smart-preview-heading span,
+    .smart-preview-status {
+      margin-top: 3px;
+      color: rgba(229,229,229,0.6);
+      font-size: 11px;
+      line-height: 1.45;
+    }
+
+    .smart-preview-progress {
+      width: 100%;
+      height: 6px;
+      margin-top: 12px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: rgba(255,255,255,0.08);
+    }
+
+    .smart-preview-progress > span {
+      display: block;
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: linear-gradient(90deg, #22d3ee, #818cf8);
+      transition: width 180ms ease;
+    }
+
+    .smart-preview-frames {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 9px;
+      margin-top: 12px;
+    }
+
+    .smart-preview-frames[hidden],
+    .smart-preview-video[hidden] {
+      display: none;
+    }
+
+    .smart-preview-frame {
+      min-width: 0;
+      overflow: hidden;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 9px;
+      background: #020617;
+    }
+
+    .smart-preview-frame img,
+    .smart-preview-video {
+      width: 100%;
+      display: block;
+      background: #020617;
+    }
+
+    .smart-preview-frame span {
+      display: block;
+      padding: 6px 8px;
+      color: rgba(229,229,229,0.72);
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .smart-preview-video {
+      margin-top: 10px;
+      border-radius: 9px;
+    }
+
     .smart-queue-footer {
       position: sticky;
       bottom: -24px;
@@ -800,7 +947,8 @@
 
     @media (max-width: 860px) {
       .library-filterbar,
-      .smart-tune-grid {
+      .smart-tune-grid,
+      .library-guide {
         grid-template-columns: 1fr;
       }
 
@@ -810,6 +958,10 @@
 
       .beta-bulkbar {
         position: static;
+      }
+
+      .smart-preview-frames {
+        grid-template-columns: 1fr;
       }
     }
   </style>
@@ -838,11 +990,22 @@
     <header class="page-hero">
       <div>
         <h1>Library</h1>
-        <p class="page-subtitle">Your complete media catalog, upcoming episode calendar, space-saving guidance, and node-aware queue.</p>
+        <p class="page-subtitle">Find the best space savings, preview the real Smart result, and queue a movie or complete season without leaving this page.</p>
       </div>
     </header>
 
     <section class="section-card">
+      <div class="library-guide" aria-label="Library quick start">
+        <div class="library-guide-intro">
+          <div class="eyebrow">Quick start</div>
+          <h2>From Library to queue in three steps</h2>
+          <p>Smart Preset plans every file separately while your optional guardrails stay consistent across the batch.</p>
+        </div>
+        <div class="library-guide-step"><b>1</b><div><strong>Find good candidates</strong><small>Use savings, HDR, and tracked-show filters.</small></div></div>
+        <div class="library-guide-step"><b>2</b><div><strong>Preview or fine tune</strong><small>Compare a real encoded sample before committing.</small></div></div>
+        <div class="library-guide-step"><b>3</b><div><strong>Queue exactly the scope</strong><small>One movie, selected files, a season, or a full show.</small></div></div>
+      </div>
+
       <div class="beta-toolbar">
         <div class="beta-field">
           <label for="rootSelect">Library scope</label>
@@ -859,12 +1022,12 @@
 
       <div class="beta-toolbar library-filterbar" style="margin-top:10px;">
         <div class="beta-field">
-          <label for="searchInput">Filter</label>
+          <label for="searchInput">Search library</label>
           <input id="searchInput" type="search" placeholder="Title, year, filename">
         </div>
 
         <div class="beta-field">
-          <label for="sortSelect">Sort</label>
+          <label for="sortSelect">Prioritize</label>
           <select id="sortSelect">
             <option value="recommended" selected>Recommended savings</option>
             <option value="saved">Predicted saved</option>
@@ -1054,6 +1217,23 @@
         </div>
       </div>
 
+      <section class="smart-preview-section" aria-labelledby="smartPreviewTitle">
+        <div class="smart-preview-heading">
+          <div>
+            <strong id="smartPreviewTitle">Real encode preview</strong>
+            <span>Uses the first file as a representative sample. Queue settings still apply to every selected file.</span>
+          </div>
+          <button id="smartPreviewGenerateBtn" type="button">Generate preview</button>
+        </div>
+        <div class="smart-preview-progress" aria-hidden="true"><span id="smartPreviewProgressBar"></span></div>
+        <div id="smartPreviewStatus" class="smart-preview-status" role="status">Adjust any guardrails, then generate a short original-versus-proposal comparison.</div>
+        <div id="smartPreviewFrames" class="smart-preview-frames" hidden>
+          <div class="smart-preview-frame"><span>Original</span><img id="smartPreviewOriginal" alt="Original source preview frame"></div>
+          <div class="smart-preview-frame"><span>Smart proposal</span><img id="smartPreviewProposal" alt="Smart Preset proposal frame"></div>
+        </div>
+        <video id="smartPreviewVideo" class="smart-preview-video" controls playsinline preload="metadata" hidden></video>
+      </section>
+
       <div class="smart-queue-footer">
         <button id="smartQueueResetBtn" type="button">Reset</button>
         <button id="smartQueueConfirmBtn" class="smart-queue-button" type="button">Queue with Smart Preset</button>
@@ -1073,6 +1253,7 @@
     let smartQueueContext = null;
     let smartQueueReturnFocus = null;
     let queueBusy = false;
+    let smartPreviewRun = 0;
 
     function el(id) {
       return document.getElementById(id);
@@ -1690,6 +1871,7 @@
       ].forEach((id) => { if (el(id)) el(id).value = "learned"; });
       if (el("smartTargetScale")) el("smartTargetScale").value = "100";
       updateSmartTargetScaleLabel();
+      if (smartQueueContext) resetSmartPreview("Guardrails reset to your learned profile. Generate a fresh preview when ready.");
     }
 
     function updateSmartTargetScaleLabel() {
@@ -1717,6 +1899,94 @@
       return tuning;
     }
 
+    function resetSmartPreview(message = "Adjust any guardrails, then generate a short original-versus-proposal comparison.") {
+      smartPreviewRun += 1;
+      el("smartPreviewProgressBar").style.width = "0%";
+      el("smartPreviewStatus").textContent = message;
+      el("smartPreviewFrames").hidden = true;
+      el("smartPreviewOriginal").removeAttribute("src");
+      el("smartPreviewProposal").removeAttribute("src");
+      const video = el("smartPreviewVideo");
+      video.pause();
+      video.hidden = true;
+      video.removeAttribute("src");
+      video.load();
+      el("smartPreviewGenerateBtn").disabled = false;
+      el("smartPreviewGenerateBtn").textContent = "Generate preview";
+    }
+
+    function showSmartPreviewResult(result) {
+      if (result.old_b64 && result.new_b64) {
+        el("smartPreviewOriginal").src = `data:image/jpeg;base64,${result.old_b64}`;
+        el("smartPreviewProposal").src = `data:image/jpeg;base64,${result.new_b64}`;
+        el("smartPreviewFrames").hidden = false;
+      }
+      if (result.clip_url) {
+        const video = el("smartPreviewVideo");
+        video.src = result.clip_url;
+        video.hidden = false;
+        video.load();
+      }
+      const encoder = result.encoder_label || result.encoder || "Smart encoder";
+      const dimensions = result.out_width && result.out_height ? ` · ${result.out_width}×${result.out_height}` : "";
+      el("smartPreviewProgressBar").style.width = "100%";
+      el("smartPreviewStatus").textContent = `Preview ready · ${encoder}${dimensions}. Compare the matched frames or play the short side-by-side clip.`;
+    }
+
+    async function generateSmartPreview() {
+      if (!smartQueueContext?.paths?.length) return;
+      const button = el("smartPreviewGenerateBtn");
+      const run = ++smartPreviewRun;
+      button.disabled = true;
+      button.textContent = "Preparing…";
+      el("smartPreviewFrames").hidden = true;
+      el("smartPreviewVideo").hidden = true;
+      el("smartPreviewProgressBar").style.width = "2%";
+      el("smartPreviewStatus").textContent = "Starting a real Smart Preset sample encode…";
+      try {
+        const startRes = await fetch("/api/library/preview", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            src: smartQueueContext.paths[0],
+            smart_tuning: readSmartTuning()
+          })
+        });
+        const startData = await startRes.json();
+        if (!startRes.ok) throw new Error(startData.error || "Preview could not start");
+        const previewId = startData.preview?.preview_id;
+        if (!previewId) throw new Error("Preview did not return an id");
+
+        for (let attempt = 0; attempt < 240; attempt += 1) {
+          await new Promise((resolve) => setTimeout(resolve, 1400));
+          if (run !== smartPreviewRun || !smartQueueContext) return;
+          const statusRes = await fetch(`/api/library/preview/${encodeURIComponent(previewId)}`, { cache: "no-store" });
+          const statusData = await statusRes.json();
+          if (!statusRes.ok) throw new Error(statusData.error || "Preview status failed");
+          const preview = statusData.preview || {};
+          const progress = Math.max(2, Math.min(100, Number(preview.progress || 0)));
+          el("smartPreviewProgressBar").style.width = `${progress}%`;
+          el("smartPreviewStatus").textContent = preview.message || "Preparing Smart preview…";
+          if (preview.state === "done") {
+            showSmartPreviewResult(preview.result || {});
+            button.textContent = "Refresh preview";
+            button.disabled = false;
+            return;
+          }
+          if (["error", "canceled", "expired"].includes(preview.state)) {
+            throw new Error(preview.error || preview.message || "Preview failed");
+          }
+        }
+        throw new Error("Preview timed out");
+      } catch (error) {
+        if (run !== smartPreviewRun) return;
+        el("smartPreviewProgressBar").style.width = "0%";
+        el("smartPreviewStatus").textContent = error.message || "Preview failed";
+        button.textContent = "Try preview again";
+        button.disabled = false;
+      }
+    }
+
     function openSmartTune(paths, label = "selection", trigger = null) {
       const cleanPaths = Array.from(new Set((paths || []).filter(Boolean)));
       if (!cleanPaths.length) {
@@ -1733,17 +2003,24 @@
       el("smartQueueFiles").textContent = String(cleanPaths.length);
       el("smartQueueSource").textContent = fmtBytes(sourceBytes);
       el("smartQueueTarget").textContent = dispatchTargetLabel();
+      resetSmartPreview();
       el("smartQueueBackdrop").hidden = false;
       document.body.classList.add("smart-queue-open");
       window.requestAnimationFrame(() => el("smartGoalSelect")?.focus());
     }
 
     function closeSmartTune() {
+      resetSmartPreview();
       el("smartQueueBackdrop").hidden = true;
       document.body.classList.remove("smart-queue-open");
       smartQueueContext = null;
       if (smartQueueReturnFocus && typeof smartQueueReturnFocus.focus === "function") smartQueueReturnFocus.focus();
       smartQueueReturnFocus = null;
+    }
+
+    function openSmartPreview(paths, label, trigger = null) {
+      openSmartTune(paths, label, trigger);
+      window.requestAnimationFrame(generateSmartPreview);
     }
 
     async function queuePaths(paths, label = "selection", options = {}) {
@@ -1903,6 +2180,12 @@
       tune.setAttribute("aria-label", `Fine tune Smart Preset for ${item.title || "movie"}`);
       tune.onclick = () => openSmartTune([item.path], item.title || "movie", tune);
       actions.appendChild(tune);
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.textContent = "Preview";
+      preview.setAttribute("aria-label", `Preview Smart Preset for ${item.title || "movie"}`);
+      preview.onclick = () => openSmartPreview([item.path], item.title || "movie", preview);
+      actions.insertBefore(preview, tune);
       body.appendChild(actions);
 
       card.appendChild(body);
@@ -1954,6 +2237,11 @@
       tune.textContent = "Tune";
       tune.onclick = () => openSmartTune([ep.path], `${show.title} ${episodeLabel(ep)}`, tune);
       actions.appendChild(tune);
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.textContent = "Preview";
+      preview.onclick = () => openSmartPreview([ep.path], `${show.title} ${episodeLabel(ep)}`, preview);
+      actions.insertBefore(preview, tune);
       row.appendChild(actions);
 
       return row;
@@ -2014,6 +2302,11 @@
       tune.textContent = "Fine tune";
       tune.onclick = () => openSmartTune(group.paths, `${item.title} ${label}`, tune);
       actions.appendChild(tune);
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.textContent = "Preview season";
+      preview.onclick = () => openSmartPreview(group.paths, `${item.title} ${label}`, preview);
+      actions.insertBefore(preview, tune);
       row.appendChild(actions);
 
       if (expanded) {
@@ -2146,6 +2439,11 @@
       tune.textContent = "Fine tune show";
       tune.onclick = () => openSmartTune(itemPaths(item), item.title || "show", tune);
       actions.appendChild(tune);
+      const preview = document.createElement("button");
+      preview.type = "button";
+      preview.textContent = "Preview show";
+      preview.onclick = () => openSmartPreview(itemPaths(item), item.title || "show", preview);
+      actions.insertBefore(preview, tune);
       body.appendChild(actions);
 
       if (expanded) {
@@ -2384,7 +2682,21 @@
       el("smartQueueCloseBtn").addEventListener("click", closeSmartTune);
       el("smartQueueResetBtn").addEventListener("click", resetSmartTuning);
       el("smartQueueConfirmBtn").addEventListener("click", confirmSmartQueue);
+      el("smartPreviewGenerateBtn").addEventListener("click", generateSmartPreview);
       el("smartTargetScale").addEventListener("input", updateSmartTargetScaleLabel);
+      [
+        "smartGoalSelect",
+        "smartResolutionSelect",
+        "smartHardwareSelect",
+        "smartCompatibilitySelect",
+        "smartAudioSelect",
+        "smartSubtitleSelect"
+      ].forEach((id) => el(id).addEventListener("change", () => {
+        if (smartQueueContext) resetSmartPreview("Guardrails changed. Generate a fresh preview to compare this plan.");
+      }));
+      el("smartTargetScale").addEventListener("change", () => {
+        if (smartQueueContext) resetSmartPreview("Size target changed. Generate a fresh preview to compare this plan.");
+      });
       el("smartQueueBackdrop").addEventListener("click", (event) => {
         if (event.target === el("smartQueueBackdrop")) closeSmartTune();
       });
