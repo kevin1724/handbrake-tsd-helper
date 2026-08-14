@@ -85,6 +85,9 @@ class ApiRouteSmokeTests(unittest.TestCase):
         library_page = self.client.get("/library")
         self.assertEqual(library_page.status_code, 200)
         self.assertIn(b"Your complete media catalog", library_page.data)
+        self.assertIn(b"Smart Queue", library_page.data)
+        self.assertIn(b"Fine tune queue", library_page.data)
+        self.assertIn(b'id="quickFilterSelect"', library_page.data)
         home_page = self.client.get("/")
         self.assertEqual(home_page.status_code, 200)
         self.assertIn(b"Everything important, at a glance", home_page.data)
@@ -110,6 +113,45 @@ class ApiRouteSmokeTests(unittest.TestCase):
             )
         finally:
             app_jobs.jobs.pop(job_id, None)
+
+    def test_library_local_smart_batch_keeps_tuning_for_every_file(self):
+        paths = []
+        for episode in range(1, 4):
+            path = os.path.join(TEST_MEDIA, f"Useful.Show.S01E{episode:02d}.mkv")
+            with open(path, "wb") as handle:
+                handle.write(b"0" * 256)
+            paths.append(path)
+
+        tuning = {
+            "goal": "small",
+            "resolution_mode": "1080",
+            "hardware": "software",
+            "audio_strategy": "copy",
+            "subtitle_mode": "all",
+            "target_scale": 0.85,
+        }
+        calls = []
+
+        def fake_create_smart_job(src, **kwargs):
+            calls.append((src, kwargs))
+            return f"smart-{len(calls)}", {"recommended_id": "compact"}
+
+        with patch("webui.app.routes._create_smart_job", side_effect=fake_create_smart_job):
+            response = self.client.post(
+                "/api/nodes/dispatch",
+                json={
+                    "paths": paths,
+                    "preset": "smart",
+                    "mode": "local",
+                    "smart_tuning": tuning,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(response.get_json()["count"], 3)
+        self.assertEqual([row[0] for row in calls], paths)
+        self.assertTrue(all(row[1]["tuning"] == tuning for row in calls))
+        self.assertTrue(all(row[1]["automation_source"] == "library_smart" for row in calls))
 
     def test_jobs_api_merges_durable_encode_history_and_summary(self):
         original_history_cutoff = app_jobs.history_cleared_before
@@ -910,6 +952,43 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertIn("TVmaze", response.get_data(as_text=True))
         self.assertEqual(response.get_json()["calendar"]["count"], 1)
         self.assertTrue(response.get_json()["calendar"]["episodes"][0]["poster_url"].startswith("http://localhost/api/media/artwork/"))
+
+    def test_library_fine_tuning_is_transient_and_reaches_smart_candidates(self):
+        media_path = os.path.join(TEST_MEDIA, "Fine.Tuned.Movie.2160p.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"0" * 4096)
+
+        probe = {
+            "duration_sec": 7200.0,
+            "width": 3840,
+            "height": 2160,
+            "fps": 23.976,
+            "is_hdr": True,
+        }
+        tuning = {
+            "goal": "small",
+            "compatibility": "modern",
+            "hardware": "software",
+            "resolution_mode": "1080",
+            "audio_strategy": "copy",
+            "subtitle_mode": "none",
+            "target_scale": 0.8,
+        }
+        with patch("webui.app.routes._probe_media", return_value=probe):
+            response = self.client.post(
+                "/api/smart_presets/recommend",
+                json={"src": media_path, "preset": "auto", "smart_tuning": tuning},
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertEqual(payload["profile"]["goal"], "small")
+        self.assertEqual(payload["tuning"], tuning)
+        self.assertEqual(len(payload["candidates"]), 3)
+        for candidate in payload["candidates"]:
+            self.assertEqual(candidate["options"]["resolution_mode"], "1080")
+            self.assertEqual(candidate["options"]["audio_mode"], "copy")
+            self.assertEqual(candidate["options"]["subtitle_mode"], "none")
 
     def test_smart_presets_generate_candidates_and_unlock_after_feedback(self):
         try:

@@ -84,6 +84,11 @@
       border: 1px solid rgba(255,255,255,0.08);
       border-radius: 6px;
       background: rgba(0,0,0,0.14);
+      position: sticky;
+      top: 70px;
+      z-index: 18;
+      backdrop-filter: blur(18px);
+      box-shadow: 0 14px 32px rgba(0,0,0,0.18);
     }
 
     .beta-bulkbar select {
@@ -580,6 +585,233 @@
     .release-card small { display: block; }
     .release-card span { margin-top: 4px; color: var(--blue); font-weight: 750; }
     .release-card small { margin-top: 6px; color: var(--muted); line-height: 1.35; }
+
+    .library-filterbar {
+      grid-template-columns: minmax(220px, 1fr) minmax(150px, 0.35fr) minmax(160px, 0.4fr) auto;
+    }
+
+    .smart-queue-button {
+      border-color: rgba(103,232,249,0.72);
+      background: linear-gradient(135deg, rgba(8,145,178,0.96), rgba(79,70,229,0.9));
+      color: #fff;
+      font-weight: 800;
+      box-shadow: 0 8px 22px rgba(8,145,178,0.18);
+    }
+
+    .smart-queue-button:hover {
+      border-color: rgba(165,243,252,0.95);
+      background: linear-gradient(135deg, rgba(6,182,212,1), rgba(99,102,241,0.96));
+    }
+
+    .smart-tune-button {
+      border-color: rgba(129,140,248,0.48);
+      color: #e0e7ff;
+    }
+
+    .smart-tune-button::before {
+      content: "✦";
+      margin-right: 5px;
+      color: #a5f3fc;
+    }
+
+    .smart-inline-actions {
+      display: flex;
+      gap: 6px;
+      min-width: 0;
+    }
+
+    .smart-inline-actions .smart-queue-button {
+      flex: 1 1 auto;
+    }
+
+    .smart-inline-actions .smart-tune-button {
+      flex: 0 0 auto;
+    }
+
+    .library-command-note {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-top: 8px;
+      color: rgba(229,229,229,0.62);
+      font-size: 12px;
+    }
+
+    .library-command-note::before {
+      content: "SMART";
+      padding: 2px 6px;
+      border: 1px solid rgba(34,211,238,0.38);
+      border-radius: 999px;
+      color: #a5f3fc;
+      font-size: 9px;
+      font-weight: 900;
+      letter-spacing: 0.08em;
+    }
+
+    .smart-queue-backdrop[hidden] {
+      display: none;
+    }
+
+    .smart-queue-backdrop {
+      position: fixed;
+      inset: 0;
+      z-index: 1000;
+      display: flex;
+      justify-content: flex-end;
+      background: rgba(2,6,23,0.72);
+      backdrop-filter: blur(8px);
+    }
+
+    .smart-queue-panel {
+      width: min(560px, 100vw);
+      height: 100%;
+      overflow-y: auto;
+      padding: 24px;
+      border-left: 1px solid rgba(103,232,249,0.24);
+      background:
+        radial-gradient(circle at 100% 0, rgba(79,70,229,0.22), transparent 42%),
+        linear-gradient(180deg, #0b1327 0%, #070d1c 100%);
+      box-shadow: -28px 0 70px rgba(0,0,0,0.42);
+    }
+
+    .smart-queue-header,
+    .smart-queue-footer {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 14px;
+    }
+
+    .smart-queue-header h2 {
+      margin: 3px 0 0;
+    }
+
+    .smart-close-button {
+      width: 38px;
+      height: 38px;
+      padding: 0;
+      border-radius: 999px;
+      font-size: 20px;
+    }
+
+    .smart-queue-summary {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 9px;
+      margin: 18px 0;
+    }
+
+    .smart-summary-card {
+      padding: 11px;
+      border: 1px solid rgba(255,255,255,0.09);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.04);
+    }
+
+    .smart-summary-card span,
+    .smart-summary-card strong {
+      display: block;
+    }
+
+    .smart-summary-card span {
+      color: rgba(229,229,229,0.58);
+      font-size: 10px;
+      font-weight: 800;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .smart-summary-card strong {
+      margin-top: 4px;
+      color: #fff;
+      font-size: 14px;
+      overflow-wrap: anywhere;
+    }
+
+    .smart-plan-callout {
+      margin-bottom: 18px;
+      padding: 12px 14px;
+      border: 1px solid rgba(34,211,238,0.2);
+      border-radius: 10px;
+      background: rgba(8,145,178,0.08);
+      color: rgba(229,229,229,0.78);
+      font-size: 12px;
+      line-height: 1.5;
+    }
+
+    .smart-tune-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 12px;
+    }
+
+    .smart-tune-grid .beta-field select,
+    .smart-tune-grid .beta-field input {
+      min-height: 40px;
+    }
+
+    .smart-range-field {
+      grid-column: 1 / -1;
+      padding: 12px;
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 10px;
+      background: rgba(255,255,255,0.025);
+    }
+
+    .smart-range-heading {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 7px;
+      color: rgba(229,229,229,0.76);
+      font-size: 12px;
+    }
+
+    .smart-range-field input[type="range"] {
+      width: 100%;
+      accent-color: #22d3ee;
+    }
+
+    .smart-range-labels {
+      display: flex;
+      justify-content: space-between;
+      color: rgba(229,229,229,0.45);
+      font-size: 10px;
+    }
+
+    .smart-queue-footer {
+      position: sticky;
+      bottom: -24px;
+      margin: 22px -24px -24px;
+      padding: 16px 24px;
+      border-top: 1px solid rgba(255,255,255,0.08);
+      background: rgba(7,13,28,0.94);
+      backdrop-filter: blur(14px);
+    }
+
+    .smart-queue-footer .smart-queue-button {
+      flex: 1;
+      min-height: 42px;
+    }
+
+    body.smart-queue-open {
+      overflow: hidden;
+    }
+
+    @media (max-width: 860px) {
+      .library-filterbar,
+      .smart-tune-grid {
+        grid-template-columns: 1fr;
+      }
+
+      .smart-range-field {
+        grid-column: auto;
+      }
+
+      .beta-bulkbar {
+        position: static;
+      }
+    }
   </style>
 </head>
 <body class="beta-page">
@@ -625,7 +857,7 @@
         <button id="scanBtn" type="button">Refresh Scan</button>
       </div>
 
-      <div class="beta-toolbar" style="margin-top:10px;">
+      <div class="beta-toolbar library-filterbar" style="margin-top:10px;">
         <div class="beta-field">
           <label for="searchInput">Filter</label>
           <input id="searchInput" type="search" placeholder="Title, year, filename">
@@ -641,6 +873,17 @@
           </select>
         </div>
 
+        <div class="beta-field">
+          <label for="quickFilterSelect">Smart filter</label>
+          <select id="quickFilterSelect">
+            <option value="all" selected>Everything</option>
+            <option value="savings">Best savings</option>
+            <option value="hdr">HDR sources</option>
+            <option value="tracked">Tracked shows</option>
+            <option value="learning">Needs prediction data</option>
+          </select>
+        </div>
+
         <label class="beta-toggle">
           <input id="recursiveToggle" type="checkbox" checked>
           Recursive
@@ -653,8 +896,8 @@
         <label class="beta-toggle" for="queuePresetSelect">
           Queue preset
           <select id="queuePresetSelect">
-            <option value="smart">Smart learned</option>
-            <option value="auto" selected>Auto</option>
+            <option value="smart" selected>Smart learned</option>
+            <option value="auto">Auto</option>
             <option value="1080">1080p</option>
             <option value="4k">4K</option>
           </select>
@@ -671,10 +914,13 @@
           <option value="">No workers paired</option>
         </select>
         <span id="nodePredictionHint" class="small node-prediction-hint"></span>
-        <button id="queueSelectedBtn" type="button" disabled>Queue selected</button>
+        <button id="queueSelectedBtn" class="smart-queue-button" type="button" disabled>Smart queue selected</button>
+        <button id="tuneSelectedBtn" class="smart-tune-button" type="button" disabled>Fine tune</button>
+        <button id="selectVisibleBtn" type="button">Select visible</button>
         <button id="clearSelectedBtn" type="button">Clear selection</button>
         <span id="selectedCount" class="small">0 selected</span>
       </div>
+      <div class="library-command-note">Queue directly from posters, full shows, or individual seasons. Fine tuning stays on this page.</div>
 
       <div class="beta-stats">
         <div class="beta-stat"><span>Movies</span><strong id="statMovies">0</strong></div>
@@ -717,6 +963,104 @@
     </section>
   </main>
 
+  <div id="smartQueueBackdrop" class="smart-queue-backdrop" hidden>
+    <aside id="smartQueuePanel" class="smart-queue-panel" role="dialog" aria-modal="true" aria-labelledby="smartQueueTitle">
+      <div class="smart-queue-header">
+        <div>
+          <div class="eyebrow">Inline Smart Preset</div>
+          <h2 id="smartQueueTitle">Fine tune queue</h2>
+        </div>
+        <button id="smartQueueCloseBtn" class="smart-close-button" type="button" aria-label="Close fine tuning">×</button>
+      </div>
+
+      <p id="smartQueueScope" class="page-subtitle">Choose how Smart Preset should handle this selection.</p>
+
+      <div class="smart-queue-summary">
+        <div class="smart-summary-card"><span>Files</span><strong id="smartQueueFiles">0</strong></div>
+        <div class="smart-summary-card"><span>Source</span><strong id="smartQueueSource">-</strong></div>
+        <div class="smart-summary-card"><span>Target</span><strong id="smartQueueTarget">Local queue</strong></div>
+      </div>
+
+      <div class="smart-plan-callout">Smart Preset still learns and chooses the validated encode plan for every file. These controls are guardrails for this queue only—they do not overwrite your saved Smart profile.</div>
+
+      <div class="smart-tune-grid">
+        <div class="beta-field">
+          <label for="smartGoalSelect">Priority</label>
+          <select id="smartGoalSelect">
+            <option value="learned" selected>Use learned profile</option>
+            <option value="balanced">Balanced</option>
+            <option value="quality">Protect detail</option>
+            <option value="small">Save more space</option>
+            <option value="speed">Finish faster</option>
+            <option value="archive">Archive quality</option>
+          </select>
+        </div>
+
+        <div class="beta-field">
+          <label for="smartResolutionSelect">Resolution guardrail</label>
+          <select id="smartResolutionSelect">
+            <option value="learned" selected>Smart automatic</option>
+            <option value="keep">Keep source resolution</option>
+            <option value="2160">Cap at 2160p</option>
+            <option value="1440">Cap at 1440p</option>
+            <option value="1080">Cap at 1080p</option>
+            <option value="720">Cap at 720p</option>
+          </select>
+        </div>
+
+        <div class="beta-field">
+          <label for="smartHardwareSelect">Encoder</label>
+          <select id="smartHardwareSelect">
+            <option value="learned" selected>Use learned profile</option>
+            <option value="auto">Best available</option>
+            <option value="software">Software quality</option>
+            <option value="qsv">Intel Quick Sync</option>
+          </select>
+        </div>
+
+        <div class="beta-field">
+          <label for="smartCompatibilitySelect">Playback compatibility</label>
+          <select id="smartCompatibilitySelect">
+            <option value="learned" selected>Use learned profile</option>
+            <option value="broad">Broad / H.264 friendly</option>
+            <option value="modern">Modern / H.265</option>
+            <option value="maximum">Maximum compression</option>
+          </select>
+        </div>
+
+        <div class="beta-field">
+          <label for="smartAudioSelect">Audio</label>
+          <select id="smartAudioSelect">
+            <option value="learned" selected>Use learned profile</option>
+            <option value="copy">Copy original tracks</option>
+            <option value="eac3_surround">E-AC3 surround</option>
+          </select>
+        </div>
+
+        <div class="beta-field">
+          <label for="smartSubtitleSelect">Subtitles</label>
+          <select id="smartSubtitleSelect">
+            <option value="learned" selected>Use learned profile</option>
+            <option value="all">Keep all matching</option>
+            <option value="first">First matching track</option>
+            <option value="none">No subtitles</option>
+          </select>
+        </div>
+
+        <div class="smart-range-field">
+          <div class="smart-range-heading"><span>Size vs. detail</span><strong id="smartTargetScaleValue">Learned target</strong></div>
+          <input id="smartTargetScale" type="range" min="70" max="130" value="100" step="5">
+          <div class="smart-range-labels"><span>Smaller files</span><span>Learned</span><span>More detail</span></div>
+        </div>
+      </div>
+
+      <div class="smart-queue-footer">
+        <button id="smartQueueResetBtn" type="button">Reset</button>
+        <button id="smartQueueConfirmBtn" class="smart-queue-button" type="button">Queue with Smart Preset</button>
+      </div>
+    </aside>
+  </div>
+
   <script>
     const roots = {{ roots|tojson }};
     const tmdbConfigured = {{ tmdb_configured|tojson }};
@@ -726,6 +1070,9 @@
     const expandedSeasons = new Set();
     const trackingBusy = new Set();
     let linkedNodes = [];
+    let smartQueueContext = null;
+    let smartQueueReturnFocus = null;
+    let queueBusy = false;
 
     function el(id) {
       return document.getElementById(id);
@@ -834,6 +1181,40 @@
       }
       rows.sort((a, b) => recommendationScore(b) - recommendationScore(a) || sourceBytes(b) - sourceBytes(a) || itemTitle(a).localeCompare(itemTitle(b)));
       return rows;
+    }
+
+    function matchesQuickFilter(item, filter, kind) {
+      if (!filter || filter === "all") return true;
+      if (filter === "savings") return predictedSavedBytes(item) > 0 && savingsPercent(item) >= 10;
+      if (filter === "hdr") return Boolean(item?.is_hdr) || (kind === "show" && showEpisodes(item).some((ep) => ep?.is_hdr));
+      if (filter === "tracked") return kind === "show" && Boolean(item?.tracked);
+      if (filter === "learning") return !item?.prediction?.available;
+      return true;
+    }
+
+    function visibleLibraryRows() {
+      const needle = el("searchInput")?.value.trim().toLowerCase() || "";
+      const sortMode = el("sortSelect")?.value || "recommended";
+      const quickFilter = el("quickFilterSelect")?.value || "all";
+      return {
+        movies: sortItems(
+          (libraryData.movies || []).filter((item) => includesFilter(item, needle) && matchesQuickFilter(item, quickFilter, "movie")),
+          sortMode
+        ),
+        shows: sortItems(
+          (libraryData.shows || []).filter((item) => includesFilter(item, needle) && matchesQuickFilter(item, quickFilter, "show")),
+          sortMode
+        )
+      };
+    }
+
+    function selectVisible() {
+      const visible = visibleLibraryRows();
+      [...visible.movies, ...visible.shows].forEach((item) => {
+        itemPaths(item).forEach((path) => selectedPaths.add(path));
+      });
+      updateSelectionUi();
+      renderLibrary();
     }
 
     function itemPaths(item) {
@@ -952,8 +1333,12 @@
 
     function updateSelectionUi() {
       const count = selectionCount();
-      el("selectedCount").textContent = `${count} selected`;
+      const totalBytes = Array.from(selectedPaths).reduce((sum, path) => sum + Number(pathInfo(path).size_bytes || 0), 0);
+      el("selectedCount").textContent = count ? `${count} selected · ${fmtBytes(totalBytes)}` : "0 selected";
       el("queueSelectedBtn").disabled = count === 0;
+      el("tuneSelectedBtn").disabled = count === 0;
+      const preset = el("queuePresetSelect")?.value || "smart";
+      el("queueSelectedBtn").textContent = preset === "smart" ? "Smart queue selected" : "Queue selected";
       updateNodePredictionHint();
     }
 
@@ -978,6 +1363,7 @@
             path,
             size_bytes: Number(movie.size_bytes || 0) || 0,
             is_hdr: Boolean(movie.is_hdr),
+            predicted_saved_bytes: Number(movie.prediction?.estimated_saved_bytes || 0) || 0,
             preset: presetForPath(path)
           };
         }
@@ -989,12 +1375,13 @@
               path,
               size_bytes: Number(ep.size_bytes || 0) || 0,
               is_hdr: Boolean(ep.is_hdr),
+              predicted_saved_bytes: Number(ep.prediction?.estimated_saved_bytes || 0) || 0,
               preset: presetForPath(path)
             };
           }
         }
       }
-      return { path, size_bytes: 0, is_hdr: false, preset: presetForPath(path) };
+      return { path, size_bytes: 0, is_hdr: false, predicted_saved_bytes: 0, preset: presetForPath(path) };
     }
 
     function nodePredictionStats(profile, preset, isHdr) {
@@ -1283,42 +1670,146 @@
       }
     }
 
-    async function queuePaths(paths, label = "selection") {
+    function dispatchTargetLabel() {
+      const mode = el("dispatchModeSelect")?.value || "local";
+      if (mode === "local") return "Local queue";
+      if (mode === "best") return "Best worker";
+      const nodeId = el("dispatchNodeSelect")?.value || "";
+      const node = linkedNodes.find((row) => String(row.id || "") === String(nodeId));
+      return node?.name || "Selected worker";
+    }
+
+    function resetSmartTuning() {
+      [
+        "smartGoalSelect",
+        "smartResolutionSelect",
+        "smartHardwareSelect",
+        "smartCompatibilitySelect",
+        "smartAudioSelect",
+        "smartSubtitleSelect"
+      ].forEach((id) => { if (el(id)) el(id).value = "learned"; });
+      if (el("smartTargetScale")) el("smartTargetScale").value = "100";
+      updateSmartTargetScaleLabel();
+    }
+
+    function updateSmartTargetScaleLabel() {
+      const percent = Number(el("smartTargetScale")?.value || 100);
+      el("smartTargetScaleValue").textContent = percent === 100
+        ? "Learned target"
+        : (percent < 100 ? `${100 - percent}% smaller target` : `${percent - 100}% more detail`);
+    }
+
+    function readSmartTuning() {
+      const tuning = {};
+      const fields = {
+        goal: "smartGoalSelect",
+        resolution_mode: "smartResolutionSelect",
+        hardware: "smartHardwareSelect",
+        compatibility: "smartCompatibilitySelect",
+        audio_strategy: "smartAudioSelect",
+        subtitle_mode: "smartSubtitleSelect"
+      };
+      Object.entries(fields).forEach(([key, id]) => {
+        const value = el(id)?.value || "learned";
+        if (value !== "learned") tuning[key] = value;
+      });
+      tuning.target_scale = Math.max(0.70, Math.min(1.30, Number(el("smartTargetScale")?.value || 100) / 100));
+      return tuning;
+    }
+
+    function openSmartTune(paths, label = "selection", trigger = null) {
+      const cleanPaths = Array.from(new Set((paths || []).filter(Boolean)));
+      if (!cleanPaths.length) {
+        el("betaStatus").textContent = "Nothing selected to fine tune.";
+        return;
+      }
+      const infos = cleanPaths.map(pathInfo);
+      const sourceBytes = infos.reduce((sum, info) => sum + Number(info.size_bytes || 0), 0);
+      const predictedSaved = infos.reduce((sum, info) => sum + Number(info.predicted_saved_bytes || 0), 0);
+      smartQueueContext = { paths: cleanPaths, label };
+      smartQueueReturnFocus = trigger || document.activeElement;
+      el("smartQueueTitle").textContent = `Fine tune ${label}`;
+      el("smartQueueScope").textContent = `${cleanPaths.length} file${cleanPaths.length === 1 ? "" : "s"}${predictedSaved ? ` · ${fmtBytes(predictedSaved)} predicted saved before tuning` : " · Smart will build a plan for each file"}.`;
+      el("smartQueueFiles").textContent = String(cleanPaths.length);
+      el("smartQueueSource").textContent = fmtBytes(sourceBytes);
+      el("smartQueueTarget").textContent = dispatchTargetLabel();
+      el("smartQueueBackdrop").hidden = false;
+      document.body.classList.add("smart-queue-open");
+      window.requestAnimationFrame(() => el("smartGoalSelect")?.focus());
+    }
+
+    function closeSmartTune() {
+      el("smartQueueBackdrop").hidden = true;
+      document.body.classList.remove("smart-queue-open");
+      smartQueueContext = null;
+      if (smartQueueReturnFocus && typeof smartQueueReturnFocus.focus === "function") smartQueueReturnFocus.focus();
+      smartQueueReturnFocus = null;
+    }
+
+    async function queuePaths(paths, label = "selection", options = {}) {
       const cleanPaths = Array.from(new Set((paths || []).filter(Boolean)));
       if (!cleanPaths.length) {
         el("betaStatus").textContent = "Nothing selected to queue.";
-        return;
+        return false;
       }
-      const preset = el("queuePresetSelect").value || "auto";
+      if (queueBusy) return false;
+      const preset = options.preset || el("queuePresetSelect").value || "smart";
+      const smartTuning = options.smartTuning || {};
       const mode = el("dispatchModeSelect")?.value || "local";
       const nodeId = el("dispatchNodeSelect")?.value || "";
-      el("betaStatus").textContent = `Queuing ${label}...`;
+      queueBusy = true;
+      el("betaStatus").textContent = preset === "smart" ? `Building Smart plans for ${label}...` : `Queuing ${label}...`;
       el("queueSelectedBtn").disabled = true;
+      el("tuneSelectedBtn").disabled = true;
+      if (options.trigger) options.trigger.disabled = true;
       try {
         const res = await fetch("/api/nodes/dispatch", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ paths: cleanPaths, preset, mode, node_id: nodeId })
+          body: JSON.stringify({ paths: cleanPaths, preset, mode, node_id: nodeId, smart_tuning: smartTuning })
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Queue failed");
         const skipped = Array.isArray(data.skipped) ? data.skipped.length : 0;
+        if (!Number(data.count || 0)) {
+          throw new Error(data.skipped?.[0]?.reason || "No files could be queued");
+        }
         const target = typeof data.target === "string" ? data.target : (data.target?.name || "worker");
-        el("betaStatus").textContent = `Queued ${data.count || 0} file${data.count === 1 ? "" : "s"} to ${target}${skipped ? `, skipped ${skipped}` : ""}.`;
-        if (window.appToast) appToast(`Queued ${data.count || 0} file${data.count === 1 ? "" : "s"} to ${target}.`, "success");
+        const method = preset === "smart" ? " with Smart Preset" : "";
+        el("betaStatus").textContent = `Queued ${data.count || 0} file${data.count === 1 ? "" : "s"}${method} to ${target}${skipped ? `, skipped ${skipped}` : ""}.`;
+        if (window.appToast) appToast(`Queued ${data.count || 0} file${data.count === 1 ? "" : "s"}${method} to ${target}.`, "success");
         cleanPaths.forEach((path) => selectedPaths.delete(path));
         updateSelectionUi();
         renderLibrary();
+        return true;
       } catch (e) {
         el("betaStatus").textContent = e.message || "Queue failed";
         if (window.appToast) appToast(e.message || "Queue failed.", "error");
+        return false;
       } finally {
+        queueBusy = false;
+        if (options.trigger) options.trigger.disabled = false;
         updateSelectionUi();
       }
     }
 
     function queueSelected() {
       queuePaths(Array.from(selectedPaths), "selected files");
+    }
+
+    function tuneSelected(event) {
+      openSmartTune(Array.from(selectedPaths), "selected files", event?.currentTarget || null);
+    }
+
+    async function confirmSmartQueue() {
+      if (!smartQueueContext) return;
+      const button = el("smartQueueConfirmBtn");
+      const queued = await queuePaths(smartQueueContext.paths, smartQueueContext.label, {
+        preset: "smart",
+        smartTuning: readSmartTuning(),
+        trigger: button
+      });
+      if (queued) closeSmartTune();
     }
 
     function cardPoster(item, label) {
@@ -1398,17 +1889,20 @@
       body.appendChild(details);
 
       const actions = document.createElement("div");
-      actions.className = "beta-card-actions";
-      const wizard = document.createElement("button");
-      wizard.type = "button";
-      wizard.textContent = "Wizard";
-      wizard.onclick = () => openInWizard(item.path);
-      actions.appendChild(wizard);
+      actions.className = "beta-card-actions smart-inline-actions";
       const queue = document.createElement("button");
       queue.type = "button";
-      queue.textContent = "Queue";
-      queue.onclick = () => queuePaths([item.path], item.title || "movie");
+      queue.className = "smart-queue-button";
+      queue.textContent = "Smart Queue";
+      queue.onclick = () => queuePaths([item.path], item.title || "movie", { preset: "smart", trigger: queue });
       actions.appendChild(queue);
+      const tune = document.createElement("button");
+      tune.type = "button";
+      tune.className = "smart-tune-button";
+      tune.textContent = "Tune";
+      tune.setAttribute("aria-label", `Fine tune Smart Preset for ${item.title || "movie"}`);
+      tune.onclick = () => openSmartTune([item.path], item.title || "movie", tune);
+      actions.appendChild(tune);
       body.appendChild(actions);
 
       card.appendChild(body);
@@ -1448,16 +1942,18 @@
 
       const actions = document.createElement("div");
       actions.className = "episode-actions";
-      const wizard = document.createElement("button");
-      wizard.type = "button";
-      wizard.textContent = "Open Wizard";
-      wizard.onclick = () => openInWizard(ep.path);
-      actions.appendChild(wizard);
       const queue = document.createElement("button");
       queue.type = "button";
-      queue.textContent = "Queue Episode";
-      queue.onclick = () => queuePaths([ep.path], ep.filename || "episode");
+      queue.className = "smart-queue-button";
+      queue.textContent = "Smart Queue";
+      queue.onclick = () => queuePaths([ep.path], ep.filename || "episode", { preset: "smart", trigger: queue });
       actions.appendChild(queue);
+      const tune = document.createElement("button");
+      tune.type = "button";
+      tune.className = "smart-tune-button";
+      tune.textContent = "Tune";
+      tune.onclick = () => openSmartTune([ep.path], `${show.title} ${episodeLabel(ep)}`, tune);
+      actions.appendChild(tune);
       row.appendChild(actions);
 
       return row;
@@ -1508,9 +2004,16 @@
 
       const queue = document.createElement("button");
       queue.type = "button";
-      queue.textContent = "Queue Season";
-      queue.onclick = () => queuePaths(group.paths, `${item.title} ${label}`);
+      queue.className = "smart-queue-button";
+      queue.textContent = "Smart Queue Season";
+      queue.onclick = () => queuePaths(group.paths, `${item.title} ${label}`, { preset: "smart", trigger: queue });
       actions.appendChild(queue);
+      const tune = document.createElement("button");
+      tune.type = "button";
+      tune.className = "smart-tune-button";
+      tune.textContent = "Fine tune";
+      tune.onclick = () => openSmartTune(group.paths, `${item.title} ${label}`, tune);
+      actions.appendChild(tune);
       row.appendChild(actions);
 
       if (expanded) {
@@ -1633,9 +2136,16 @@
 
       const queue = document.createElement("button");
       queue.type = "button";
-      queue.textContent = "Queue Show";
-      queue.onclick = () => queuePaths(itemPaths(item), item.title || "show");
+      queue.className = "smart-queue-button";
+      queue.textContent = "Smart Queue Full Show";
+      queue.onclick = () => queuePaths(itemPaths(item), item.title || "show", { preset: "smart", trigger: queue });
       actions.appendChild(queue);
+      const tune = document.createElement("button");
+      tune.type = "button";
+      tune.className = "smart-tune-button";
+      tune.textContent = "Fine tune show";
+      tune.onclick = () => openSmartTune(itemPaths(item), item.title || "show", tune);
+      actions.appendChild(tune);
       body.appendChild(actions);
 
       if (expanded) {
@@ -1675,10 +2185,7 @@
     }
 
     function renderLibrary() {
-      const needle = el("searchInput").value.trim().toLowerCase();
-      const sortMode = el("sortSelect").value || "recommended";
-      const movies = sortItems((libraryData.movies || []).filter((item) => includesFilter(item, needle)), sortMode);
-      const shows = sortItems((libraryData.shows || []).filter((item) => includesFilter(item, needle)), sortMode);
+      const { movies, shows } = visibleLibraryRows();
 
       el("moviesGrid").innerHTML = "";
       el("showsGrid").innerHTML = "";
@@ -1860,12 +2367,32 @@
       el("scanBtn").addEventListener("click", scanLibrary);
       el("searchInput").addEventListener("input", renderLibrary);
       el("sortSelect").addEventListener("change", renderLibrary);
+      el("quickFilterSelect").addEventListener("change", renderLibrary);
       el("queueSelectedBtn").addEventListener("click", queueSelected);
+      el("tuneSelectedBtn").addEventListener("click", tuneSelected);
+      el("selectVisibleBtn").addEventListener("click", selectVisible);
       el("clearSelectedBtn").addEventListener("click", clearSelection);
-      el("dispatchModeSelect").addEventListener("change", updateDispatchControls);
-      el("dispatchNodeSelect").addEventListener("change", updateNodePredictionHint);
-      el("queuePresetSelect").addEventListener("change", updateNodePredictionHint);
+      el("dispatchModeSelect").addEventListener("change", () => {
+        updateDispatchControls();
+        if (smartQueueContext) el("smartQueueTarget").textContent = dispatchTargetLabel();
+      });
+      el("dispatchNodeSelect").addEventListener("change", () => {
+        updateNodePredictionHint();
+        if (smartQueueContext) el("smartQueueTarget").textContent = dispatchTargetLabel();
+      });
+      el("queuePresetSelect").addEventListener("change", updateSelectionUi);
+      el("smartQueueCloseBtn").addEventListener("click", closeSmartTune);
+      el("smartQueueResetBtn").addEventListener("click", resetSmartTuning);
+      el("smartQueueConfirmBtn").addEventListener("click", confirmSmartQueue);
+      el("smartTargetScale").addEventListener("input", updateSmartTargetScaleLabel);
+      el("smartQueueBackdrop").addEventListener("click", (event) => {
+        if (event.target === el("smartQueueBackdrop")) closeSmartTune();
+      });
+      document.addEventListener("keydown", (event) => {
+        if (event.key === "Escape" && smartQueueContext) closeSmartTune();
+      });
       el("posterToggle").checked = true;
+      resetSmartTuning();
       loadLinkedNodesForDispatch();
       updateSelectionUi();
       if (roots.length) {

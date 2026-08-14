@@ -923,6 +923,7 @@ WIZARD_DEFAULT_OPTIONS = {
     "resolution_mode": "auto",
     "audio_mode": "copy",
     "smart_audio_strategy": "",
+    "smart_subtitle_strategy": "",
     "audio_bitrate": "auto",
     "audio_tracks": "all",
     "subtitle_mode": "all",
@@ -1547,7 +1548,7 @@ def _wizard_ai_choices(
     if smart_audio_strategy:
         out["audio_tracks"] = "all"
         out["ai_audio_scope"] = "all"
-        out["ai_subtitle_scope"] = "all"
+        out["ai_subtitle_scope"] = out.get("smart_subtitle_strategy") or "all"
         out["audio_languages"] = ["eng", "spa"]
         out["subtitle_languages"] = ["eng", "spa"]
 
@@ -1945,6 +1946,11 @@ def _wizard_normalize_options(data: dict) -> dict:
                 data.get("smart_audio_strategy"),
                 WIZARD_SMART_AUDIO_STRATEGIES,
                 options["smart_audio_strategy"],
+            ),
+            "smart_subtitle_strategy": _choice(
+                data.get("smart_subtitle_strategy"),
+                WIZARD_SUBTITLE_MODES | {""},
+                options["smart_subtitle_strategy"],
             ),
             "audio_languages": _wizard_languages(audio_language_value),
             "subtitle_languages": _wizard_languages(subtitle_language_value),
@@ -2563,15 +2569,54 @@ def _smart_objective_score(plan: dict, profile: dict, fastest_eta: float) -> tup
     return score, reason
 
 
+def _normalize_smart_tuning(value) -> dict:
+    """Normalize transient Library overrides without changing the saved Smart profile."""
+    raw = value if isinstance(value, dict) else {}
+    tuning = {}
+    choices = {
+        "goal": WIZARD_AI_GOALS,
+        "compatibility": {"broad", "modern", "maximum"},
+        "hardware": WIZARD_AI_HARDWARE,
+        "resolution_mode": WIZARD_RESOLUTION_MODES,
+        "audio_strategy": {"copy", "eac3_surround"},
+        "subtitle_mode": WIZARD_SUBTITLE_MODES,
+    }
+    for key, allowed in choices.items():
+        candidate = str(raw.get(key) or "").strip().lower()
+        if candidate in allowed:
+            tuning[key] = candidate
+    try:
+        target_scale = float(raw.get("target_scale") or 1.0)
+    except (TypeError, ValueError):
+        target_scale = 1.0
+    tuning["target_scale"] = round(max(0.70, min(1.30, target_scale)), 2)
+    return tuning
+
+
 def _smart_recommendation(data: dict, *, require_automation_ready: bool = False) -> dict:
     """Build and rank three safe plans for one source."""
+    data = dict(data or {})
     state = load_smart_preset_state()
-    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    profile = dict(state.get("profile")) if isinstance(state.get("profile"), dict) else {}
     learning = smart_learning_status(state)
+    tuning = _normalize_smart_tuning(data.get("smart_tuning"))
+
+    for key in ("goal", "compatibility", "hardware", "audio_strategy"):
+        if tuning.get(key):
+            profile[key] = tuning[key]
 
     base_options = _smart_profile_options(data, profile)
+    if tuning.get("resolution_mode"):
+        base_options["resolution_mode"] = tuning["resolution_mode"]
+    if tuning.get("subtitle_mode"):
+        base_options["subtitle_mode"] = tuning["subtitle_mode"]
+        base_options["ai_subtitle_scope"] = tuning["subtitle_mode"]
+        base_options["smart_subtitle_strategy"] = tuning["subtitle_mode"]
     baseline = _wizard_plan({**data, **base_options}, probe_func=_probe_media, preview=False)
-    target_mb = max(1.0, float(baseline.get("inputs", {}).get("target_mb") or 1.0))
+    target_mb = max(
+        1.0,
+        float(baseline.get("inputs", {}).get("target_mb") or 1.0) * float(tuning.get("target_scale") or 1.0),
+    )
     plans = []
     errors = []
     for definition in _smart_candidate_definitions(profile):
@@ -2645,6 +2690,7 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
     return {
         "profile": profile,
         "learning": learning,
+        "tuning": tuning,
         "recommended_id": candidates[0]["id"],
         "auto_apply": context_auto_ready,
         "candidates": candidates,
@@ -2658,8 +2704,12 @@ def _create_smart_job(
     *,
     require_automation_ready: bool = False,
     automation_source: str = "smart_preset",
+    tuning: dict | None = None,
 ) -> tuple[str, dict]:
-    recommendation = _smart_recommendation({"src": src, "preset": "auto"}, require_automation_ready=require_automation_ready)
+    recommendation = _smart_recommendation(
+        {"src": src, "preset": "auto", "smart_tuning": tuning or {}},
+        require_automation_ready=require_automation_ready,
+    )
     plan = recommendation.pop("selected_plan")
     recommended_id = recommendation.get("recommended_id")
     feedback_context = smart_feedback_context(plan, str(recommended_id or "balanced"))
@@ -5333,13 +5383,13 @@ def _infer_controller_url_for_worker(worker_url: str = "") -> str:
     return f"{_request_scheme()}://{local_host}{port_text}"
 
 
-def _queue_local_paths(raw_paths, preset: str) -> tuple[int, list[dict]]:
+def _queue_local_paths(raw_paths, preset: str, smart_tuning: dict | None = None) -> tuple[int, list[dict]]:
     if isinstance(raw_paths, str):
         raw_paths = [raw_paths]
     if not isinstance(raw_paths, list):
         raw_paths = []
     preset = str(preset or "auto").strip().lower()
-    if preset not in {"auto", "1080", "4k"}:
+    if preset not in {"auto", "1080", "4k", "smart"}:
         preset = "auto"
 
     seen = set()
@@ -5364,6 +5414,15 @@ def _queue_local_paths(raw_paths, preset: str) -> tuple[int, list[dict]]:
             continue
         effective = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
         to_create.append((src, effective))
+    if preset == "smart":
+        count = 0
+        for src, _effective in to_create:
+            try:
+                _create_smart_job(src, tuning=smart_tuning, automation_source="library_smart")
+                count += 1
+            except Exception as exc:
+                skipped.append({"path": src, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
+        return count, skipped
     return int(create_jobs_batch(to_create) or 0), skipped
 
 
@@ -5412,10 +5471,10 @@ def _node_preset_bundle(preset_key: str) -> dict | None:
         return None
 
 
-def _node_queue_plan(src: str, requested_preset: str) -> dict:
+def _node_queue_plan(src: str, requested_preset: str, smart_tuning: dict | None = None) -> dict:
     requested = str(requested_preset or "auto").strip().lower()
     if requested == "smart":
-        recommendation = _smart_recommendation({"src": src, "preset": "auto"})
+        recommendation = _smart_recommendation({"src": src, "preset": "auto", "smart_tuning": smart_tuning or {}})
         plan = recommendation.get("selected_plan") or {}
         options = plan.get("options") if isinstance(plan.get("options"), dict) else {}
         estimates = plan.get("estimates") if isinstance(plan.get("estimates"), dict) else {}
@@ -5434,7 +5493,10 @@ def _node_queue_plan(src: str, requested_preset: str) -> dict:
                 "audio_languages": options.get("audio_languages"),
                 "subtitle_languages": options.get("subtitle_languages"),
                 "smart_preset": True,
+                "smart_profile_id": "default",
                 "smart_candidate_id": recommendation.get("recommended_id"),
+                "smart_feedback_context": smart_feedback_context(plan, str(recommendation.get("recommended_id") or "balanced")),
+                "automation_source": "library_smart",
             },
         }
     effective = guess_preset_from_filename(os.path.basename(src)) if requested == "auto" else requested
@@ -6120,7 +6182,11 @@ def register_routes(app):
             count = 0
             for src, _effective in to_create:
                 try:
-                    _create_smart_job(src)
+                    _create_smart_job(
+                        src,
+                        tuning=data.get("smart_tuning"),
+                        automation_source="library_smart",
+                    )
                     count += 1
                 except Exception as exc:
                     skipped.append({"path": src, "reason": f"smart preset planning failed: {exc}"})
@@ -6568,7 +6634,11 @@ def register_routes(app):
         if preset == "smart":
             for src in queueable:
                 try:
-                    _create_smart_job(src)
+                    _create_smart_job(
+                        src,
+                        tuning=data.get("smart_tuning"),
+                        automation_source="mobile_library_smart",
+                    )
                     queued += 1
                 except Exception as exc:
                     skipped.append({"path": src, "reason": f"smart preset planning failed: {exc}"})
@@ -7186,7 +7256,7 @@ def register_routes(app):
             return jsonify(error="missing paths"), 400
 
         if mode == "local":
-            count, skipped = _queue_local_paths(paths, preset)
+            count, skipped = _queue_local_paths(paths, preset, data.get("smart_tuning"))
             return jsonify(ok=True, target="local", count=count, skipped=skipped)
 
         selected = None
@@ -7277,7 +7347,7 @@ def register_routes(app):
                 continue
 
             try:
-                plan = _node_queue_plan(src, preset)
+                plan = _node_queue_plan(src, preset, data.get("smart_tuning"))
             except Exception as exc:
                 skipped.append({"path": src, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
                 continue
@@ -7337,7 +7407,7 @@ def register_routes(app):
                     remaining_result_skipped.append(item)
                     continue
                 try:
-                    retry_plan = _node_queue_plan(original_path, preset)
+                    retry_plan = _node_queue_plan(original_path, preset, data.get("smart_tuning"))
                 except Exception as exc:
                     remaining_result_skipped.append({"path": original_path, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
                     continue
