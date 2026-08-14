@@ -1003,7 +1003,7 @@ class _MediaDetailsState extends State<_MediaDetails> {
             ],
           ),
           if (widget.isShow && seasons.isNotEmpty) ...[
-            SectionHeader(
+            const SectionHeader(
                 title: 'Seasons',
                 subtitle: 'Preview or Smart Queue one complete season'),
             ...seasons.entries.map((entry) {
@@ -1556,7 +1556,7 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
         onChanged: onChanged == null
             ? null
             : (next) {
-                if (next != null) onChanged?.call(next);
+                if (next != null) onChanged(next);
               },
       ),
     );

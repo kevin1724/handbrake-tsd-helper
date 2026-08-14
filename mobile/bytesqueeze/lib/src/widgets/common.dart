@@ -286,7 +286,7 @@ class BrandMark extends StatelessWidget {
           const SizedBox(width: 10),
           Text('ByteSqueeze', style: Theme.of(context).textTheme.titleLarge),
           const SizedBox(width: 8),
-          DecoratedBox(
+          const DecoratedBox(
             decoration: BoxDecoration(
               color: Color(0x18A78BFA),
               border: Border.fromBorderSide(
