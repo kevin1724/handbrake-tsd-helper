@@ -33,13 +33,32 @@ void main() {
     final foundation = find.text('Foundation').first;
     await tester.ensureVisible(foundation);
     await tester.pumpAndSettle();
-    await tester.tap(foundation);
+    final foundationCard = find
+        .ancestor(of: foundation, matching: find.byType(InkWell))
+        .first;
+    await tester.tap(foundationCard);
     await tester.pumpAndSettle();
 
-    expect(find.text('Smart Queue Full Show'), findsOneWidget);
+    expect(find.byType(DraggableScrollableSheet), findsOneWidget);
+    final detailsScroll = find
+        .descendant(
+          of: find.byType(DraggableScrollableSheet),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    await tester.scrollUntilVisible(find.text('Preview real Smart encode'), 220,
+        scrollable: detailsScroll);
     expect(find.text('Preview real Smart encode'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Smart Queue Full Show'), 220,
+        scrollable: detailsScroll);
+    expect(find.text('Smart Queue Full Show'), findsOneWidget);
+    await tester.scrollUntilVisible(
+        find.text('Preview or Smart Queue one complete season'), 220,
+        scrollable: detailsScroll);
     expect(find.text('Preview or Smart Queue one complete season'),
         findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Season 1'), 220,
+        scrollable: detailsScroll);
     expect(find.text('Season 1'), findsOneWidget);
   });
 }
