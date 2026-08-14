@@ -137,11 +137,11 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.info_outline_rounded,
                       color: ByteSqueezeColors.muted,
                       title: 'About',
-                      subtitle: 'ByteSqueeze 0.3.12 · TSD 3.12',
+                      subtitle: 'ByteSqueeze 0.5.0 beta · TSD 3.14 beta',
                       onTap: () => showAboutDialog(
                         context: context,
                         applicationName: 'ByteSqueeze',
-                        applicationVersion: '0.3.12',
+                        applicationVersion: '0.5.0-beta.1',
                         applicationIcon: ClipRRect(
                           borderRadius: BorderRadius.circular(18),
                           child: Image.asset(

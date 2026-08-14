@@ -78,7 +78,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.13.1")
+        self.assertEqual(status.get_json()["release"], "3.14.0-beta.1")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -114,6 +114,55 @@ class ApiRouteSmokeTests(unittest.TestCase):
             )
         finally:
             app_jobs.jobs.pop(job_id, None)
+
+    def test_v3_interface_can_fall_back_to_v2_without_touching_app_behavior(self):
+        original = self.client.get("/api/settings").get_json()["settings"]
+        try:
+            saved = self.client.post(
+                "/api/settings",
+                json={"ui_version": "v3", "ui_density": "comfortable"},
+            )
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(saved.get_json()["settings"]["ui_version"], "v3")
+
+            v3_page = self.client.get("/")
+            self.assertEqual(v3_page.status_code, 200)
+            self.assertIn(b'class="home-page ui-v3"', v3_page.data)
+            self.assertIn(b'data-density="comfortable"', v3_page.data)
+            self.assertIn(b'/static/v3.css', v3_page.data)
+            self.assertIn(b'/static/v3.js', v3_page.data)
+
+            temporary_v2 = self.client.get("/?ui=v2")
+            self.assertIn(b'class="home-page ui-v2"', temporary_v2.data)
+            self.assertEqual(
+                self.client.get("/api/settings").get_json()["settings"]["ui_version"],
+                "v3",
+            )
+
+            saved_v2 = self.client.post(
+                "/api/settings",
+                json={"ui_version": "v2", "ui_density": "compact"},
+            )
+            self.assertEqual(saved_v2.status_code, 200)
+            classic_library = self.client.get("/library")
+            self.assertIn(b'class="beta-page ui-v2"', classic_library.data)
+            self.assertIn(b'data-density="compact"', classic_library.data)
+
+            settings_page = self.client.get("/settings")
+            self.assertIn(b"V3 Beta", settings_page.data)
+            self.assertIn(b"V2 Classic", settings_page.data)
+            self.assertIn(b'name="uiVersion"', settings_page.data)
+
+            temporary_v3 = self.client.get("/library?ui=v3")
+            self.assertIn(b'class="beta-page ui-v3"', temporary_v3.data)
+        finally:
+            self.client.post(
+                "/api/settings",
+                json={
+                    "ui_version": original.get("ui_version", "v3"),
+                    "ui_density": original.get("ui_density", "comfortable"),
+                },
+            )
 
     def test_library_local_smart_batch_keeps_tuning_for_every_file(self):
         paths = []
@@ -896,7 +945,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.13.1")
+        self.assertEqual(dashboard_payload["release"], "3.14.0-beta.1")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

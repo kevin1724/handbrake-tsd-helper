@@ -2875,7 +2875,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.13.1"
+APP_RELEASE = "3.14.0-beta.1"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -5991,6 +5991,25 @@ def _flatten_args(arg_list):
 
 def register_routes(app):
     """Attach all routes to the given Flask app."""
+
+    @app.context_processor
+    def inject_interface_context():
+        """Expose the switchable V3 beta shell to every rendered page."""
+        settings = load_settings()
+        requested = str(request.args.get("ui") or "").strip().lower()
+        saved = str(settings.get("ui_version") or "v3").strip().lower()
+        ui_version = requested if requested in {"v2", "v3"} else saved
+        if ui_version not in {"v2", "v3"}:
+            ui_version = "v3"
+        density = str(settings.get("ui_density") or "comfortable").strip().lower()
+        if density not in {"comfortable", "compact"}:
+            density = "comfortable"
+        return {
+            "ui_version": ui_version,
+            "ui_density": density,
+            "ui_release_label": "V3 Beta",
+            "app_release": APP_RELEASE,
+        }
 
     # -------------- cancel preview -----------
 

@@ -7,6 +7,20 @@ on:
     tags:
       - "v*.*.*"
   workflow_dispatch:
+    inputs:
+      channel:
+        description: Image channel to publish
+        required: true
+        default: beta
+        type: choice
+        options:
+          - beta
+          - sha-only
+      version_tag:
+        description: Optional immutable image tag
+        required: false
+        default: 3.14.0-beta.1
+        type: string
 
 permissions:
   contents: read
@@ -45,6 +59,8 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=main,enable={{is_default_branch}}
+            type=raw,value=beta,enable=${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'beta' }}
+            type=raw,value=${{ inputs.version_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.version_tag != '' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
@@ -75,8 +91,11 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=main,enable={{is_default_branch}}
+            type=raw,value=beta,enable=${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'beta' }}
+            type=raw,value=${{ inputs.version_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.version_tag != '' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
+            type=sha,prefix=sha-
           labels: |
             org.opencontainers.image.title=ByteSqueeze Headless Worker
             org.opencontainers.image.description=Transfer-only HandBrake worker for a ByteSqueeze controller

@@ -109,7 +109,7 @@ class SurfaceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(22);
+    final radius = BorderRadius.circular(17);
     return Material(
       color: Colors.transparent,
       borderRadius: radius,
@@ -285,6 +285,28 @@ class BrandMark extends StatelessWidget {
         if (showName) ...[
           const SizedBox(width: 10),
           Text('ByteSqueeze', style: Theme.of(context).textTheme.titleLarge),
+          const SizedBox(width: 8),
+          DecoratedBox(
+            decoration: BoxDecoration(
+              color: Color(0x18A78BFA),
+              border: Border.fromBorderSide(
+                BorderSide(color: Color(0x44A78BFA)),
+              ),
+              borderRadius: BorderRadius.all(Radius.circular(999)),
+            ),
+            child: Padding(
+              padding: EdgeInsets.symmetric(horizontal: 7, vertical: 4),
+              child: Text(
+                'V3 BETA',
+                style: TextStyle(
+                  color: Color(0xFFD8CCFF),
+                  fontSize: 9,
+                  fontWeight: FontWeight.w800,
+                  letterSpacing: .8,
+                ),
+              ),
+            ),
+          ),
         ],
       ],
     );
@@ -292,7 +314,7 @@ class BrandMark extends StatelessWidget {
 }
 
 class PosterArt extends StatelessWidget {
-  const PosterArt({super.key, required this.item, this.borderRadius = 18});
+  const PosterArt({super.key, required this.item, this.borderRadius = 14});
 
   final Map<String, dynamic> item;
   final double borderRadius;

@@ -2,11 +2,14 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HandBrake TSD Helper</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='v3.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='v3.js') }}" defer></script>
 </head>
-<body class="jobs-page">
+<body class="jobs-page ui-{{ ui_version }}" data-ui-version="{{ ui_version }}" data-density="{{ ui_density }}" data-release="{{ app_release }}">
   <nav class="top-nav app-nav">
     <a href="/" class="app-brand">
       <span class="brand-mark">TSD</span>

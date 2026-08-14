@@ -50,7 +50,8 @@ app-store workflow rather than committing them to the source tree.
 Pushing a `bytesqueeze-v*` tag, or manually running the **Publish ByteSqueeze
 Android** GitHub workflow with a release tag, runs analysis and tests, builds the
 release APK, creates its SHA-256 checksum, and attaches both files to the GitHub
-release.
+release. Versions containing a prerelease suffix such as `-beta.1` are published
+as GitHub prereleases and do not replace the latest stable download.
 
 ## iOS
 

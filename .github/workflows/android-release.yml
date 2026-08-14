@@ -87,10 +87,14 @@ jobs:
           if gh release view "$release_tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release upload "$release_tag" "$PACKAGE_APK" "${PACKAGE_APK}.sha256" --clobber --repo "$GITHUB_REPOSITORY"
           else
+            release_kind=(--latest)
+            if [[ "$PACKAGE_VERSION" == *-* ]]; then
+              release_kind=(--prerelease)
+            fi
             gh release create "$release_tag" "$PACKAGE_APK" "${PACKAGE_APK}.sha256" \
               --repo "$GITHUB_REPOSITORY" \
               --target "$GITHUB_SHA" \
               --title "ByteSqueeze ${PACKAGE_VERSION}" \
               --generate-notes \
-              --latest
+              "${release_kind[@]}"
           fi

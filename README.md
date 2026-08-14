@@ -26,6 +26,29 @@ Completed output files are tagged with `-TSD`, short for "Transcoded", so the ap
 - Versioned mobile API with hashed tokens, refresh, read/control scopes, and device revocation
 - Safer cleanup behavior for failed or canceled jobs
 
+## V3 Beta
+
+V3 Beta is a full interface overhaul built around a cinema-operations workspace. It adds a persistent desktop sidebar, a phone-friendly bottom dock, a global command center (`Ctrl/Cmd+K` or `/`), faster Library search and queue actions, clearer Smart Preset surfaces, and a visible Source → Intent → Preview → Queue workflow in Size Wizard. The poster framework and encoding engine are unchanged.
+
+V2 Classic remains available while V3 is in beta. Open **Settings > Interface**, select **V2 Classic**, and save. For an immediate one-page fallback, add `?ui=v2` to any ByteSqueeze URL. The saved V3/V2 choice and comfortable/compact density are independent of encoding settings.
+
+The beta Docker tags are intentionally separate from `main` and `latest`:
+
+```bash
+docker pull kevina1724/handbrake-tsd-helper:beta
+docker pull kevina1724/handbrake-tsd-worker:beta
+```
+
+For Compose, layer the included beta override over the normal file so all mounts, devices, and environment settings stay the same:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.beta.yml pull hb-web
+docker compose -f docker-compose.yml -f docker-compose.beta.yml up -d hb-web
+
+docker compose -f docker-compose.worker.yml -f docker-compose.worker.beta.yml pull bytesqueeze-worker
+docker compose -f docker-compose.worker.yml -f docker-compose.worker.beta.yml up -d bytesqueeze-worker
+```
+
 ## Release 3.12 Autopilot Refresh
 
 The 3.12 experience is designed for set-it-up-and-let-it-run operation without making users hunt through Settings or giving automation unlimited control:
