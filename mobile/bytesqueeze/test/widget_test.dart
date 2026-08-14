@@ -12,7 +12,7 @@ void main() {
     expect(find.text('ByteSqueeze'), findsNothing);
     expect(find.text('Your media pipeline is under control.'), findsOneWidget);
     expect(find.text('Library'), findsOneWidget);
-    expect(find.text('Autopilot'), findsOneWidget);
+    expect(find.text('Automate'), findsOneWidget);
     expect(find.text('More'), findsOneWidget);
   });
 
@@ -30,7 +30,10 @@ void main() {
 
     await tester.tap(find.text('Shows'));
     await tester.pumpAndSettle();
-    await tester.tap(find.text('Foundation').first);
+    final foundation = find.text('Foundation').first;
+    await tester.ensureVisible(foundation);
+    await tester.pumpAndSettle();
+    await tester.tap(foundation);
     await tester.pumpAndSettle();
 
     expect(find.text('Smart Queue Full Show'), findsOneWidget);
