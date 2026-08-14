@@ -162,8 +162,10 @@ The wizard also includes an optional AI advisor. Open **Settings > AI & API Keys
 Smart Presets add a learning loop on top of that safe planner:
 
 - Choose the main goal, playback compatibility, hardware preference, and audio strategy
-- Always retain every matching English and Spanish audio and subtitle track
-- Copy original audio bit-for-bit, or save space with E-AC3 5.1 at 640 kbps while retaining surround playback
+- Configure preservation-first protections in **Settings → Smart Presets**; they apply to movies, episodes, seasons, Autopilot, linked nodes, and ByteSqueeze
+- Keep source resolution, black bars, and display aspect ratio so tight episode targets cannot silently become 720p
+- Keep every audio and subtitle language, or select an explicit language list
+- Require original audio passthrough, or opt into E-AC3 5.1 at 640 kbps when audio conversion is acceptable
 - Generate three source-aware candidates ranked by quality, savings, speed, compatibility, and prior feedback
 - Apply a candidate and inspect the same short HandBrake encode that a real job will use
 - Approve the preview or mark quality, size, speed, or compatibility concerns

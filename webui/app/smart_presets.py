@@ -20,7 +20,7 @@ from .config import DATA_DIR
 
 
 SMART_PRESETS_FILE = os.path.join(DATA_DIR, "smart_presets.json")
-SMART_PRESET_VERSION = 3
+SMART_PRESET_VERSION = 4
 SMART_FEEDBACK_LIMIT = 1000
 SMART_LOCK = threading.RLock()
 
@@ -54,6 +54,27 @@ def _bounded(value, default: float, low: float, high: float) -> float:
     return max(low, min(high, number))
 
 
+def _languages(value, fallback: list[str] | None = None) -> list[str]:
+    """Normalize a saved ISO language list while allowing an empty all-language filter."""
+    if value is None:
+        value = fallback if fallback is not None else SMART_LANGUAGES
+    if isinstance(value, str):
+        values = re.split(r"[\s,;]+", value)
+    elif isinstance(value, (list, tuple, set)):
+        values = value
+    else:
+        values = fallback if fallback is not None else SMART_LANGUAGES
+    out = []
+    for item in values:
+        token = str(item or "").strip().lower()
+        if not re.fullmatch(r"[a-z]{2,3}", token) or token in out:
+            continue
+        out.append(token)
+        if len(out) >= 24:
+            break
+    return out
+
+
 def default_profile() -> dict:
     now = time.time()
     return {
@@ -65,6 +86,15 @@ def default_profile() -> dict:
         "audio_strategy": "copy",
         "audio_languages": SMART_LANGUAGES.copy(),
         "subtitle_languages": SMART_LANGUAGES.copy(),
+        # Preservation-first guardrails. These are deliberately enabled for
+        # existing profiles when they migrate to v4 so a tight Smart target
+        # cannot silently resize or strip tracks from a season.
+        "never_downscale": True,
+        "keep_black_bars": True,
+        "keep_aspect_ratio": True,
+        "keep_all_audio_languages": True,
+        "keep_all_subtitle_languages": True,
+        "never_transcode_audio": True,
         "preserve_audio": True,
         "preserve_subtitles": True,
         "automation_enabled": False,
@@ -91,6 +121,21 @@ def normalize_profile(values: dict | None, existing: dict | None = None) -> dict
         requested_audio_strategy = legacy_strategy
     else:
         requested_audio_strategy = base.get("audio_strategy", "copy")
+    audio_languages = _languages(
+        values.get("audio_languages") if "audio_languages" in values else base.get("audio_languages"),
+        SMART_LANGUAGES,
+    )
+    subtitle_languages = _languages(
+        values.get("subtitle_languages") if "subtitle_languages" in values else base.get("subtitle_languages"),
+        SMART_LANGUAGES,
+    )
+    never_transcode_audio = _truthy(
+        values.get("never_transcode_audio"), base.get("never_transcode_audio", True)
+    )
+    keep_all_subtitle_languages = _truthy(
+        values.get("keep_all_subtitle_languages"),
+        base.get("keep_all_subtitle_languages", True),
+    )
     base.update(
         {
             "id": "default",
@@ -105,13 +150,26 @@ def normalize_profile(values: dict | None, existing: dict | None = None) -> dict
                 AUDIO_STRATEGIES,
                 legacy_strategy,
             ),
-            # Smart/automatic presets always retain every English and Spanish
-            # audio and subtitle track.  Keep the legacy booleans in the
-            # persisted shape so older clients remain compatible.
-            "audio_languages": SMART_LANGUAGES.copy(),
-            "subtitle_languages": SMART_LANGUAGES.copy(),
-            "preserve_audio": True,
-            "preserve_subtitles": True,
+            "audio_languages": audio_languages,
+            "subtitle_languages": subtitle_languages,
+            "never_downscale": _truthy(
+                values.get("never_downscale"), base.get("never_downscale", True)
+            ),
+            "keep_black_bars": _truthy(
+                values.get("keep_black_bars"), base.get("keep_black_bars", True)
+            ),
+            "keep_aspect_ratio": _truthy(
+                values.get("keep_aspect_ratio"), base.get("keep_aspect_ratio", True)
+            ),
+            "keep_all_audio_languages": _truthy(
+                values.get("keep_all_audio_languages"),
+                base.get("keep_all_audio_languages", True),
+            ),
+            "keep_all_subtitle_languages": keep_all_subtitle_languages,
+            "never_transcode_audio": never_transcode_audio,
+            # Keep the legacy booleans synchronized for older clients.
+            "preserve_audio": never_transcode_audio,
+            "preserve_subtitles": keep_all_subtitle_languages,
             "automation_enabled": _truthy(
                 values.get("automation_enabled"), base["automation_enabled"]
             ),
@@ -152,7 +210,7 @@ def load_state() -> dict:
             previous_version = int(state.get("version") or 0)
         except (TypeError, ValueError):
             previous_version = 0
-        if previous_version < SMART_PRESET_VERSION and int(profile.get("minimum_feedback") or 0) == 3:
+        if previous_version < 3 and int(profile.get("minimum_feedback") or 0) == 3:
             profile["minimum_feedback"] = 2
         rows = []
         for row in state.get("feedback") if isinstance(state.get("feedback"), list) else []:

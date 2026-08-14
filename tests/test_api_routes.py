@@ -78,7 +78,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.13.0")
+        self.assertEqual(status.get_json()["release"], "3.13.1")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -455,9 +455,22 @@ class ApiRouteSmokeTests(unittest.TestCase):
         general_page = self.client.get("/settings")
         self.assertEqual(general_page.status_code, 200)
         self.assertIn(b"Looking for the Gemini or OpenAI API-key boxes?", general_page.data)
-        self.assertIn(b'id="ai-api-keys"', general_page.data)
+        self.assertIn(b'href="/settings/ai"', general_page.data)
+        self.assertNotIn(b'id="ai-api-keys"', general_page.data)
+        self.assertNotIn(b"Protect the source before saving space", general_page.data)
+
+        smart_page = self.client.get("/settings/smart")
+        self.assertEqual(smart_page.status_code, 200)
+        self.assertIn(b"Smart Preset Settings", smart_page.data)
+        self.assertIn(b"Protect the source before saving space", smart_page.data)
+        self.assertIn(b"Never downscale or resize", smart_page.data)
+        self.assertIn(b"Never transcode audio", smart_page.data)
+        self.assertNotIn(b'id="ai-api-keys"', smart_page.data)
         with open(os.path.join(PROJECT_ROOT, "webui", "app", "static", "styleui.css"), "r", encoding="utf-8") as handle:
-            self.assertNotIn("body.settings-subpage-main .ai-settings-section", handle.read())
+            settings_css = handle.read()
+        self.assertIn("body.settings-subpage-main .ai-settings-section", settings_css)
+        self.assertIn("body.settings-subpage-main .smart-settings-section", settings_css)
+        self.assertIn("body.settings-subpage-smart .main-settings-section", settings_css)
 
         wizard_page = self.client.get("/size_wizard")
         self.assertEqual(wizard_page.status_code, 200)
@@ -494,6 +507,45 @@ class ApiRouteSmokeTests(unittest.TestCase):
         advisor.assert_called_once()
 
         self.client.post("/api/ai/settings", json={"provider": "local", "clear_gemini_key": True})
+
+    def test_probe_media_uses_ffprobe_when_handbrake_json_has_no_title_list(self):
+        fallback = {
+            "duration_sec": 9960.5,
+            "width": 3840,
+            "height": 2160,
+            "fps": 23.976,
+            "video_codec": "hevc",
+            "is_hdr": True,
+            "hdr_reason": "ffprobe transfer characteristic",
+        }
+        with (
+            patch("webui.app.routes._run_cmd", return_value=(True, '{"Scan":{"Progress":1}}', "")),
+            patch("webui.app.routes._ffprobe_media_fast", return_value=fallback) as ffprobe,
+            patch("webui.app.routes._probe_media_text_fallback") as text_fallback,
+        ):
+            result = app_routes._probe_media("/media/example/Dune.Part.Two.2160p.mp4")
+
+        self.assertEqual(result, fallback)
+        ffprobe.assert_called_once_with("/media/example/Dune.Part.Two.2160p.mp4")
+        text_fallback.assert_not_called()
+
+    def test_probe_media_accepts_a_top_level_handbrake_title_array(self):
+        scan = [{
+            "Duration": {"Hours": 2, "Minutes": 46, "Seconds": 0},
+            "Geometry": {"Width": 3840, "Height": 2160},
+            "FrameRate": 23.976,
+            "Video": {"CodecName": "hevc"},
+        }]
+        with (
+            patch("webui.app.routes._run_cmd", return_value=(True, json.dumps(scan), "")),
+            patch("webui.app.routes._ffprobe_media_fast") as ffprobe,
+        ):
+            result = app_routes._probe_media("/media/example/movie.mp4")
+
+        self.assertEqual(result["width"], 3840)
+        self.assertEqual(result["height"], 2160)
+        self.assertEqual(result["duration_sec"], 9960.0)
+        ffprobe.assert_not_called()
 
     def test_gemini_and_openai_advisors_use_supported_json_shapes(self):
         class FakeResponse:
@@ -844,7 +896,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.13.0")
+        self.assertEqual(dashboard_payload["release"], "3.13.1")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)
@@ -966,6 +1018,18 @@ class ApiRouteSmokeTests(unittest.TestCase):
         with open(media_path, "wb") as handle:
             handle.write(b"0" * 4096)
 
+        self.client.post(
+            "/api/smart_presets/profile",
+            json={
+                "never_downscale": False,
+                "keep_black_bars": False,
+                "keep_aspect_ratio": False,
+                "never_transcode_audio": False,
+                "keep_all_audio_languages": False,
+                "keep_all_subtitle_languages": False,
+            },
+        )
+
         probe = {
             "duration_sec": 7200.0,
             "width": 3840,
@@ -1075,6 +1139,12 @@ class ApiRouteSmokeTests(unittest.TestCase):
                 "compatibility": "modern",
                 "hardware": "software",
                 "audio_strategy": "eac3_surround",
+                "never_downscale": False,
+                "keep_black_bars": False,
+                "keep_aspect_ratio": False,
+                "keep_all_audio_languages": False,
+                "keep_all_subtitle_languages": False,
+                "never_transcode_audio": False,
                 "automation_enabled": True,
                 "minimum_feedback": 3,
                 "confidence_threshold": 0.55,
@@ -1085,6 +1155,8 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(saved_profile["audio_strategy"], "eac3_surround")
         self.assertEqual(saved_profile["audio_languages"], ["eng", "spa"])
         self.assertEqual(saved_profile["subtitle_languages"], ["eng", "spa"])
+        self.assertFalse(saved_profile["never_downscale"])
+        self.assertFalse(saved_profile["never_transcode_audio"])
 
         partial_profile = self.client.post(
             "/api/smart_presets/profile",
@@ -1138,8 +1210,8 @@ class ApiRouteSmokeTests(unittest.TestCase):
         args = preview_payload["suggested_extra_args"]
         self.assertIn("--all-audio", args)
         self.assertIn("--all-subtitles", args)
-        self.assertEqual(args[args.index("--audio-lang-list") + 1], "eng,spa")
-        self.assertEqual(args[args.index("--subtitle-lang-list") + 1], "eng,spa")
+        self.assertEqual(args[args.index("--audio-lang-list") + 1], "fre")
+        self.assertEqual(args[args.index("--subtitle-lang-list") + 1], "fre")
         self.assertEqual(args[args.index("-E") + 1], "eac3")
         self.assertEqual(args[args.index("-B") + 1], "640")
         self.assertEqual(args[args.index("-6") + 1], "5point1")
@@ -1162,8 +1234,8 @@ class ApiRouteSmokeTests(unittest.TestCase):
         copy_payload = copy_preview.get_json()
         copy_args = copy_payload["suggested_extra_args"]
         self.assertEqual(copy_args[copy_args.index("-E") + 1], "copy")
-        self.assertEqual(copy_args[copy_args.index("--audio-lang-list") + 1], "eng,spa")
-        self.assertEqual(copy_args[copy_args.index("--subtitle-lang-list") + 1], "eng,spa")
+        self.assertEqual(copy_args[copy_args.index("--audio-lang-list") + 1], "fre")
+        self.assertEqual(copy_args[copy_args.index("--subtitle-lang-list") + 1], "fre")
         self.assertIn("--all-audio", copy_args)
         self.assertIn("--all-subtitles", copy_args)
 
@@ -1196,6 +1268,75 @@ class ApiRouteSmokeTests(unittest.TestCase):
         state = self.client.get("/api/smart_presets")
         self.assertEqual(state.status_code, 200)
         self.assertTrue(state.get_json()["learning"]["automation_ready"])
+
+    def test_smart_preset_preservation_guardrails_override_season_tuning(self):
+        try:
+            os.remove(SMART_PRESETS_FILE)
+        except FileNotFoundError:
+            pass
+
+        media_path = os.path.join(TEST_MEDIA, "Example.Show.S01E01.2160p.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"0" * 4096)
+
+        profile_response = self.client.post(
+            "/api/smart_presets/profile",
+            json={
+                "goal": "small",
+                "audio_strategy": "eac3_surround",
+                "audio_languages": ["eng", "jpn"],
+                "subtitle_languages": ["eng", "jpn"],
+            },
+        )
+        self.assertEqual(profile_response.status_code, 200)
+        profile = profile_response.get_json()["profile"]
+        self.assertTrue(profile["never_downscale"])
+        self.assertTrue(profile["keep_black_bars"])
+        self.assertTrue(profile["keep_aspect_ratio"])
+        self.assertTrue(profile["keep_all_audio_languages"])
+        self.assertTrue(profile["keep_all_subtitle_languages"])
+        self.assertTrue(profile["never_transcode_audio"])
+
+        probe = {
+            "duration_sec": 2700.0,
+            "width": 3840,
+            "height": 2160,
+            "fps": 23.976,
+            "is_hdr": False,
+        }
+        with patch("webui.app.routes._probe_media", return_value=probe):
+            recommendation = app_routes._smart_recommendation(
+                {
+                    "src": media_path,
+                    "preset": "auto",
+                    "smart_tuning": {
+                        "resolution_mode": "720",
+                        "audio_strategy": "eac3_surround",
+                        "subtitle_mode": "none",
+                    },
+                }
+            )
+
+        plan = recommendation["selected_plan"]
+        options = plan["options"]
+        args = plan["extra_args"]
+        self.assertEqual(options["resolution_mode"], "keep")
+        self.assertEqual(plan["estimates"]["output_resolution"], {"width": 3840, "height": 2160})
+        self.assertEqual(options["crop_mode"], "none")
+        self.assertEqual(options["audio_mode"], "copy")
+        self.assertEqual(options["audio_languages"], [])
+        self.assertEqual(options["subtitle_languages"], [])
+        self.assertEqual(options["subtitle_mode"], "all")
+        self.assertEqual(args[args.index("--width") + 1], "3840")
+        self.assertEqual(args[args.index("--height") + 1], "2160")
+        self.assertIn("--keep-display-aspect", args)
+        self.assertEqual(args[args.index("--crop") + 1], "0:0:0:0")
+        self.assertIn("--all-audio", args)
+        self.assertIn("--all-subtitles", args)
+        self.assertNotIn("--audio-lang-list", args)
+        self.assertNotIn("--subtitle-lang-list", args)
+        self.assertEqual(args[args.index("-E") + 1], "copy")
+        self.assertEqual(args[args.index("--audio-fallback") + 1], "none")
 
 
 if __name__ == "__main__":

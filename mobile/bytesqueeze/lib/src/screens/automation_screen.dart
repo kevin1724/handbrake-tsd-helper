@@ -1451,6 +1451,12 @@ class _SmartPresetCard extends StatefulWidget {
 class _SmartPresetCardState extends State<_SmartPresetCard> {
   late String _strategy;
   late bool _automationEnabled;
+  late bool _neverDownscale;
+  late bool _keepBlackBars;
+  late bool _keepAspectRatio;
+  late bool _neverTranscodeAudio;
+  late bool _keepAllAudioLanguages;
+  late bool _keepAllSubtitleLanguages;
   bool _saving = false;
 
   @override
@@ -1458,6 +1464,14 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
     super.initState();
     _strategy = '${widget.profile['audio_strategy'] ?? 'copy'}';
     _automationEnabled = widget.profile['automation_enabled'] == true;
+    _neverDownscale = widget.profile['never_downscale'] != false;
+    _keepBlackBars = widget.profile['keep_black_bars'] != false;
+    _keepAspectRatio = widget.profile['keep_aspect_ratio'] != false;
+    _neverTranscodeAudio = widget.profile['never_transcode_audio'] != false;
+    _keepAllAudioLanguages =
+        widget.profile['keep_all_audio_languages'] != false;
+    _keepAllSubtitleLanguages =
+        widget.profile['keep_all_subtitle_languages'] != false;
   }
 
   @override
@@ -1495,9 +1509,10 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
           ),
           const SizedBox(height: 16),
           DropdownButtonFormField<String>(
-            initialValue: _strategy,
+            key: ValueKey('${_neverTranscodeAudio}_$_strategy'),
+            initialValue: _neverTranscodeAudio ? 'copy' : _strategy,
             decoration: const InputDecoration(
-                labelText: 'English + Spanish audio handling',
+                labelText: 'Audio handling when passthrough is off',
                 prefixIcon: Icon(Icons.surround_sound_rounded)),
             items: const [
               DropdownMenuItem(
@@ -1507,15 +1522,81 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
                   value: 'eac3_surround',
                   child: Text('Smaller E-AC3 · 5.1 surround')),
             ],
-            onChanged: widget.controller.canControl
+            onChanged: widget.controller.canControl && !_neverTranscodeAudio
                 ? (value) => setState(() => _strategy = value ?? 'copy')
                 : null,
           ),
-          const SizedBox(height: 9),
+          const SizedBox(height: 14),
+          const Text('Source protection',
+              style: TextStyle(fontWeight: FontWeight.w700)),
+          const SizedBox(height: 4),
           const Text(
-              'All matching English and Spanish audio and subtitle tracks stay selected.',
+              'These hard rules also apply to full-season queues and cannot be bypassed by one-time fine tuning.',
               style: TextStyle(color: ByteSqueezeColors.muted, fontSize: 12.5)),
-          const SizedBox(height: 8),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            value: _neverDownscale,
+            onChanged: widget.controller.canControl
+                ? (value) => setState(() => _neverDownscale = value)
+                : null,
+            title: const Text('Never downscale or resize'),
+            subtitle: const Text('Keep the source width and height.'),
+            secondary: const Icon(Icons.aspect_ratio_rounded),
+          ),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            value: _keepBlackBars,
+            onChanged: widget.controller.canControl
+                ? (value) => setState(() => _keepBlackBars = value)
+                : null,
+            title: const Text('Keep black bars'),
+            subtitle: const Text('Disable automatic picture cropping.'),
+            secondary: const Icon(Icons.crop_free_rounded),
+          ),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            value: _keepAspectRatio,
+            onChanged: widget.controller.canControl
+                ? (value) => setState(() => _keepAspectRatio = value)
+                : null,
+            title: const Text('Keep source aspect ratio'),
+            subtitle: const Text('Do not reshape the source picture.'),
+            secondary: const Icon(Icons.fit_screen_rounded),
+          ),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            value: _neverTranscodeAudio,
+            onChanged: widget.controller.canControl
+                ? (value) => setState(() {
+                      _neverTranscodeAudio = value;
+                      if (value) _strategy = 'copy';
+                    })
+                : null,
+            title: const Text('Never transcode audio'),
+            subtitle: const Text(
+                'Passthrough source audio; incompatible containers fail instead of silently converting.'),
+            secondary: const Icon(Icons.surround_sound_rounded),
+          ),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            value: _keepAllAudioLanguages,
+            onChanged: widget.controller.canControl
+                ? (value) => setState(() => _keepAllAudioLanguages = value)
+                : null,
+            title: const Text('Keep every audio language'),
+            subtitle: const Text('Select every source audio track.'),
+            secondary: const Icon(Icons.record_voice_over_rounded),
+          ),
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
+            value: _keepAllSubtitleLanguages,
+            onChanged: widget.controller.canControl
+                ? (value) => setState(() => _keepAllSubtitleLanguages = value)
+                : null,
+            title: const Text('Keep every subtitle language'),
+            subtitle: const Text('Keep all subtitles without burn-in.'),
+            secondary: const Icon(Icons.subtitles_rounded),
+          ),
           SwitchListTile.adaptive(
             contentPadding: EdgeInsets.zero,
             value: _automationEnabled,
@@ -1536,7 +1617,7 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
                     height: 18,
                     child: CircularProgressIndicator(strokeWidth: 2))
                 : const Icon(Icons.save_outlined),
-            label: const Text('Save Smart Preset audio choice'),
+            label: const Text('Save Smart Preset protections'),
           ),
         ],
       ),
@@ -1550,6 +1631,14 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
           .saveSmartProfile({
         ...widget.profile,
         'audio_strategy': _strategy,
+        'never_downscale': _neverDownscale,
+        'keep_black_bars': _keepBlackBars,
+        'keep_aspect_ratio': _keepAspectRatio,
+        'never_transcode_audio': _neverTranscodeAudio,
+        'keep_all_audio_languages': _keepAllAudioLanguages,
+        'keep_all_subtitle_languages': _keepAllSubtitleLanguages,
+        'preserve_audio': _neverTranscodeAudio,
+        'preserve_subtitles': _keepAllSubtitleLanguages,
         'automation_enabled': _automationEnabled,
       });
     } catch (error) {

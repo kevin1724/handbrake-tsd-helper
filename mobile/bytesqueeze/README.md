@@ -7,7 +7,7 @@ ByteSqueeze is the Flutter remote-control app for HandBrake TSD Helper.
 - Content-first dashboard with no persistent branded toolbar
 - Complete movie/show catalog, TMDb-first artwork with no-key fallback, upcoming episode calendar,
   friendly savings/HDR/tracked filters, movie and season Smart Queue guardrails,
-  real Library comparison previews, guided Autopilot preview training, Smart Presets,
+  real Library comparison previews, guided Autopilot preview training, preservation-first Smart Presets,
   storage, and events
 - Automatic switching between a primary home URL and optional Tailscale/away URL
 - All transcoding remains on the Docker-hosted TSD controller and workers
@@ -31,6 +31,10 @@ after-watch feedback use the same learning profile as the web dashboard. Generat
 accurate preview, compare the original and proposed frames, then approve it or
 choose what needs improvement. Reviews made on the phone and web dashboard feed
 the same local Smart Preset profile.
+
+Smart Preset protections are editable from both **Settings → Smart Presets** on the web and the
+phone. They can lock source resolution, black bars, display aspect ratio, every
+audio/subtitle language, and audio passthrough across full-season queues.
 
 ## Android package
 

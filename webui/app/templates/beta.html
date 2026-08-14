@@ -1144,7 +1144,7 @@
         <div class="smart-summary-card"><span>Target</span><strong id="smartQueueTarget">Local queue</strong></div>
       </div>
 
-      <div class="smart-plan-callout">Smart Preset still learns and chooses the validated encode plan for every file. These controls are guardrails for this queue only—they do not overwrite your saved Smart profile.</div>
+      <div id="smartQueueProtectionCallout" class="smart-plan-callout">Smart Preset still learns and chooses the validated encode plan for every file. Saved safety protections always win over these one-time controls. <a href="/settings/smart">Manage protections in Smart Presets.</a></div>
 
       <div class="smart-tune-grid">
         <div class="beta-field">
@@ -1254,6 +1254,7 @@
     let smartQueueReturnFocus = null;
     let queueBusy = false;
     let smartPreviewRun = 0;
+    let smartSafetyProfile = {};
 
     function el(id) {
       return document.getElementById(id);
@@ -1860,6 +1861,51 @@
       return node?.name || "Selected worker";
     }
 
+    function applySavedSmartProtections() {
+      const resolution = el("smartResolutionSelect");
+      const audio = el("smartAudioSelect");
+      const subtitles = el("smartSubtitleSelect");
+      if (resolution) {
+        resolution.disabled = smartSafetyProfile.never_downscale !== false;
+        if (resolution.disabled) resolution.value = "keep";
+      }
+      if (audio) {
+        audio.disabled = smartSafetyProfile.never_transcode_audio !== false;
+        if (audio.disabled) audio.value = "copy";
+      }
+      if (subtitles) {
+        subtitles.disabled = smartSafetyProfile.keep_all_subtitle_languages !== false;
+        if (subtitles.disabled) subtitles.value = "all";
+      }
+      const active = [];
+      if (smartSafetyProfile.never_downscale !== false) active.push("source resolution");
+      if (smartSafetyProfile.keep_black_bars !== false) active.push("black bars");
+      if (smartSafetyProfile.keep_aspect_ratio !== false) active.push("aspect ratio");
+      if (smartSafetyProfile.never_transcode_audio !== false) active.push("audio passthrough");
+      if (smartSafetyProfile.keep_all_audio_languages !== false) active.push("all audio languages");
+      if (smartSafetyProfile.keep_all_subtitle_languages !== false) active.push("all subtitles");
+      const callout = el("smartQueueProtectionCallout");
+      if (callout) {
+        callout.innerHTML = active.length
+          ? `<strong>Saved protections:</strong> ${active.join(", ")}. Protected controls are locked for this queue. <a href="/settings/smart">Manage in Smart Presets.</a>`
+          : `No hard Smart protections are enabled. These controls apply only to this queue. <a href="/settings/smart">Manage protections in Smart Presets.</a>`;
+      }
+    }
+
+    async function loadSmartSafetyProfile() {
+      try {
+        const response = await fetch("/api/smart_presets", { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || "Smart profile unavailable");
+        smartSafetyProfile = data.profile || {};
+      } catch (_error) {
+        // Fail safe: keep the new preservation defaults locked until the
+        // profile endpoint is available again.
+        smartSafetyProfile = {};
+      }
+      applySavedSmartProtections();
+    }
+
     function resetSmartTuning() {
       [
         "smartGoalSelect",
@@ -1869,6 +1915,7 @@
         "smartAudioSelect",
         "smartSubtitleSelect"
       ].forEach((id) => { if (el(id)) el(id).value = "learned"; });
+      applySavedSmartProtections();
       if (el("smartTargetScale")) el("smartTargetScale").value = "100";
       updateSmartTargetScaleLabel();
       if (smartQueueContext) resetSmartPreview("Guardrails reset to your learned profile. Generate a fresh preview when ready.");
@@ -2705,6 +2752,7 @@
       });
       el("posterToggle").checked = true;
       resetSmartTuning();
+      loadSmartSafetyProfile();
       loadLinkedNodesForDispatch();
       updateSelectionUi();
       if (roots.length) {

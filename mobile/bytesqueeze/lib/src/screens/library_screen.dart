@@ -617,13 +617,18 @@ class _MediaDetailsState extends State<_MediaDetails> {
   }
 
   Future<void> _editSmartTuning() async {
+    final rawProfile = widget.controller.smartPresets['profile'];
+    final safetyProfile = rawProfile is Map
+        ? Map<String, dynamic>.from(rawProfile)
+        : <String, dynamic>{};
     final tuning = await showModalBottomSheet<Map<String, dynamic>>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: true,
       backgroundColor: ByteSqueezeColors.navy,
-      builder: (context) => _SmartTuneSheet(initial: _smartTuning),
+      builder: (context) =>
+          _SmartTuneSheet(initial: _smartTuning, profile: safetyProfile),
     );
     if (tuning == null || !mounted) return;
     setState(() {
@@ -1261,9 +1266,10 @@ class _LibraryPreviewFrame extends StatelessWidget {
 }
 
 class _SmartTuneSheet extends StatefulWidget {
-  const _SmartTuneSheet({required this.initial});
+  const _SmartTuneSheet({required this.initial, required this.profile});
 
   final Map<String, dynamic> initial;
+  final Map<String, dynamic> profile;
 
   @override
   State<_SmartTuneSheet> createState() => _SmartTuneSheetState();
@@ -1278,6 +1284,11 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
   late String _subtitles;
   late double _targetScale;
 
+  bool get _resolutionLocked => widget.profile['never_downscale'] != false;
+  bool get _audioLocked => widget.profile['never_transcode_audio'] != false;
+  bool get _subtitlesLocked =>
+      widget.profile['keep_all_subtitle_languages'] != false;
+
   @override
   void initState() {
     super.initState();
@@ -1291,6 +1302,9 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
         ((widget.initial['target_scale'] as num?)?.toDouble() ?? 1)
             .clamp(.7, 1.3)
             .toDouble();
+    if (_resolutionLocked) _resolution = 'keep';
+    if (_audioLocked) _audio = 'copy';
+    if (_subtitlesLocked) _subtitles = 'all';
   }
 
   Map<String, dynamic> _value() {
@@ -1311,11 +1325,11 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
   void _reset() {
     setState(() {
       _goal = 'learned';
-      _resolution = 'learned';
+      _resolution = _resolutionLocked ? 'keep' : 'learned';
       _hardware = 'learned';
       _compatibility = 'learned';
-      _audio = 'learned';
-      _subtitles = 'learned';
+      _audio = _audioLocked ? 'copy' : 'learned';
+      _subtitles = _subtitlesLocked ? 'all' : 'learned';
       _targetScale = 1;
     });
   }
@@ -1351,11 +1365,33 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
             child: ListView(
               padding: const EdgeInsets.fromLTRB(20, 0, 20, 24),
               children: [
-                const SurfaceCard(
+                SurfaceCard(
                   borderColor: ByteSqueezeColors.cyan,
                   child: Text(
-                    'Smart Preset still creates a separate validated plan for every file. These choices guide it without changing your learned profile.',
-                    style: TextStyle(
+                    [
+                      if (_resolutionLocked) 'source resolution',
+                      if (widget.profile['keep_black_bars'] != false)
+                        'black bars',
+                      if (widget.profile['keep_aspect_ratio'] != false)
+                        'aspect ratio',
+                      if (_audioLocked) 'audio passthrough',
+                      if (widget.profile['keep_all_audio_languages'] != false)
+                        'all audio languages',
+                      if (_subtitlesLocked) 'all subtitles',
+                    ].isEmpty
+                        ? 'No saved hard protections are enabled. These choices guide this queue without changing your learned profile.'
+                        : 'Saved protections are locked: ${[
+                            if (_resolutionLocked) 'source resolution',
+                            if (widget.profile['keep_black_bars'] != false)
+                              'black bars',
+                            if (widget.profile['keep_aspect_ratio'] != false)
+                              'aspect ratio',
+                            if (_audioLocked) 'audio passthrough',
+                            if (widget.profile['keep_all_audio_languages'] != false)
+                              'all audio languages',
+                            if (_subtitlesLocked) 'all subtitles',
+                          ].join(', ')}.',
+                    style: const TextStyle(
                         color: ByteSqueezeColors.muted, fontSize: 12.5),
                   ),
                 ),
@@ -1383,7 +1419,9 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
                     '1080': 'Cap at 1080p',
                     '720': 'Cap at 720p',
                   },
-                  onChanged: (value) => setState(() => _resolution = value),
+                  onChanged: _resolutionLocked
+                      ? null
+                      : (value) => setState(() => _resolution = value),
                 ),
                 _tuningDropdown(
                   label: 'Encoder',
@@ -1416,7 +1454,9 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
                     'copy': 'Copy original tracks',
                     'eac3_surround': 'E-AC3 surround',
                   },
-                  onChanged: (value) => setState(() => _audio = value),
+                  onChanged: _audioLocked
+                      ? null
+                      : (value) => setState(() => _audio = value),
                 ),
                 _tuningDropdown(
                   label: 'Subtitles',
@@ -1427,7 +1467,9 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
                     'first': 'First matching track',
                     'none': 'No subtitles',
                   },
-                  onChanged: (value) => setState(() => _subtitles = value),
+                  onChanged: _subtitlesLocked
+                      ? null
+                      : (value) => setState(() => _subtitles = value),
                 ),
                 const SizedBox(height: 14),
                 SurfaceCard(
@@ -1497,11 +1539,12 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
     required String label,
     required String value,
     required Map<String, String> values,
-    required ValueChanged<String> onChanged,
+    required ValueChanged<String>? onChanged,
   }) {
     return Padding(
       padding: const EdgeInsets.only(top: 11),
       child: DropdownButtonFormField<String>(
+        key: ValueKey('$label:$value'),
         initialValue: value,
         decoration: InputDecoration(labelText: label),
         items: values.entries
@@ -1510,9 +1553,11 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
                   child: Text(entry.value),
                 ))
             .toList(),
-        onChanged: (next) {
-          if (next != null) onChanged(next);
-        },
+        onChanged: onChanged == null
+            ? null
+            : (next) {
+                if (next != null) onChanged?.call(next);
+              },
       ),
     );
   }

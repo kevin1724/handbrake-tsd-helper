@@ -1046,7 +1046,7 @@ a {
 
 .settings-section-nav {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 12px;
   margin: 0 0 18px;
 }
@@ -1088,22 +1088,33 @@ a {
 body.settings-subpage-main .beta-settings-section,
 body.settings-subpage-main .node-settings-section,
 body.settings-subpage-main .automation-settings-section,
+body.settings-subpage-main .ai-settings-section,
+body.settings-subpage-main .smart-settings-section,
 body.settings-subpage-beta .main-settings-section,
 body.settings-subpage-beta .node-settings-section,
 body.settings-subpage-beta .automation-settings-section,
 body.settings-subpage-beta .ai-settings-section,
+body.settings-subpage-beta .smart-settings-section,
 body.settings-subpage-nodes .main-settings-section,
 body.settings-subpage-nodes .beta-settings-section,
 body.settings-subpage-nodes .automation-settings-section,
 body.settings-subpage-nodes .ai-settings-section,
+body.settings-subpage-nodes .smart-settings-section,
 body.settings-subpage-ai .main-settings-section,
 body.settings-subpage-ai .beta-settings-section,
 body.settings-subpage-ai .node-settings-section,
 body.settings-subpage-ai .automation-settings-section,
+body.settings-subpage-ai .smart-settings-section,
+body.settings-subpage-smart .main-settings-section,
+body.settings-subpage-smart .beta-settings-section,
+body.settings-subpage-smart .node-settings-section,
+body.settings-subpage-smart .automation-settings-section,
+body.settings-subpage-smart .ai-settings-section,
 body.settings-subpage-automation .main-settings-section,
 body.settings-subpage-automation .beta-settings-section,
 body.settings-subpage-automation .node-settings-section,
-body.settings-subpage-automation .ai-settings-section {
+body.settings-subpage-automation .ai-settings-section,
+body.settings-subpage-automation .smart-settings-section {
   display: none;
 }
 
@@ -1119,6 +1130,91 @@ body.settings-subpage-automation .ai-settings-section {
   background: linear-gradient(110deg, rgba(22, 199, 214, 0.13), rgba(52, 118, 255, 0.08));
   color: var(--text);
   text-decoration: none;
+}
+
+.smart-safety-settings {
+  border-color: rgba(83, 214, 167, 0.3);
+  background:
+    linear-gradient(135deg, rgba(83, 214, 167, 0.08), transparent 42%),
+    linear-gradient(180deg, rgba(255, 255, 255, 0.035), rgba(255, 255, 255, 0.018)),
+    var(--surface);
+}
+
+.smart-safety-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 14px 0;
+  padding: 13px 15px;
+  border: 1px solid rgba(83, 214, 167, 0.24);
+  border-radius: var(--radius);
+  background: rgba(83, 214, 167, 0.07);
+}
+
+.smart-safety-banner span {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.smart-profile-settings-grid,
+.smart-safety-grid,
+.smart-language-settings-grid {
+  display: grid;
+  gap: 12px;
+}
+
+.smart-profile-settings-grid {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  margin-bottom: 14px;
+}
+
+.smart-profile-settings-grid label,
+.smart-language-settings-grid label {
+  display: grid;
+  gap: 6px;
+}
+
+.smart-safety-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.smart-safety-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 11px;
+  min-width: 0;
+  padding: 13px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: rgba(255, 255, 255, 0.025);
+  cursor: pointer;
+}
+
+.smart-safety-option input {
+  flex: 0 0 auto;
+  margin-top: 3px;
+}
+
+.smart-safety-option span {
+  display: grid;
+  gap: 3px;
+}
+
+.smart-safety-option small {
+  color: var(--muted);
+  line-height: 1.4;
+}
+
+.smart-language-settings-grid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: 14px;
+}
+
+.smart-language-settings-grid input:disabled,
+.smart-profile-settings-grid select:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 
 .settings-ai-shortcut:hover {
@@ -1325,6 +1421,8 @@ body.settings-subpage-automation .ai-settings-section {
 }
 
 @media (max-width: 900px) {
+  .settings-section-nav { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
   .ai-provider-picker,
   .ai-credentials-grid,
   .ai-setup-steps { grid-template-columns: 1fr 1fr; }
@@ -2995,6 +3093,17 @@ body.settings-page .folder-add-choice {
 
   .settings-section-nav {
     grid-template-columns: 1fr;
+  }
+
+  .smart-profile-settings-grid,
+  .smart-safety-grid,
+  .smart-language-settings-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .smart-safety-banner {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .autopilot-settings-grid,

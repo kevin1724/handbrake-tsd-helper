@@ -242,6 +242,8 @@
         <h1>
           {% if settings_page == 'ai' %}
             AI &amp; API Keys
+          {% elif settings_page == 'smart' %}
+            Smart Preset Settings
           {% elif settings_page == 'beta' %}
             Library Settings
           {% elif settings_page == 'nodes' %}
@@ -253,12 +255,14 @@
         <p class="page-subtitle">
           {% if settings_page == 'ai' %}
             Connect Gemini or OpenAI to the Size Wizard, test the connection, and see exactly how the advisor is used.
+          {% elif settings_page == 'smart' %}
+            Set preservation rules once, then use them for movies, complete seasons, Autopilot, and linked devices.
           {% elif settings_page == 'beta' %}
             Library folders, posters, and incremental media discovery.
           {% elif settings_page == 'nodes' %}
             Pair workers, choose local or remote transfer modes, and review node status.
           {% else %}
-            AI API keys, encoding defaults, presets, UI behavior, events, and storage history.
+            Encoding defaults, presets, UI behavior, events, and storage history.
           {% endif %}
         </p>
       </div>
@@ -268,6 +272,10 @@
       <a class="settings-section-link {% if settings_page == 'main' %}settings-section-link-active{% endif %}" href="/settings">
         <strong>General</strong>
         <span>Encoding, presets, events, storage</span>
+      </a>
+      <a class="settings-section-link {% if settings_page == 'smart' %}settings-section-link-active{% endif %}" href="/settings/smart">
+        <strong>Smart Presets</strong>
+        <span>Resolution, frame, tracks, audio safety</span>
       </a>
       <a class="settings-section-link {% if settings_page == 'ai' %}settings-section-link-active{% endif %}" href="/settings/ai">
         <strong>AI &amp; API Keys</strong>
@@ -284,13 +292,13 @@
     </nav>
 
     {% if settings_page == 'main' %}
-    <a class="settings-ai-shortcut" href="#ai-api-keys">
+    <a class="settings-ai-shortcut" href="/settings/ai">
       <span>
         <small>SIZE WIZARD AI</small>
         <strong>Looking for the Gemini or OpenAI API-key boxes?</strong>
-        <span>They are now directly below, with a guided setup and connection test.</span>
+        <span>They now live in one dedicated section with a guided setup and connection test.</span>
       </span>
-      <b>Set up AI &darr;</b>
+      <b>Open AI settings &rarr;</b>
     </a>
     {% endif %}
 
@@ -456,6 +464,7 @@
     </div>
   </div>
 
+  {% if settings_page == 'ai' %}
   <div id="ai-api-keys" class="section-card settings-wide ai-settings-section">
     <div class="section-heading-row">
       <div>
@@ -529,6 +538,7 @@
     <div class="ai-privacy-note"><strong>What leaves your server:</strong> media probe facts such as resolution, duration, HDR, target size, selected track policy, and the question you type. Video, audio, subtitles, file contents, and API keys are never placed in the model prompt. Environment variables <code>GEMINI_API_KEY</code> and <code>OPENAI_API_KEY</code> take priority over saved keys.</div>
     <div class="button-row"><button id="testAiSettingsBtn" type="button">Save &amp; test selected provider</button><button id="saveAiSettingsBtn" class="ghost-btn" type="button">Save without testing</button><a class="button-link ghost-btn" href="/size_wizard">Open Size Wizard</a><span id="aiSettingsStatus" class="small" aria-live="polite"></span></div>
   </div>
+  {% endif %}
 
   <!-- ============================================================
        Global encoding settings
@@ -574,6 +584,102 @@
       <span id="settingsSaveStatus" class="small"></span>
     </div>
   </div>
+
+  {% if settings_page == 'smart' %}
+  <div class="section-card settings-wide smart-settings-section smart-safety-settings">
+    <div class="section-heading-row">
+      <div>
+        <div class="eyebrow">Smart Preset safety</div>
+        <h2>Protect the source before saving space</h2>
+        <p class="small">These are hard rules for Smart Preset jobs from Library, whole-season queues, Autopilot, linked nodes, and ByteSqueeze. Fine tuning cannot override a protection that is switched on.</p>
+      </div>
+      <span id="smartSafetyPill" class="node-pill node-pill-paired">Loading</span>
+    </div>
+
+    <div class="smart-safety-banner">
+      <div>
+        <strong>Preservation-first defaults</strong>
+        <span id="smartSafetySummary">Loading the saved Smart profile…</span>
+      </div>
+      <a class="button-link ghost-btn" href="/library">Open Library</a>
+    </div>
+
+    <div class="smart-profile-settings-grid">
+      <label for="smartSettingsGoal"><strong>Priority</strong>
+        <select id="smartSettingsGoal">
+          <option value="balanced">Balanced</option>
+          <option value="quality">Protect detail</option>
+          <option value="small">Save more space</option>
+          <option value="speed">Finish faster</option>
+          <option value="archive">Archive quality</option>
+        </select>
+      </label>
+      <label for="smartSettingsCompatibility"><strong>Playback compatibility</strong>
+        <select id="smartSettingsCompatibility">
+          <option value="broad">Broad / H.264 friendly</option>
+          <option value="modern">Modern / H.265</option>
+          <option value="maximum">Maximum compression</option>
+        </select>
+      </label>
+      <label for="smartSettingsHardware"><strong>Encoder hardware</strong>
+        <select id="smartSettingsHardware">
+          <option value="auto">Choose automatically</option>
+          <option value="software">Software quality</option>
+          <option value="qsv">Intel Quick Sync</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="smart-safety-grid">
+      <label class="smart-safety-option" for="smartNeverDownscale">
+        <input id="smartNeverDownscale" type="checkbox">
+        <span><strong>Never downscale or resize</strong><small>Locks every output to the source width and height, including TV episodes with tight size targets.</small></span>
+      </label>
+      <label class="smart-safety-option" for="smartKeepBlackBars">
+        <input id="smartKeepBlackBars" type="checkbox">
+        <span><strong>Keep black bars</strong><small>Disables automatic cropping so the complete source frame remains intact.</small></span>
+      </label>
+      <label class="smart-safety-option" for="smartKeepAspectRatio">
+        <input id="smartKeepAspectRatio" type="checkbox">
+        <span><strong>Keep the source aspect ratio</strong><small>Adds a display-aspect lock instead of letting the selected preset reshape the picture.</small></span>
+      </label>
+      <label class="smart-safety-option" for="smartNeverTranscodeAudio">
+        <input id="smartNeverTranscodeAudio" type="checkbox">
+        <span><strong>Never transcode audio</strong><small>Uses passthrough for every selected audio track. If the output container cannot carry a source codec, the encode fails instead of silently converting it.</small></span>
+      </label>
+      <label class="smart-safety-option" for="smartKeepAllAudioLanguages">
+        <input id="smartKeepAllAudioLanguages" type="checkbox">
+        <span><strong>Keep every audio language</strong><small>Removes the language filter and selects all source audio tracks.</small></span>
+      </label>
+      <label class="smart-safety-option" for="smartKeepAllSubtitleLanguages">
+        <input id="smartKeepAllSubtitleLanguages" type="checkbox">
+        <span><strong>Keep every subtitle language</strong><small>Removes the language filter and keeps all source subtitle tracks without burn-in.</small></span>
+      </label>
+    </div>
+
+    <div class="smart-language-settings-grid">
+      <label for="smartAudioLanguages"><strong>Audio languages when “keep every” is off</strong>
+        <input id="smartAudioLanguages" type="text" placeholder="eng, spa, jpn">
+        <span class="small">ISO language codes separated by commas.</span>
+      </label>
+      <label for="smartSubtitleLanguages"><strong>Subtitle languages when “keep every” is off</strong>
+        <input id="smartSubtitleLanguages" type="text" placeholder="eng, spa, jpn">
+        <span class="small">Leave blank to use no language filter.</span>
+      </label>
+      <label for="smartSettingsAudioStrategy"><strong>Audio conversion when passthrough is off</strong>
+        <select id="smartSettingsAudioStrategy">
+          <option value="copy">Original passthrough</option>
+          <option value="eac3_surround">E-AC3 5.1 at 640 kbps</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="row button-row" style="margin-top:14px;">
+      <button id="saveSmartSafetyBtn" type="button">Save Smart Preset protections</button>
+      <span id="smartSafetyStatus" class="small" aria-live="polite"></span>
+    </div>
+  </div>
+  {% endif %}
 
   <!-- ============================================================
        Preset files management
@@ -1074,6 +1180,127 @@
     let pendingFolderAdd = null;
     let clearGeminiKey = false;
     let clearOpenaiKey = false;
+    let smartSettingsProfile = {};
+
+    function smartLanguageList(value) {
+      return Array.from(new Set(String(value || "")
+        .toLowerCase()
+        .split(/[\s,;]+/)
+        .map((item) => item.trim())
+        .filter((item) => /^[a-z]{2,3}$/.test(item))))
+        .slice(0, 24);
+    }
+
+    function updateSmartSafetyControls() {
+      const neverDownscale = Boolean(document.getElementById("smartNeverDownscale")?.checked);
+      const keepBlackBars = Boolean(document.getElementById("smartKeepBlackBars")?.checked);
+      const keepAspect = Boolean(document.getElementById("smartKeepAspectRatio")?.checked);
+      const neverTranscode = Boolean(document.getElementById("smartNeverTranscodeAudio")?.checked);
+      const keepAllAudio = Boolean(document.getElementById("smartKeepAllAudioLanguages")?.checked);
+      const keepAllSubtitles = Boolean(document.getElementById("smartKeepAllSubtitleLanguages")?.checked);
+      const audioLanguages = document.getElementById("smartAudioLanguages");
+      const subtitleLanguages = document.getElementById("smartSubtitleLanguages");
+      const audioStrategy = document.getElementById("smartSettingsAudioStrategy");
+      if (audioLanguages) audioLanguages.disabled = keepAllAudio;
+      if (subtitleLanguages) subtitleLanguages.disabled = keepAllSubtitles;
+      if (audioStrategy) audioStrategy.disabled = neverTranscode;
+
+      const enabled = [neverDownscale, keepBlackBars, keepAspect, neverTranscode, keepAllAudio, keepAllSubtitles]
+        .filter(Boolean).length;
+      const pill = document.getElementById("smartSafetyPill");
+      if (pill) {
+        pill.textContent = `${enabled}/6 protected`;
+        pill.className = `node-pill ${enabled === 6 ? "node-pill-paired" : "node-pill-idle"}`;
+      }
+      const summary = document.getElementById("smartSafetySummary");
+      if (summary) {
+        summary.textContent = enabled === 6
+          ? "Source dimensions, frame, aspect ratio, languages, subtitles, and audio are locked."
+          : `${enabled} of 6 protections are active. Disabled protections may be changed by Smart planning or queue fine tuning.`;
+      }
+    }
+
+    function renderSmartSafetySettings(profile = {}) {
+      smartSettingsProfile = { ...profile };
+      const setValue = (id, value) => {
+        const input = document.getElementById(id);
+        if (input) input.value = value;
+      };
+      const setChecked = (id, value) => {
+        const input = document.getElementById(id);
+        if (input) input.checked = value !== false;
+      };
+      setValue("smartSettingsGoal", profile.goal || "balanced");
+      setValue("smartSettingsCompatibility", profile.compatibility || "modern");
+      setValue("smartSettingsHardware", profile.hardware || "auto");
+      setValue("smartSettingsAudioStrategy", profile.audio_strategy || "copy");
+      setValue("smartAudioLanguages", Array.isArray(profile.audio_languages) ? profile.audio_languages.join(", ") : "eng, spa");
+      setValue("smartSubtitleLanguages", Array.isArray(profile.subtitle_languages) ? profile.subtitle_languages.join(", ") : "eng, spa");
+      setChecked("smartNeverDownscale", profile.never_downscale);
+      setChecked("smartKeepBlackBars", profile.keep_black_bars);
+      setChecked("smartKeepAspectRatio", profile.keep_aspect_ratio);
+      setChecked("smartNeverTranscodeAudio", profile.never_transcode_audio);
+      setChecked("smartKeepAllAudioLanguages", profile.keep_all_audio_languages);
+      setChecked("smartKeepAllSubtitleLanguages", profile.keep_all_subtitle_languages);
+      updateSmartSafetyControls();
+    }
+
+    async function loadSmartSafetySettings() {
+      if (!document.getElementById("smartNeverDownscale")) return;
+      const status = document.getElementById("smartSafetyStatus");
+      try {
+        const response = await fetch("/api/smart_presets", { cache: "no-store" });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        renderSmartSafetySettings(data.profile || {});
+        if (status) status.textContent = "";
+      } catch (error) {
+        if (status) status.textContent = error.message || "Could not load Smart Preset protections.";
+      }
+    }
+
+    async function saveSmartSafetySettings() {
+      const button = document.getElementById("saveSmartSafetyBtn");
+      const status = document.getElementById("smartSafetyStatus");
+      const neverTranscode = Boolean(document.getElementById("smartNeverTranscodeAudio")?.checked);
+      const keepAllSubtitles = Boolean(document.getElementById("smartKeepAllSubtitleLanguages")?.checked);
+      const profile = {
+        ...smartSettingsProfile,
+        goal: document.getElementById("smartSettingsGoal")?.value || "balanced",
+        compatibility: document.getElementById("smartSettingsCompatibility")?.value || "modern",
+        hardware: document.getElementById("smartSettingsHardware")?.value || "auto",
+        audio_strategy: document.getElementById("smartSettingsAudioStrategy")?.value || "copy",
+        audio_languages: smartLanguageList(document.getElementById("smartAudioLanguages")?.value),
+        subtitle_languages: smartLanguageList(document.getElementById("smartSubtitleLanguages")?.value),
+        never_downscale: Boolean(document.getElementById("smartNeverDownscale")?.checked),
+        keep_black_bars: Boolean(document.getElementById("smartKeepBlackBars")?.checked),
+        keep_aspect_ratio: Boolean(document.getElementById("smartKeepAspectRatio")?.checked),
+        keep_all_audio_languages: Boolean(document.getElementById("smartKeepAllAudioLanguages")?.checked),
+        keep_all_subtitle_languages: keepAllSubtitles,
+        never_transcode_audio: neverTranscode,
+        preserve_audio: neverTranscode,
+        preserve_subtitles: keepAllSubtitles
+      };
+      try {
+        if (button) button.disabled = true;
+        if (status) status.textContent = "Saving protections…";
+        const response = await fetch("/api/smart_presets/profile", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ profile })
+        });
+        const data = await response.json();
+        if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
+        renderSmartSafetySettings(data.profile || profile);
+        if (status) status.textContent = "Saved. New Smart jobs will use these protections.";
+        if (window.appToast) appToast("Smart Preset protections saved.", "success");
+      } catch (error) {
+        if (status) status.textContent = error.message || "Could not save Smart Preset protections.";
+        if (window.appToast) appToast(error.message || "Could not save Smart Preset protections.", "error");
+      } finally {
+        if (button) button.disabled = false;
+      }
+    }
 
     function selectedAiProvider() {
       return document.querySelector('input[name="wizardAiProvider"]:checked')?.value || "local";
@@ -3174,6 +3401,21 @@
       loadMobileDevices();
       loadNodes();
       loadAiSettings();
+      loadSmartSafetySettings();
+
+      const saveSmartSafetyBtn = document.getElementById("saveSmartSafetyBtn");
+      if (saveSmartSafetyBtn) saveSmartSafetyBtn.onclick = saveSmartSafetySettings;
+      [
+        "smartNeverDownscale",
+        "smartKeepBlackBars",
+        "smartKeepAspectRatio",
+        "smartNeverTranscodeAudio",
+        "smartKeepAllAudioLanguages",
+        "smartKeepAllSubtitleLanguages"
+      ].forEach((id) => {
+        const input = document.getElementById(id);
+        if (input) input.onchange = updateSmartSafetyControls;
+      });
 
       const saveAiSettingsBtn = document.getElementById("saveAiSettingsBtn");
       if (saveAiSettingsBtn) saveAiSettingsBtn.onclick = saveAiSettings;
