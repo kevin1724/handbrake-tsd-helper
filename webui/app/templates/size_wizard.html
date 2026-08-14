@@ -2,9 +2,12 @@
 <html>
 <head>
   <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HandBrake TSD Helper - Size Wizard</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='v3.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='v3.js') }}" defer></script>
 
   <style>
     .wizard-page {
@@ -1020,7 +1023,7 @@
   </style>
 </head>
 
-<body class="size-wizard-page wizard-simple-mode">
+<body class="size-wizard-page wizard-simple-mode ui-{{ ui_version }}" data-ui-version="{{ ui_version }}" data-density="{{ ui_density }}" data-release="{{ app_release }}">
   <nav class="top-nav app-nav">
     <a href="/" class="app-brand">
       <span class="brand-mark">TSD</span>
@@ -1120,8 +1123,8 @@
           </select>
           <div class="help-text">Passthrough is exact. E-AC3 saves space and keeps surround sound.</div>
         </div>
-        <div class="smart-toggle">
-          <span>Always keep all matching<br><strong>English + Spanish audio and subtitles</strong></span>
+        <div id="smartProtectionSummary" class="smart-toggle">
+          <span><strong>Loading saved protections…</strong><br><a href="/settings/smart">Manage in Smart Presets</a></span>
         </div>
         <label class="smart-toggle"><input id="smartAutomation" type="checkbox"> Auto-pick after learning</label>
       </div>
@@ -2677,16 +2680,17 @@
 
     function smartProfileFromControls() {
       return {
+        ...(smartProfile || {}),
         id: "default",
         name: "My smart preset",
         goal: el("smartGoal")?.value || "balanced",
         compatibility: el("smartCompatibility")?.value || "modern",
         hardware: el("smartHardware")?.value || "auto",
         audio_strategy: el("smartAudioStrategy")?.value || "copy",
-        audio_languages: ["eng", "spa"],
-        subtitle_languages: ["eng", "spa"],
-        preserve_audio: true,
-        preserve_subtitles: true,
+        audio_languages: Array.isArray(smartProfile?.audio_languages) ? smartProfile.audio_languages : ["eng", "spa"],
+        subtitle_languages: Array.isArray(smartProfile?.subtitle_languages) ? smartProfile.subtitle_languages : ["eng", "spa"],
+        preserve_audio: smartProfile?.never_transcode_audio !== false,
+        preserve_subtitles: smartProfile?.keep_all_subtitle_languages !== false,
         automation_enabled: Boolean(el("smartAutomation")?.checked),
         minimum_feedback: smartProfile?.minimum_feedback || 2,
         confidence_threshold: smartProfile?.confidence_threshold || 0.72
@@ -2698,7 +2702,20 @@
       setValue("smartGoal", profile.goal || "balanced");
       setValue("smartCompatibility", profile.compatibility || "modern");
       setValue("smartHardware", profile.hardware || "auto");
-      setValue("smartAudioStrategy", profile.audio_strategy || (profile.preserve_audio === false ? "eac3_surround" : "copy"));
+      const audioLocked = profile.never_transcode_audio !== false;
+      setValue("smartAudioStrategy", audioLocked ? "copy" : (profile.audio_strategy || (profile.preserve_audio === false ? "eac3_surround" : "copy")));
+      if (el("smartAudioStrategy")) el("smartAudioStrategy").disabled = audioLocked;
+      const protectionSummary = el("smartProtectionSummary");
+      if (protectionSummary) {
+        const protections = [];
+        if (profile.never_downscale !== false) protections.push("source resolution");
+        if (profile.keep_black_bars !== false) protections.push("black bars");
+        if (profile.keep_aspect_ratio !== false) protections.push("aspect ratio");
+        if (profile.never_transcode_audio !== false) protections.push("audio passthrough");
+        if (profile.keep_all_audio_languages !== false) protections.push("all audio languages");
+        if (profile.keep_all_subtitle_languages !== false) protections.push("all subtitles");
+        protectionSummary.innerHTML = `<span><strong>${protections.length ? `Protected: ${protections.join(", ")}` : "No hard protections enabled"}</strong><br><a href="/settings/smart">Manage in Smart Presets</a></span>`;
+      }
       setChecked("smartAutomation", profile.automation_enabled === true);
     }
 

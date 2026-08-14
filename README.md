@@ -26,6 +26,29 @@ Completed output files are tagged with `-TSD`, short for "Transcoded", so the ap
 - Versioned mobile API with hashed tokens, refresh, read/control scopes, and device revocation
 - Safer cleanup behavior for failed or canceled jobs
 
+## V3 Beta
+
+V3 Beta is a full interface overhaul built around a cinema-operations workspace. It adds a persistent desktop sidebar, a phone-friendly bottom dock, a global command center (`Ctrl/Cmd+K` or `/`), faster Library search and queue actions, clearer Smart Preset surfaces, and a visible Source → Intent → Preview → Queue workflow in Size Wizard. The poster framework and encoding engine are unchanged.
+
+V2 Classic remains available while V3 is in beta. Open **Settings > Interface**, select **V2 Classic**, and save. For an immediate one-page fallback, add `?ui=v2` to any ByteSqueeze URL. The saved V3/V2 choice and comfortable/compact density are independent of encoding settings.
+
+The beta Docker tags are intentionally separate from `main` and `latest`:
+
+```bash
+docker pull kevina1724/handbrake-tsd-helper:beta
+docker pull kevina1724/handbrake-tsd-worker:beta
+```
+
+For Compose, layer the included beta override over the normal file so all mounts, devices, and environment settings stay the same:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.beta.yml pull hb-web
+docker compose -f docker-compose.yml -f docker-compose.beta.yml up -d hb-web
+
+docker compose -f docker-compose.worker.yml -f docker-compose.worker.beta.yml pull bytesqueeze-worker
+docker compose -f docker-compose.worker.yml -f docker-compose.worker.beta.yml up -d bytesqueeze-worker
+```
+
 ## Release 3.12 Autopilot Refresh
 
 The 3.12 experience is designed for set-it-up-and-let-it-run operation without making users hunt through Settings or giving automation unlimited control:
@@ -162,8 +185,10 @@ The wizard also includes an optional AI advisor. Open **Settings > AI & API Keys
 Smart Presets add a learning loop on top of that safe planner:
 
 - Choose the main goal, playback compatibility, hardware preference, and audio strategy
-- Always retain every matching English and Spanish audio and subtitle track
-- Copy original audio bit-for-bit, or save space with E-AC3 5.1 at 640 kbps while retaining surround playback
+- Configure preservation-first protections in **Settings → Smart Presets**; they apply to movies, episodes, seasons, Autopilot, linked nodes, and ByteSqueeze
+- Keep source resolution, black bars, and display aspect ratio so tight episode targets cannot silently become 720p
+- Keep every audio and subtitle language, or select an explicit language list
+- Require original audio passthrough, or opt into E-AC3 5.1 at 640 kbps when audio conversion is acceptable
 - Generate three source-aware candidates ranked by quality, savings, speed, compatibility, and prior feedback
 - Apply a candidate and inspect the same short HandBrake encode that a real job will use
 - Approve the preview or mark quality, size, speed, or compatibility concerns
@@ -185,6 +210,8 @@ The Library page scans the movie and show folders you map in Settings.
 - Complete title catalog plus recently added rails
 - Sort by likely storage savings
 - Filter by title, quality, type, and status
+- Generate a real matched-frame and side-by-side Smart encode preview without leaving the Library
+- Apply one-time Smart guardrails for resolution, compatibility, audio, subtitles, encoder, and size/detail balance
 - Queue movies, episodes, seasons, shows, or selected batches
 - Track show release dates and optionally auto-queue new episodes after their downloaded files become stable
 - Send jobs to local encoding or linked workers
@@ -313,8 +340,9 @@ encode.
 - Discovery: `GET /api/mobile/v1/discovery`
 - Pairing: `POST /api/mobile/v1/pair`
 - Token rotation: `POST /api/mobile/v1/token/refresh`
-- Read endpoints for status, jobs, nodes, events, library, and release calendar
+- Read endpoints for status, jobs, nodes, events, library, release calendar, and Library preview progress
 - Scoped queue, node-target, show-monitoring, and Autopilot controls
+- Matched Library preview frames, per-season Smart Queue actions, and transient tuning from the phone
 - Shared accurate-preview review and Smart Preset feedback from the phone
 - Primary home address plus an optional Tailscale/away address with automatic connection failover
 - Browser-admin controls for creating pairing codes and revoking devices

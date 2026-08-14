@@ -19,7 +19,7 @@ So we:
 2) extract *all* JSON values safely (brace/bracket matching)
 3) find the value that contains TitleList/Titles (sometimes nested)
 4) choose the best title (valid geometry + longest duration)
-5) if JSON still lacks geometry/duration, fall back to parsing text scan output
+5) if that shape changes or is incomplete, fall back to ffprobe and then a text scan
 
 
 Implementation notes:
@@ -396,30 +396,40 @@ def _extract_all_json_values(text: str):
 
 
 def _find_title_list(obj):
-    """Find a TitleList/Titles list in common HandBrake JSON shapes."""
+    """Find a title list across HandBrake versions and wrapper shapes."""
+    if isinstance(obj, list):
+        # Some builds emit the title array as the top-level JSON value rather
+        # than wrapping it in TitleList. Avoid treating unrelated arrays as
+        # titles by requiring at least one media-title field.
+        if any(
+            isinstance(item, dict)
+            and any(key in item for key in ("Duration", "Geometry", "Video", "Streams", "StreamList"))
+            for item in obj
+        ):
+            return obj
+        for item in obj:
+            found = _find_title_list(item)
+            if found is not None:
+                return found
+        return None
+
     if not isinstance(obj, dict):
         return None
 
-    # Most common recent format
-    if isinstance(obj.get("TitleList"), list):
-        return obj["TitleList"]
-    if isinstance(obj.get("Titles"), list):
-        return obj["Titles"]
+    # Match key casing defensively; HandBrake-compatible builds do not all use
+    # the same capitalization.
+    for key, value in obj.items():
+        if str(key).replace("_", "").lower() in {"titlelist", "titles"} and isinstance(value, list):
+            return value
 
-    # Sometimes nested
-    scan = obj.get("Scan")
-    if isinstance(scan, dict):
-        if isinstance(scan.get("TitleList"), list):
-            return scan["TitleList"]
-        if isinstance(scan.get("Titles"), list):
-            return scan["Titles"]
-
-    # Sometimes nested under Result
-    res = obj.get("Result")
-    if isinstance(res, dict):
-        tl = _find_title_list(res)
-        if tl is not None:
-            return tl
+    # TitleSet, Scan, Result, and other wrappers have all appeared in scan
+    # output. Recursing through JSON containers is safer than maintaining a
+    # version-specific wrapper allow-list.
+    for value in obj.values():
+        if isinstance(value, (dict, list)):
+            found = _find_title_list(value)
+            if found is not None:
+                return found
 
     return None
 
@@ -613,7 +623,7 @@ def _ffprobe_media_fast(src_path: str):
         "-v", "error",
         "-select_streams", "v:0",
         "-show_entries",
-        "format=duration:stream=width,height,r_frame_rate,pix_fmt,color_space,color_transfer,color_primaries,side_data_list",
+        "format=duration:stream=duration,width,height,r_frame_rate,codec_name,pix_fmt,color_space,color_transfer,color_primaries,side_data_list",
         "-of", "json",
         src_path,
     ]
@@ -626,7 +636,7 @@ def _ffprobe_media_fast(src_path: str):
     streams = (j.get("streams") or [])
     v0 = streams[0] if streams else {}
 
-    duration_sec = float(fmt.get("duration") or 0.0)
+    duration_sec = float(fmt.get("duration") or v0.get("duration") or 0.0)
     width = int(v0.get("width") or 0)
     height = int(v0.get("height") or 0)
 
@@ -655,6 +665,7 @@ def _ffprobe_media_fast(src_path: str):
         "width": width,
         "height": height,
         "fps": fps or 24.0,
+        "video_codec": v0.get("codec_name") or None,
         "is_hdr": is_hdr,
         "hdr_reason": hdr_reason,
     }
@@ -718,6 +729,23 @@ def _probe_media_text_fallback(src_path: str):
     }
 
 
+def _probe_media_fallback(src_path: str, handbrake_reason: str):
+    """Recover from a changed or partial HandBrake scan without blocking planning."""
+    failures = [f"HandBrake JSON: {handbrake_reason}"]
+    try:
+        return _ffprobe_media_fast(src_path)
+    except Exception as exc:
+        failures.append(f"ffprobe: {exc}")
+
+    try:
+        return _probe_media_text_fallback(src_path)
+    except Exception as exc:
+        failures.append(f"HandBrake text scan: {exc}")
+
+    detail = "; ".join(str(item)[:500] for item in failures)
+    raise RuntimeError(f"Could not read this video's duration and dimensions. {detail}")
+
+
 def _probe_media(src_path):
     """
     Probe using HandBrakeCLI scan JSON.
@@ -733,18 +761,18 @@ def _probe_media(src_path):
     2) Extract all JSON values (objects/arrays)
     3) Find TitleList/Titles (possibly nested)
     4) Choose best title (valid geometry + longest duration)
-    5) If JSON exists but still missing duration/geometry, fall back to text scan
+    5) If JSON changed or is incomplete, try ffprobe and then a text scan
     """
     ok, out, err = _run_cmd(["HandBrakeCLI", "--scan", "--json", "-i", src_path])
 
     raw = ((out or "") + "\n" + (err or "")).strip()
     if not raw:
-        raise RuntimeError("HandBrake scan returned no output")
+        return _probe_media_fallback(src_path, "scan returned no output")
 
     json_blobs = _extract_all_json_values(raw)
     if not json_blobs:
         snippet = raw[:600].replace("\n", "\\n")
-        raise RuntimeError(f"HandBrake scan JSON incomplete (no JSON found). Output snippet: {snippet}")
+        return _probe_media_fallback(src_path, f"no JSON found; output: {snippet}")
 
     scan_obj = None
 
@@ -772,7 +800,7 @@ def _probe_media(src_path):
             break
 
     if scan_obj is None:
-        raise RuntimeError("HandBrake scan JSON missing TitleList/Titles")
+        return _probe_media_fallback(src_path, "no usable title list was present")
 
     title_list = _find_title_list(scan_obj) or []
 
@@ -797,14 +825,14 @@ def _probe_media(src_path):
             best = (dur, w, h, fps, codec)
 
     if not best:
-        return _probe_media_text_fallback(src_path)
+        return _probe_media_fallback(src_path, "the title list contained no usable titles")
 
     dur, w, h, fps, codec = best
     fps = fps or 24.0
 
     if dur <= 0 or w <= 0 or h <= 0:
         # JSON exists but doesn't expose these fields in our parseable shape
-        return _probe_media_text_fallback(src_path)
+        return _probe_media_fallback(src_path, "the selected title omitted duration or dimensions")
 
     hdr_reason = _hdr_filename_reason(src_path)
     return {
@@ -923,6 +951,13 @@ WIZARD_DEFAULT_OPTIONS = {
     "resolution_mode": "auto",
     "audio_mode": "copy",
     "smart_audio_strategy": "",
+    "smart_subtitle_strategy": "",
+    "smart_never_downscale": False,
+    "smart_keep_black_bars": False,
+    "smart_keep_aspect_ratio": False,
+    "smart_keep_all_audio_languages": False,
+    "smart_keep_all_subtitle_languages": False,
+    "smart_never_transcode_audio": False,
     "audio_bitrate": "auto",
     "audio_tracks": "all",
     "subtitle_mode": "all",
@@ -1538,7 +1573,7 @@ def _wizard_ai_choices(
     if smart_audio_strategy == "eac3_surround":
         out["audio_mode"] = "eac3"
         out["audio_bitrate"] = "640"
-        decisions.append("Encoding English and Spanish audio to E-AC3 5.1 at 640 kbps to save space while retaining surround sound.")
+        decisions.append("Encoding the selected audio tracks to E-AC3 5.1 at 640 kbps to save space while retaining surround sound.")
     elif smart_audio_strategy == "copy":
         out["audio_mode"] = "copy"
     else:
@@ -1547,9 +1582,7 @@ def _wizard_ai_choices(
     if smart_audio_strategy:
         out["audio_tracks"] = "all"
         out["ai_audio_scope"] = "all"
-        out["ai_subtitle_scope"] = "all"
-        out["audio_languages"] = ["eng", "spa"]
-        out["subtitle_languages"] = ["eng", "spa"]
+        out["ai_subtitle_scope"] = out.get("smart_subtitle_strategy") or "all"
 
     if out["audio_mode"] == "copy":
         out["audio_bitrate"] = "auto"
@@ -1792,7 +1825,7 @@ def _wizard_ai_plan_insights(
         _wizard_ai_add_recommendation(
             recommendations,
             "Surround retained",
-            "English and Spanish audio will use E-AC3 5.1 at 640 kbps for smaller surround-capable tracks.",
+            "Selected audio tracks will use E-AC3 5.1 at 640 kbps for smaller surround-capable tracks.",
             "success",
         )
     elif options.get("audio_mode") == "copy" and options.get("audio_tracks") == "all" and total_bitrate_kbps < 2500:
@@ -1946,6 +1979,32 @@ def _wizard_normalize_options(data: dict) -> dict:
                 WIZARD_SMART_AUDIO_STRATEGIES,
                 options["smart_audio_strategy"],
             ),
+            "smart_subtitle_strategy": _choice(
+                data.get("smart_subtitle_strategy"),
+                WIZARD_SUBTITLE_MODES | {""},
+                options["smart_subtitle_strategy"],
+            ),
+            "smart_never_downscale": _truthy(
+                data.get("smart_never_downscale"), options["smart_never_downscale"]
+            ),
+            "smart_keep_black_bars": _truthy(
+                data.get("smart_keep_black_bars"), options["smart_keep_black_bars"]
+            ),
+            "smart_keep_aspect_ratio": _truthy(
+                data.get("smart_keep_aspect_ratio"), options["smart_keep_aspect_ratio"]
+            ),
+            "smart_keep_all_audio_languages": _truthy(
+                data.get("smart_keep_all_audio_languages"),
+                options["smart_keep_all_audio_languages"],
+            ),
+            "smart_keep_all_subtitle_languages": _truthy(
+                data.get("smart_keep_all_subtitle_languages"),
+                options["smart_keep_all_subtitle_languages"],
+            ),
+            "smart_never_transcode_audio": _truthy(
+                data.get("smart_never_transcode_audio"),
+                options["smart_never_transcode_audio"],
+            ),
             "audio_languages": _wizard_languages(audio_language_value),
             "subtitle_languages": _wizard_languages(subtitle_language_value),
             "preset": preset,
@@ -1992,6 +2051,30 @@ def _wizard_normalize_options(data: dict) -> dict:
     return options
 
 
+def _enforce_smart_guardrails(options: dict) -> dict:
+    """Re-apply saved Smart protections after AI and one-time tuning choices."""
+    out = dict(options or {})
+    if out.get("smart_never_downscale"):
+        out["resolution_mode"] = "keep"
+    if out.get("smart_keep_black_bars"):
+        out["crop_mode"] = "none"
+    if out.get("smart_never_transcode_audio"):
+        out["smart_audio_strategy"] = "copy"
+        out["ai_copy_audio"] = True
+        out["audio_mode"] = "copy"
+        out["audio_bitrate"] = "auto"
+    if out.get("smart_keep_all_audio_languages"):
+        out["audio_languages"] = []
+        out["audio_tracks"] = "all"
+        out["ai_audio_scope"] = "all"
+    if out.get("smart_keep_all_subtitle_languages"):
+        out["subtitle_languages"] = []
+        out["subtitle_mode"] = "all"
+        out["ai_subtitle_scope"] = "all"
+        out["smart_subtitle_strategy"] = "all"
+    return out
+
+
 def _wizard_resolution_decision(options: dict, src_w: int, src_h: int, fps: float, video_kbps: float):
     mode = options["resolution_mode"]
     out_w, out_h = src_w, src_h
@@ -2031,8 +2114,15 @@ def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h
         _wizard_encoder_preset(options),
     ]
 
-    if (out_w, out_h) != (src_w, src_h):
+    if options.get("smart_never_downscale"):
+        # Explicit dimensions override any lower resolution limit embedded in
+        # the selected JSON preset, not just the Smart planner's own decision.
+        args += ["--width", str(int(src_w)), "--height", str(int(src_h))]
+    elif (out_w, out_h) != (src_w, src_h):
         args += ["--width", str(int(out_w)), "--height", str(int(out_h))]
+
+    if options.get("smart_keep_aspect_ratio"):
+        args.append("--keep-display-aspect")
 
     if options["framerate_mode"] in {"pfr", "cfr"}:
         args += ["-r", options["framerate"], f"--{options['framerate_mode']}"]
@@ -2059,6 +2149,13 @@ def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h
 
         if options["audio_mode"] == "copy":
             args += ["-E", "copy"]
+            if options.get("smart_never_transcode_audio"):
+                args += [
+                    "--audio-copy-mask",
+                    "aac,ac3,eac3,truehd,dts,dtshd,mp2,mp3,opus,vorbis,flac,alac",
+                    "--audio-fallback",
+                    "none",
+                ]
         elif options["audio_mode"] == "eac3":
             args += ["-E", "eac3", "-B", "640", "-6", "5point1"]
         else:
@@ -2145,6 +2242,7 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
         effective_preset,
         bool(settings.get("qsv_device_available", False)),
     )
+    options = _enforce_smart_guardrails(options)
     target_mb = _size_to_mb(options["target_size_value"], options["target_size_unit"])
     target_bytes = target_mb * 1024.0 * 1024.0
     total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
@@ -2466,10 +2564,15 @@ def _smart_profile_options(data: dict, profile: dict) -> dict:
         "modern": "h265",
         "maximum": "av1" if goal in {"small", "archive"} else "h265",
     }.get(compatibility, "h265")
-    audio_strategy = str(profile.get("audio_strategy") or "copy")
+    never_transcode_audio = bool(profile.get("never_transcode_audio", True))
+    audio_strategy = "copy" if never_transcode_audio else str(profile.get("audio_strategy") or "copy")
     if audio_strategy not in {"copy", "eac3_surround"}:
         audio_strategy = "copy"
     copy_audio = audio_strategy == "copy"
+    audio_languages = profile.get("audio_languages") if isinstance(profile.get("audio_languages"), list) else ["eng", "spa"]
+    subtitle_languages = profile.get("subtitle_languages") if isinstance(profile.get("subtitle_languages"), list) else ["eng", "spa"]
+    keep_all_audio_languages = bool(profile.get("keep_all_audio_languages", True))
+    keep_all_subtitle_languages = bool(profile.get("keep_all_subtitle_languages", True))
 
     options.update(
         {
@@ -2485,12 +2588,20 @@ def _smart_profile_options(data: dict, profile: dict) -> dict:
             "audio_mode": "copy" if copy_audio else "eac3",
             "audio_bitrate": "auto" if copy_audio else "640",
             "audio_tracks": "all",
-            "audio_languages": ["eng", "spa"],
+            "audio_languages": [] if keep_all_audio_languages else audio_languages,
             "subtitle_mode": "all",
-            "subtitle_languages": ["eng", "spa"],
+            "subtitle_languages": [] if keep_all_subtitle_languages else subtitle_languages,
+            "resolution_mode": "keep" if profile.get("never_downscale", True) else options.get("resolution_mode", "auto"),
+            "crop_mode": "none" if profile.get("keep_black_bars", True) else options.get("crop_mode", "auto"),
+            "smart_never_downscale": bool(profile.get("never_downscale", True)),
+            "smart_keep_black_bars": bool(profile.get("keep_black_bars", True)),
+            "smart_keep_aspect_ratio": bool(profile.get("keep_aspect_ratio", True)),
+            "smart_keep_all_audio_languages": keep_all_audio_languages,
+            "smart_keep_all_subtitle_languages": keep_all_subtitle_languages,
+            "smart_never_transcode_audio": never_transcode_audio,
         }
     )
-    return options
+    return _enforce_smart_guardrails(options)
 
 
 def _smart_candidate_definitions(profile: dict) -> list[dict]:
@@ -2563,15 +2674,55 @@ def _smart_objective_score(plan: dict, profile: dict, fastest_eta: float) -> tup
     return score, reason
 
 
+def _normalize_smart_tuning(value) -> dict:
+    """Normalize transient Library overrides without changing the saved Smart profile."""
+    raw = value if isinstance(value, dict) else {}
+    tuning = {}
+    choices = {
+        "goal": WIZARD_AI_GOALS,
+        "compatibility": {"broad", "modern", "maximum"},
+        "hardware": WIZARD_AI_HARDWARE,
+        "resolution_mode": WIZARD_RESOLUTION_MODES,
+        "audio_strategy": {"copy", "eac3_surround"},
+        "subtitle_mode": WIZARD_SUBTITLE_MODES,
+    }
+    for key, allowed in choices.items():
+        candidate = str(raw.get(key) or "").strip().lower()
+        if candidate in allowed:
+            tuning[key] = candidate
+    try:
+        target_scale = float(raw.get("target_scale") or 1.0)
+    except (TypeError, ValueError):
+        target_scale = 1.0
+    tuning["target_scale"] = round(max(0.70, min(1.30, target_scale)), 2)
+    return tuning
+
+
 def _smart_recommendation(data: dict, *, require_automation_ready: bool = False) -> dict:
     """Build and rank three safe plans for one source."""
+    data = dict(data or {})
     state = load_smart_preset_state()
-    profile = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    profile = dict(state.get("profile")) if isinstance(state.get("profile"), dict) else {}
     learning = smart_learning_status(state)
+    tuning = _normalize_smart_tuning(data.get("smart_tuning"))
+
+    for key in ("goal", "compatibility", "hardware", "audio_strategy"):
+        if tuning.get(key):
+            profile[key] = tuning[key]
 
     base_options = _smart_profile_options(data, profile)
+    if tuning.get("resolution_mode"):
+        base_options["resolution_mode"] = tuning["resolution_mode"]
+    if tuning.get("subtitle_mode"):
+        base_options["subtitle_mode"] = tuning["subtitle_mode"]
+        base_options["ai_subtitle_scope"] = tuning["subtitle_mode"]
+        base_options["smart_subtitle_strategy"] = tuning["subtitle_mode"]
+    base_options = _enforce_smart_guardrails(base_options)
     baseline = _wizard_plan({**data, **base_options}, probe_func=_probe_media, preview=False)
-    target_mb = max(1.0, float(baseline.get("inputs", {}).get("target_mb") or 1.0))
+    target_mb = max(
+        1.0,
+        float(baseline.get("inputs", {}).get("target_mb") or 1.0) * float(tuning.get("target_scale") or 1.0),
+    )
     plans = []
     errors = []
     for definition in _smart_candidate_definitions(profile):
@@ -2645,6 +2796,7 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
     return {
         "profile": profile,
         "learning": learning,
+        "tuning": tuning,
         "recommended_id": candidates[0]["id"],
         "auto_apply": context_auto_ready,
         "candidates": candidates,
@@ -2658,8 +2810,12 @@ def _create_smart_job(
     *,
     require_automation_ready: bool = False,
     automation_source: str = "smart_preset",
+    tuning: dict | None = None,
 ) -> tuple[str, dict]:
-    recommendation = _smart_recommendation({"src": src, "preset": "auto"}, require_automation_ready=require_automation_ready)
+    recommendation = _smart_recommendation(
+        {"src": src, "preset": "auto", "smart_tuning": tuning or {}},
+        require_automation_ready=require_automation_ready,
+    )
     plan = recommendation.pop("selected_plan")
     recommended_id = recommendation.get("recommended_id")
     feedback_context = smart_feedback_context(plan, str(recommended_id or "balanced"))
@@ -2719,7 +2875,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.12.0"
+APP_RELEASE = "3.14.0-beta.1"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -5333,13 +5489,13 @@ def _infer_controller_url_for_worker(worker_url: str = "") -> str:
     return f"{_request_scheme()}://{local_host}{port_text}"
 
 
-def _queue_local_paths(raw_paths, preset: str) -> tuple[int, list[dict]]:
+def _queue_local_paths(raw_paths, preset: str, smart_tuning: dict | None = None) -> tuple[int, list[dict]]:
     if isinstance(raw_paths, str):
         raw_paths = [raw_paths]
     if not isinstance(raw_paths, list):
         raw_paths = []
     preset = str(preset or "auto").strip().lower()
-    if preset not in {"auto", "1080", "4k"}:
+    if preset not in {"auto", "1080", "4k", "smart"}:
         preset = "auto"
 
     seen = set()
@@ -5364,6 +5520,15 @@ def _queue_local_paths(raw_paths, preset: str) -> tuple[int, list[dict]]:
             continue
         effective = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
         to_create.append((src, effective))
+    if preset == "smart":
+        count = 0
+        for src, _effective in to_create:
+            try:
+                _create_smart_job(src, tuning=smart_tuning, automation_source="library_smart")
+                count += 1
+            except Exception as exc:
+                skipped.append({"path": src, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
+        return count, skipped
     return int(create_jobs_batch(to_create) or 0), skipped
 
 
@@ -5412,10 +5577,10 @@ def _node_preset_bundle(preset_key: str) -> dict | None:
         return None
 
 
-def _node_queue_plan(src: str, requested_preset: str) -> dict:
+def _node_queue_plan(src: str, requested_preset: str, smart_tuning: dict | None = None) -> dict:
     requested = str(requested_preset or "auto").strip().lower()
     if requested == "smart":
-        recommendation = _smart_recommendation({"src": src, "preset": "auto"})
+        recommendation = _smart_recommendation({"src": src, "preset": "auto", "smart_tuning": smart_tuning or {}})
         plan = recommendation.get("selected_plan") or {}
         options = plan.get("options") if isinstance(plan.get("options"), dict) else {}
         estimates = plan.get("estimates") if isinstance(plan.get("estimates"), dict) else {}
@@ -5434,7 +5599,10 @@ def _node_queue_plan(src: str, requested_preset: str) -> dict:
                 "audio_languages": options.get("audio_languages"),
                 "subtitle_languages": options.get("subtitle_languages"),
                 "smart_preset": True,
+                "smart_profile_id": "default",
                 "smart_candidate_id": recommendation.get("recommended_id"),
+                "smart_feedback_context": smart_feedback_context(plan, str(recommendation.get("recommended_id") or "balanced")),
+                "automation_source": "library_smart",
             },
         }
     effective = guess_preset_from_filename(os.path.basename(src)) if requested == "auto" else requested
@@ -5824,6 +5992,25 @@ def _flatten_args(arg_list):
 def register_routes(app):
     """Attach all routes to the given Flask app."""
 
+    @app.context_processor
+    def inject_interface_context():
+        """Expose the switchable V3 beta shell to every rendered page."""
+        settings = load_settings()
+        requested = str(request.args.get("ui") or "").strip().lower()
+        saved = str(settings.get("ui_version") or "v3").strip().lower()
+        ui_version = requested if requested in {"v2", "v3"} else saved
+        if ui_version not in {"v2", "v3"}:
+            ui_version = "v3"
+        density = str(settings.get("ui_density") or "comfortable").strip().lower()
+        if density not in {"comfortable", "compact"}:
+            density = "comfortable"
+        return {
+            "ui_version": ui_version,
+            "ui_density": density,
+            "ui_release_label": "V3 Beta",
+            "app_release": APP_RELEASE,
+        }
+
     # -------------- cancel preview -----------
 
     @app.route("/wizard_preview_cancel", methods=["POST"])
@@ -6120,7 +6307,11 @@ def register_routes(app):
             count = 0
             for src, _effective in to_create:
                 try:
-                    _create_smart_job(src)
+                    _create_smart_job(
+                        src,
+                        tuning=data.get("smart_tuning"),
+                        automation_source="library_smart",
+                    )
                     count += 1
                 except Exception as exc:
                     skipped.append({"path": src, "reason": f"smart preset planning failed: {exc}"})
@@ -6233,7 +6424,7 @@ def register_routes(app):
     def settings_page(settings_page="main"):
         """Render the settings page (global app settings)."""
         settings_page = str(settings_page or "main").strip().lower()
-        if settings_page not in {"main", "automation", "ai", "beta", "nodes"}:
+        if settings_page not in {"main", "automation", "smart", "ai", "beta", "nodes"}:
             abort(404)
         if settings_page == "automation":
             return redirect("/autopilot", code=302)
@@ -6568,7 +6759,11 @@ def register_routes(app):
         if preset == "smart":
             for src in queueable:
                 try:
-                    _create_smart_job(src)
+                    _create_smart_job(
+                        src,
+                        tuning=data.get("smart_tuning"),
+                        automation_source="mobile_library_smart",
+                    )
                     queued += 1
                 except Exception as exc:
                     skipped.append({"path": src, "reason": f"smart preset planning failed: {exc}"})
@@ -7186,7 +7381,7 @@ def register_routes(app):
             return jsonify(error="missing paths"), 400
 
         if mode == "local":
-            count, skipped = _queue_local_paths(paths, preset)
+            count, skipped = _queue_local_paths(paths, preset, data.get("smart_tuning"))
             return jsonify(ok=True, target="local", count=count, skipped=skipped)
 
         selected = None
@@ -7277,7 +7472,7 @@ def register_routes(app):
                 continue
 
             try:
-                plan = _node_queue_plan(src, preset)
+                plan = _node_queue_plan(src, preset, data.get("smart_tuning"))
             except Exception as exc:
                 skipped.append({"path": src, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
                 continue
@@ -7337,7 +7532,7 @@ def register_routes(app):
                     remaining_result_skipped.append(item)
                     continue
                 try:
-                    retry_plan = _node_queue_plan(original_path, preset)
+                    retry_plan = _node_queue_plan(original_path, preset, data.get("smart_tuning"))
                 except Exception as exc:
                     remaining_result_skipped.append({"path": original_path, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
                     continue
@@ -7953,6 +8148,125 @@ def register_routes(app):
                     os.rmdir(tmpdir)
                 except Exception:
                     pass
+
+    def _start_library_smart_preview(data: dict | None = None, *, actor: str = "web") -> dict:
+        """Start a real Smart Preset comparison for one Library source."""
+        data = data if isinstance(data, dict) else {}
+        src = str(data.get("src") or "").strip()
+        if not src or not os.path.isfile(src):
+            raise ValueError("The selected Library file is no longer available.")
+        if not is_allowed_path(src):
+            raise ValueError("The selected file is outside the mapped Library folders.")
+        if not src.lower().endswith(VIDEO_EXTS):
+            raise ValueError("The selected Library item is not a supported video file.")
+
+        recommendation = _smart_recommendation(
+            {
+                "src": src,
+                "preset": "auto",
+                "smart_tuning": data.get("smart_tuning") or {},
+            }
+        )
+        plan = recommendation.pop("selected_plan")
+        candidate_id = str(recommendation.get("recommended_id") or "balanced")
+        candidate = next(
+            (row for row in recommendation.get("candidates") or [] if row.get("id") == candidate_id),
+            (recommendation.get("candidates") or [{}])[0],
+        )
+        preview_data = {
+            "src": src,
+            **_wizard_public_options(plan.get("options") or {}),
+            "target_size_auto": False,
+            "target_size_value": float((plan.get("inputs") or {}).get("target_mb") or 1.0),
+            "target_size_unit": "MB",
+            "smart_candidate_id": candidate_id,
+            "accurate_preview_layout": "side_by_side",
+        }
+        preview_id = f"library_{uuid.uuid4().hex}"
+        _kill_preview_by_id(preview_id)
+        _preview_set_task(
+            preview_id,
+            state="queued",
+            progress=0.0,
+            message="Queued Library Smart preview.",
+            result=None,
+            error="",
+        )
+        thread = threading.Thread(
+            target=_run_accurate_preview_task,
+            args=(preview_id, preview_data),
+            name=f"library-preview-{preview_id[-8:]}",
+            daemon=True,
+        )
+        thread.start()
+        title = os.path.splitext(os.path.basename(src))[0]
+        log_event(
+            "library_preview_started",
+            f"{actor} started a Smart Preset preview for {title}.",
+            level="info",
+        )
+        return {
+            "preview_id": preview_id,
+            "title": title,
+            "candidate_id": candidate_id,
+            "candidate_name": candidate.get("name") or candidate_id,
+            "candidate_summary": candidate.get("summary") or "",
+            "tuning": recommendation.get("tuning") or {},
+        }
+
+    def _library_preview_status(preview_id: str) -> dict:
+        clean_id = re.sub(r"[^a-zA-Z0-9_-]", "", str(preview_id or ""))
+        if not clean_id or not clean_id.startswith("library_"):
+            raise KeyError("preview not found")
+        row = _preview_get_task(clean_id)
+        if not row:
+            raise KeyError("preview not found")
+        return row
+
+    @app.route("/api/library/preview", methods=["POST"])
+    def library_preview_start_api():
+        try:
+            preview = _start_library_smart_preview(
+                request.get_json(silent=True) or {},
+                actor="Web Library",
+            )
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except Exception as exc:
+            return jsonify(error=f"Could not start Library preview: {exc}"), 500
+        return jsonify(ok=True, preview=preview), 202
+
+    @app.route("/api/library/preview/<preview_id>")
+    def library_preview_status_api(preview_id):
+        try:
+            return jsonify(ok=True, preview=_library_preview_status(preview_id))
+        except KeyError:
+            return jsonify(error="preview not found"), 404
+
+    @app.route("/api/mobile/v1/library/preview", methods=["POST"])
+    def mobile_library_preview_start_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        try:
+            preview = _start_library_smart_preview(
+                request.get_json(silent=True) or {},
+                actor=str(device.get("name") or "ByteSqueeze"),
+            )
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except Exception as exc:
+            return jsonify(error=f"Could not start Library preview: {exc}"), 500
+        return jsonify(ok=True, preview=preview), 202
+
+    @app.route("/api/mobile/v1/library/preview/<preview_id>")
+    def mobile_library_preview_status_api(preview_id):
+        if not _authenticated_mobile("read"):
+            return jsonify(error="unauthorized mobile device"), 401
+        try:
+            return jsonify(ok=True, preview=_library_preview_status(preview_id))
+        except KeyError:
+            return jsonify(error="preview not found"), 404
 
     def _start_autopilot_review(data: dict | None = None, *, actor: str = "web") -> dict:
         data = data if isinstance(data, dict) else {}

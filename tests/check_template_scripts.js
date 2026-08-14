@@ -20,4 +20,14 @@ for (const name of templates) {
   });
 }
 
-console.log(`Checked ${checked} inline template scripts.`);
+for (const name of ["app.js", "v3.js"]) {
+  const file = path.join(__dirname, "..", "webui", "app", "static", name);
+  try {
+    new Function(fs.readFileSync(file, "utf8"));
+    checked += 1;
+  } catch (error) {
+    throw new Error(`${name}: ${error.message}`);
+  }
+}
+
+console.log(`Checked ${checked} template and shared scripts.`);

@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HandBrake TSD Helper - Autopilot</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='v3.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='v3.js') }}" defer></script>
   <style>
     .auto-shell{max-width:1500px;margin:0 auto}.auto-hero{display:flex;align-items:flex-end;justify-content:space-between;gap:20px;padding:24px 3px 18px}.auto-hero h1{margin:4px 0 6px;font-size:clamp(30px,4vw,45px);letter-spacing:-.04em}.auto-hero p{max-width:720px;margin:0;color:rgba(229,229,229,.65)}
     .autopilot-page [hidden]{display:none!important}
@@ -20,7 +22,7 @@
     @media(max-width:1100px){.auto-layout{grid-template-columns:1fr}.auto-steps{grid-template-columns:1fr 1fr}.policy-grid{grid-template-columns:1fr 1fr}}@media(max-width:680px){.auto-hero{align-items:flex-start;flex-direction:column}.auto-overview{grid-template-columns:1fr}.auto-score{min-height:120px}.auto-checks,.auto-steps,.policy-grid,.policy-profiles,.training-frames{grid-template-columns:1fr}.policy-wide{grid-column:auto}.quality-row-head{display:block}.quality-actions>*{width:100%}}
   </style>
 </head>
-<body class="autopilot-page">
+<body class="autopilot-page ui-{{ ui_version }}" data-ui-version="{{ ui_version }}" data-density="{{ ui_density }}" data-release="{{ app_release }}">
   <nav class="top-nav app-nav">
     <a href="/" class="app-brand"><span class="brand-mark">TSD</span><span class="brand-copy"><strong>HandBrake TSD</strong><span>Autonomous media encoding</span></span></a>
     <div class="nav-links">

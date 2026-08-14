@@ -5,7 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>HandBrake TSD Helper - Home</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='styleui.css') }}">
+  <link rel="stylesheet" href="{{ url_for('static', filename='v3.css') }}">
   <script src="{{ url_for('static', filename='app.js') }}" defer></script>
+  <script src="{{ url_for('static', filename='v3.js') }}" defer></script>
   <style>
     .home-shell { max-width: 1500px; margin: 0 auto; }
     .home-hero { display:flex; align-items:flex-end; justify-content:space-between; gap:20px; padding:26px 4px 20px; }
@@ -46,7 +48,7 @@
     @media (max-width:650px) { .home-hero{align-items:flex-start;flex-direction:column}.home-metrics{grid-template-columns:1fr}.home-quick{grid-template-columns:1fr} }
   </style>
 </head>
-<body class="home-page">
+<body class="home-page ui-{{ ui_version }}" data-ui-version="{{ ui_version }}" data-density="{{ ui_density }}" data-release="{{ app_release }}">
   <nav class="top-nav app-nav">
     <a href="/" class="app-brand"><span class="brand-mark">TSD</span><span class="brand-copy"><strong>HandBrake TSD</strong><span>Autonomous media encoding</span></span></a>
     <div class="nav-links">

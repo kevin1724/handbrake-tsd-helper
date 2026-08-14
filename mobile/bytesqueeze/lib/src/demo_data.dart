@@ -1,6 +1,6 @@
 abstract final class DemoData {
   static Map<String, dynamic> get dashboard => {
-        'release': '3.12.0',
+        'release': '3.14.0-beta.1',
         'queue': {
           'paused': false,
           'summary': {
@@ -307,9 +307,15 @@ abstract final class DemoData {
           'goal': 'balanced',
           'compatibility': 'modern',
           'hardware': 'auto',
-          'audio_strategy': 'eac3_surround',
+          'audio_strategy': 'copy',
           'audio_languages': ['eng', 'spa'],
           'subtitle_languages': ['eng', 'spa'],
+          'never_downscale': true,
+          'keep_black_bars': true,
+          'keep_aspect_ratio': true,
+          'never_transcode_audio': true,
+          'keep_all_audio_languages': true,
+          'keep_all_subtitle_languages': true,
           'automation_enabled': true,
         },
         'learning': {

@@ -23,6 +23,11 @@ SETTINGS_FILE = (DATA_DIR.rstrip("/") + "/settings.json")
 
 # Default values for all settings
 DEFAULT_SETTINGS = {
+    # Interface generation. V3 is the beta default, while V2 remains a fully
+    # supported fallback that can be selected from Settings or with ?ui=v2.
+    "ui_version": "v3",
+    "ui_density": "comfortable",
+
     # HandBrake threads (0 = auto / HandBrake default)
     "hb_threads": 0,
 
@@ -191,6 +196,12 @@ def load_settings() -> dict:
         data = _ensure_dict(data)
         merged = DEFAULT_SETTINGS.copy()
         merged.update(data)
+        merged["ui_version"] = str(merged.get("ui_version") or "v3").strip().lower()
+        if merged["ui_version"] not in {"v2", "v3"}:
+            merged["ui_version"] = "v3"
+        merged["ui_density"] = str(merged.get("ui_density") or "comfortable").strip().lower()
+        if merged["ui_density"] not in {"comfortable", "compact"}:
+            merged["ui_density"] = "comfortable"
         merged["beta_media_folders"] = _normalize_beta_media_folders(merged.get("beta_media_folders"))
         _settings_cache = merged
         return merged
@@ -304,6 +315,16 @@ def _save_settings_unlocked(new_values: dict) -> dict:
     if queue_ui_mode not in {"buttons", "drag_drop"}:
         queue_ui_mode = "buttons"
     base["queue_ui_mode"] = queue_ui_mode
+
+    # ------------------------------------------------------------------
+    # Interface generation and density
+    # ------------------------------------------------------------------
+    ui_version = str(new_values.get("ui_version", base.get("ui_version", "v3")) or "v3").strip().lower()
+    base["ui_version"] = ui_version if ui_version in {"v2", "v3"} else "v3"
+    ui_density = str(
+        new_values.get("ui_density", base.get("ui_density", "comfortable")) or "comfortable"
+    ).strip().lower()
+    base["ui_density"] = ui_density if ui_density in {"comfortable", "compact"} else "comfortable"
 
     # ------------------------------------------------------------------
     # Poster metadata credentials

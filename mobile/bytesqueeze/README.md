@@ -6,7 +6,8 @@ ByteSqueeze is the Flutter remote-control app for HandBrake TSD Helper.
 - Secure one-time pairing and refreshable bearer sessions
 - Content-first dashboard with no persistent branded toolbar
 - Complete movie/show catalog, TMDb-first artwork with no-key fallback, upcoming episode calendar,
-  node-aware queueing, guided Autopilot preview training, Smart Presets,
+  friendly savings/HDR/tracked filters, movie and season Smart Queue guardrails,
+  real Library comparison previews, guided Autopilot preview training, preservation-first Smart Presets,
   storage, and events
 - Automatic switching between a primary home URL and optional Tailscale/away URL
 - All transcoding remains on the Docker-hosted TSD controller and workers
@@ -31,6 +32,10 @@ accurate preview, compare the original and proposed frames, then approve it or
 choose what needs improvement. Reviews made on the phone and web dashboard feed
 the same local Smart Preset profile.
 
+Smart Preset protections are editable from both **Settings → Smart Presets** on the web and the
+phone. They can lock source resolution, black bars, display aspect ratio, every
+audio/subtitle language, and audio passthrough across full-season queues.
+
 ## Android package
 
 `com.kevina1724.bytesqueeze`
@@ -45,7 +50,8 @@ app-store workflow rather than committing them to the source tree.
 Pushing a `bytesqueeze-v*` tag, or manually running the **Publish ByteSqueeze
 Android** GitHub workflow with a release tag, runs analysis and tests, builds the
 release APK, creates its SHA-256 checksum, and attaches both files to the GitHub
-release.
+release. Versions containing a prerelease suffix such as `-beta.1` are published
+as GitHub prereleases and do not replace the latest stable download.
 
 ## iOS
 

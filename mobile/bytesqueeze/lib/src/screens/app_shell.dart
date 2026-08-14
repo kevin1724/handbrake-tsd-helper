@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
 import '../theme.dart';
+import '../widgets/common.dart';
 import 'automation_screen.dart';
 import 'dashboard_screen.dart';
 import 'jobs_screen.dart';
@@ -17,7 +18,7 @@ class AppShell extends StatelessWidget {
     NavigationDestination(
         icon: Icon(Icons.space_dashboard_outlined),
         selectedIcon: Icon(Icons.space_dashboard_rounded),
-        label: 'Home'),
+        label: 'Overview'),
     NavigationDestination(
         icon: Icon(Icons.video_library_outlined),
         selectedIcon: Icon(Icons.video_library_rounded),
@@ -25,11 +26,11 @@ class AppShell extends StatelessWidget {
     NavigationDestination(
         icon: Icon(Icons.motion_photos_on_outlined),
         selectedIcon: Icon(Icons.motion_photos_on_rounded),
-        label: 'Jobs'),
+        label: 'Queue'),
     NavigationDestination(
         icon: Icon(Icons.auto_awesome_outlined),
         selectedIcon: Icon(Icons.auto_awesome_rounded),
-        label: 'Autopilot'),
+        label: 'Automate'),
     NavigationDestination(
         icon: Icon(Icons.more_horiz_rounded),
         selectedIcon: Icon(Icons.apps_rounded),
@@ -76,6 +77,10 @@ class AppShell extends StatelessWidget {
                             selectedIndex: controller.selectedTab,
                             onDestinationSelected: controller.selectTab,
                             labelType: NavigationRailLabelType.all,
+                            leading: const Padding(
+                              padding: EdgeInsets.only(bottom: 18),
+                              child: BrandMark(size: 42, showName: false),
+                            ),
                             destinations: _destinations
                                 .map((destination) => NavigationRailDestination(
                                       icon: destination.icon,
@@ -103,7 +108,7 @@ class AppShell extends StatelessWidget {
           : SafeArea(
               minimum: const EdgeInsets.fromLTRB(12, 0, 12, 10),
               child: ClipRRect(
-                borderRadius: BorderRadius.circular(26),
+                borderRadius: BorderRadius.circular(19),
                 child: NavigationBar(
                   selectedIndex: controller.selectedTab,
                   onDestinationSelected: controller.selectTab,

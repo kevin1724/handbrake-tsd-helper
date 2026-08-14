@@ -1,0 +1,3 @@
+services:
+  bytesqueeze-worker:
+    image: kevina1724/handbrake-tsd-worker:beta

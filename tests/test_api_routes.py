@@ -78,13 +78,17 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.12.0")
+        self.assertEqual(status.get_json()["release"], "3.14.0-beta.1")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
         library_page = self.client.get("/library")
         self.assertEqual(library_page.status_code, 200)
-        self.assertIn(b"Your complete media catalog", library_page.data)
+        self.assertIn(b"From Library to queue in three steps", library_page.data)
+        self.assertIn(b"Smart Queue", library_page.data)
+        self.assertIn(b"Fine tune queue", library_page.data)
+        self.assertIn(b"Real encode preview", library_page.data)
+        self.assertIn(b'id="quickFilterSelect"', library_page.data)
         home_page = self.client.get("/")
         self.assertEqual(home_page.status_code, 200)
         self.assertIn(b"Everything important, at a glance", home_page.data)
@@ -110,6 +114,94 @@ class ApiRouteSmokeTests(unittest.TestCase):
             )
         finally:
             app_jobs.jobs.pop(job_id, None)
+
+    def test_v3_interface_can_fall_back_to_v2_without_touching_app_behavior(self):
+        original = self.client.get("/api/settings").get_json()["settings"]
+        try:
+            saved = self.client.post(
+                "/api/settings",
+                json={"ui_version": "v3", "ui_density": "comfortable"},
+            )
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(saved.get_json()["settings"]["ui_version"], "v3")
+
+            v3_page = self.client.get("/")
+            self.assertEqual(v3_page.status_code, 200)
+            self.assertIn(b'class="home-page ui-v3"', v3_page.data)
+            self.assertIn(b'data-density="comfortable"', v3_page.data)
+            self.assertIn(b'/static/v3.css', v3_page.data)
+            self.assertIn(b'/static/v3.js', v3_page.data)
+
+            temporary_v2 = self.client.get("/?ui=v2")
+            self.assertIn(b'class="home-page ui-v2"', temporary_v2.data)
+            self.assertEqual(
+                self.client.get("/api/settings").get_json()["settings"]["ui_version"],
+                "v3",
+            )
+
+            saved_v2 = self.client.post(
+                "/api/settings",
+                json={"ui_version": "v2", "ui_density": "compact"},
+            )
+            self.assertEqual(saved_v2.status_code, 200)
+            classic_library = self.client.get("/library")
+            self.assertIn(b'class="beta-page ui-v2"', classic_library.data)
+            self.assertIn(b'data-density="compact"', classic_library.data)
+
+            settings_page = self.client.get("/settings")
+            self.assertIn(b"V3 Beta", settings_page.data)
+            self.assertIn(b"V2 Classic", settings_page.data)
+            self.assertIn(b'name="uiVersion"', settings_page.data)
+
+            temporary_v3 = self.client.get("/library?ui=v3")
+            self.assertIn(b'class="beta-page ui-v3"', temporary_v3.data)
+        finally:
+            self.client.post(
+                "/api/settings",
+                json={
+                    "ui_version": original.get("ui_version", "v3"),
+                    "ui_density": original.get("ui_density", "comfortable"),
+                },
+            )
+
+    def test_library_local_smart_batch_keeps_tuning_for_every_file(self):
+        paths = []
+        for episode in range(1, 4):
+            path = os.path.join(TEST_MEDIA, f"Useful.Show.S01E{episode:02d}.mkv")
+            with open(path, "wb") as handle:
+                handle.write(b"0" * 256)
+            paths.append(path)
+
+        tuning = {
+            "goal": "small",
+            "resolution_mode": "1080",
+            "hardware": "software",
+            "audio_strategy": "copy",
+            "subtitle_mode": "all",
+            "target_scale": 0.85,
+        }
+        calls = []
+
+        def fake_create_smart_job(src, **kwargs):
+            calls.append((src, kwargs))
+            return f"smart-{len(calls)}", {"recommended_id": "compact"}
+
+        with patch("webui.app.routes._create_smart_job", side_effect=fake_create_smart_job):
+            response = self.client.post(
+                "/api/nodes/dispatch",
+                json={
+                    "paths": paths,
+                    "preset": "smart",
+                    "mode": "local",
+                    "smart_tuning": tuning,
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(response.get_json()["count"], 3)
+        self.assertEqual([row[0] for row in calls], paths)
+        self.assertTrue(all(row[1]["tuning"] == tuning for row in calls))
+        self.assertTrue(all(row[1]["automation_source"] == "library_smart" for row in calls))
 
     def test_jobs_api_merges_durable_encode_history_and_summary(self):
         original_history_cutoff = app_jobs.history_cleared_before
@@ -412,9 +504,22 @@ class ApiRouteSmokeTests(unittest.TestCase):
         general_page = self.client.get("/settings")
         self.assertEqual(general_page.status_code, 200)
         self.assertIn(b"Looking for the Gemini or OpenAI API-key boxes?", general_page.data)
-        self.assertIn(b'id="ai-api-keys"', general_page.data)
+        self.assertIn(b'href="/settings/ai"', general_page.data)
+        self.assertNotIn(b'id="ai-api-keys"', general_page.data)
+        self.assertNotIn(b"Protect the source before saving space", general_page.data)
+
+        smart_page = self.client.get("/settings/smart")
+        self.assertEqual(smart_page.status_code, 200)
+        self.assertIn(b"Smart Preset Settings", smart_page.data)
+        self.assertIn(b"Protect the source before saving space", smart_page.data)
+        self.assertIn(b"Never downscale or resize", smart_page.data)
+        self.assertIn(b"Never transcode audio", smart_page.data)
+        self.assertNotIn(b'id="ai-api-keys"', smart_page.data)
         with open(os.path.join(PROJECT_ROOT, "webui", "app", "static", "styleui.css"), "r", encoding="utf-8") as handle:
-            self.assertNotIn("body.settings-subpage-main .ai-settings-section", handle.read())
+            settings_css = handle.read()
+        self.assertIn("body.settings-subpage-main .ai-settings-section", settings_css)
+        self.assertIn("body.settings-subpage-main .smart-settings-section", settings_css)
+        self.assertIn("body.settings-subpage-smart .main-settings-section", settings_css)
 
         wizard_page = self.client.get("/size_wizard")
         self.assertEqual(wizard_page.status_code, 200)
@@ -451,6 +556,45 @@ class ApiRouteSmokeTests(unittest.TestCase):
         advisor.assert_called_once()
 
         self.client.post("/api/ai/settings", json={"provider": "local", "clear_gemini_key": True})
+
+    def test_probe_media_uses_ffprobe_when_handbrake_json_has_no_title_list(self):
+        fallback = {
+            "duration_sec": 9960.5,
+            "width": 3840,
+            "height": 2160,
+            "fps": 23.976,
+            "video_codec": "hevc",
+            "is_hdr": True,
+            "hdr_reason": "ffprobe transfer characteristic",
+        }
+        with (
+            patch("webui.app.routes._run_cmd", return_value=(True, '{"Scan":{"Progress":1}}', "")),
+            patch("webui.app.routes._ffprobe_media_fast", return_value=fallback) as ffprobe,
+            patch("webui.app.routes._probe_media_text_fallback") as text_fallback,
+        ):
+            result = app_routes._probe_media("/media/example/Dune.Part.Two.2160p.mp4")
+
+        self.assertEqual(result, fallback)
+        ffprobe.assert_called_once_with("/media/example/Dune.Part.Two.2160p.mp4")
+        text_fallback.assert_not_called()
+
+    def test_probe_media_accepts_a_top_level_handbrake_title_array(self):
+        scan = [{
+            "Duration": {"Hours": 2, "Minutes": 46, "Seconds": 0},
+            "Geometry": {"Width": 3840, "Height": 2160},
+            "FrameRate": 23.976,
+            "Video": {"CodecName": "hevc"},
+        }]
+        with (
+            patch("webui.app.routes._run_cmd", return_value=(True, json.dumps(scan), "")),
+            patch("webui.app.routes._ffprobe_media_fast") as ffprobe,
+        ):
+            result = app_routes._probe_media("/media/example/movie.mp4")
+
+        self.assertEqual(result["width"], 3840)
+        self.assertEqual(result["height"], 2160)
+        self.assertEqual(result["duration_sec"], 9960.0)
+        ffprobe.assert_not_called()
 
     def test_gemini_and_openai_advisors_use_supported_json_shapes(self):
         class FakeResponse:
@@ -759,6 +903,13 @@ class ApiRouteSmokeTests(unittest.TestCase):
         control = self.client.post("/api/mobile/v1/queue", json={"paused": True}, headers=headers)
         self.assertEqual(control.status_code, 403)
 
+        preview = self.client.post(
+            "/api/mobile/v1/library/preview",
+            json={"src": os.path.join(TEST_MEDIA, "read-only.mkv")},
+            headers=headers,
+        )
+        self.assertEqual(preview.status_code, 403)
+
     def test_bytesqueeze_dashboard_library_and_control_surface(self):
         pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "control"})
         self.assertEqual(pairing_response.status_code, 200)
@@ -794,7 +945,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.12.0")
+        self.assertEqual(dashboard_payload["release"], "3.14.0-beta.1")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)
@@ -911,6 +1062,115 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(response.get_json()["calendar"]["count"], 1)
         self.assertTrue(response.get_json()["calendar"]["episodes"][0]["poster_url"].startswith("http://localhost/api/media/artwork/"))
 
+    def test_library_fine_tuning_is_transient_and_reaches_smart_candidates(self):
+        media_path = os.path.join(TEST_MEDIA, "Fine.Tuned.Movie.2160p.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"0" * 4096)
+
+        self.client.post(
+            "/api/smart_presets/profile",
+            json={
+                "never_downscale": False,
+                "keep_black_bars": False,
+                "keep_aspect_ratio": False,
+                "never_transcode_audio": False,
+                "keep_all_audio_languages": False,
+                "keep_all_subtitle_languages": False,
+            },
+        )
+
+        probe = {
+            "duration_sec": 7200.0,
+            "width": 3840,
+            "height": 2160,
+            "fps": 23.976,
+            "is_hdr": True,
+        }
+        tuning = {
+            "goal": "small",
+            "compatibility": "modern",
+            "hardware": "software",
+            "resolution_mode": "1080",
+            "audio_strategy": "copy",
+            "subtitle_mode": "none",
+            "target_scale": 0.8,
+        }
+        with patch("webui.app.routes._probe_media", return_value=probe):
+            response = self.client.post(
+                "/api/smart_presets/recommend",
+                json={"src": media_path, "preset": "auto", "smart_tuning": tuning},
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertEqual(payload["profile"]["goal"], "small")
+        self.assertEqual(payload["tuning"], tuning)
+        self.assertEqual(len(payload["candidates"]), 3)
+        for candidate in payload["candidates"]:
+            self.assertEqual(candidate["options"]["resolution_mode"], "1080")
+            self.assertEqual(candidate["options"]["audio_mode"], "copy")
+            self.assertEqual(candidate["options"]["subtitle_mode"], "none")
+
+    def test_library_preview_starts_real_smart_plan_and_exposes_status(self):
+        media_path = os.path.join(TEST_MEDIA, "Preview.Movie.2160p.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"preview-source")
+        tuning = {
+            "goal": "quality",
+            "resolution_mode": "1080",
+            "target_scale": 1.1,
+        }
+        recommendation = {
+            "selected_plan": {
+                "options": {
+                    "resolution_mode": "1080",
+                    "audio_mode": "copy",
+                    "subtitle_mode": "all",
+                },
+                "inputs": {"target_mb": 4096},
+            },
+            "recommended_id": "quality",
+            "candidates": [
+                {
+                    "id": "quality",
+                    "name": "Quality guard",
+                    "summary": "Protects detail",
+                }
+            ],
+            "tuning": tuning,
+        }
+
+        with (
+            patch("webui.app.routes._smart_recommendation", return_value=recommendation),
+            patch("webui.app.routes.threading.Thread") as thread_class,
+        ):
+            started = self.client.post(
+                "/api/library/preview",
+                json={"src": media_path, "smart_tuning": tuning},
+            )
+
+        self.assertEqual(started.status_code, 202, started.get_data(as_text=True))
+        preview = started.get_json()["preview"]
+        self.assertTrue(preview["preview_id"].startswith("library_"))
+        self.assertEqual(preview["candidate_name"], "Quality guard")
+        self.assertEqual(preview["tuning"], tuning)
+        thread_class.assert_called_once()
+        thread_class.return_value.start.assert_called_once()
+        preview_payload = thread_class.call_args.kwargs["args"][1]
+        self.assertEqual(preview_payload["src"], media_path)
+        self.assertEqual(preview_payload["resolution_mode"], "1080")
+        self.assertEqual(preview_payload["target_size_value"], 4096)
+
+        status = self.client.get(f"/api/library/preview/{preview['preview_id']}")
+        self.assertEqual(status.status_code, 200, status.get_data(as_text=True))
+        self.assertEqual(status.get_json()["preview"]["state"], "queued")
+
+        missing = self.client.post(
+            "/api/library/preview",
+            json={"src": os.path.join(TEST_MEDIA, "missing.mkv")},
+        )
+        self.assertEqual(missing.status_code, 400)
+
     def test_smart_presets_generate_candidates_and_unlock_after_feedback(self):
         try:
             os.remove(SMART_PRESETS_FILE)
@@ -928,6 +1188,12 @@ class ApiRouteSmokeTests(unittest.TestCase):
                 "compatibility": "modern",
                 "hardware": "software",
                 "audio_strategy": "eac3_surround",
+                "never_downscale": False,
+                "keep_black_bars": False,
+                "keep_aspect_ratio": False,
+                "keep_all_audio_languages": False,
+                "keep_all_subtitle_languages": False,
+                "never_transcode_audio": False,
                 "automation_enabled": True,
                 "minimum_feedback": 3,
                 "confidence_threshold": 0.55,
@@ -938,6 +1204,8 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(saved_profile["audio_strategy"], "eac3_surround")
         self.assertEqual(saved_profile["audio_languages"], ["eng", "spa"])
         self.assertEqual(saved_profile["subtitle_languages"], ["eng", "spa"])
+        self.assertFalse(saved_profile["never_downscale"])
+        self.assertFalse(saved_profile["never_transcode_audio"])
 
         partial_profile = self.client.post(
             "/api/smart_presets/profile",
@@ -991,8 +1259,8 @@ class ApiRouteSmokeTests(unittest.TestCase):
         args = preview_payload["suggested_extra_args"]
         self.assertIn("--all-audio", args)
         self.assertIn("--all-subtitles", args)
-        self.assertEqual(args[args.index("--audio-lang-list") + 1], "eng,spa")
-        self.assertEqual(args[args.index("--subtitle-lang-list") + 1], "eng,spa")
+        self.assertEqual(args[args.index("--audio-lang-list") + 1], "fre")
+        self.assertEqual(args[args.index("--subtitle-lang-list") + 1], "fre")
         self.assertEqual(args[args.index("-E") + 1], "eac3")
         self.assertEqual(args[args.index("-B") + 1], "640")
         self.assertEqual(args[args.index("-6") + 1], "5point1")
@@ -1015,8 +1283,8 @@ class ApiRouteSmokeTests(unittest.TestCase):
         copy_payload = copy_preview.get_json()
         copy_args = copy_payload["suggested_extra_args"]
         self.assertEqual(copy_args[copy_args.index("-E") + 1], "copy")
-        self.assertEqual(copy_args[copy_args.index("--audio-lang-list") + 1], "eng,spa")
-        self.assertEqual(copy_args[copy_args.index("--subtitle-lang-list") + 1], "eng,spa")
+        self.assertEqual(copy_args[copy_args.index("--audio-lang-list") + 1], "fre")
+        self.assertEqual(copy_args[copy_args.index("--subtitle-lang-list") + 1], "fre")
         self.assertIn("--all-audio", copy_args)
         self.assertIn("--all-subtitles", copy_args)
 
@@ -1049,6 +1317,75 @@ class ApiRouteSmokeTests(unittest.TestCase):
         state = self.client.get("/api/smart_presets")
         self.assertEqual(state.status_code, 200)
         self.assertTrue(state.get_json()["learning"]["automation_ready"])
+
+    def test_smart_preset_preservation_guardrails_override_season_tuning(self):
+        try:
+            os.remove(SMART_PRESETS_FILE)
+        except FileNotFoundError:
+            pass
+
+        media_path = os.path.join(TEST_MEDIA, "Example.Show.S01E01.2160p.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"0" * 4096)
+
+        profile_response = self.client.post(
+            "/api/smart_presets/profile",
+            json={
+                "goal": "small",
+                "audio_strategy": "eac3_surround",
+                "audio_languages": ["eng", "jpn"],
+                "subtitle_languages": ["eng", "jpn"],
+            },
+        )
+        self.assertEqual(profile_response.status_code, 200)
+        profile = profile_response.get_json()["profile"]
+        self.assertTrue(profile["never_downscale"])
+        self.assertTrue(profile["keep_black_bars"])
+        self.assertTrue(profile["keep_aspect_ratio"])
+        self.assertTrue(profile["keep_all_audio_languages"])
+        self.assertTrue(profile["keep_all_subtitle_languages"])
+        self.assertTrue(profile["never_transcode_audio"])
+
+        probe = {
+            "duration_sec": 2700.0,
+            "width": 3840,
+            "height": 2160,
+            "fps": 23.976,
+            "is_hdr": False,
+        }
+        with patch("webui.app.routes._probe_media", return_value=probe):
+            recommendation = app_routes._smart_recommendation(
+                {
+                    "src": media_path,
+                    "preset": "auto",
+                    "smart_tuning": {
+                        "resolution_mode": "720",
+                        "audio_strategy": "eac3_surround",
+                        "subtitle_mode": "none",
+                    },
+                }
+            )
+
+        plan = recommendation["selected_plan"]
+        options = plan["options"]
+        args = plan["extra_args"]
+        self.assertEqual(options["resolution_mode"], "keep")
+        self.assertEqual(plan["estimates"]["output_resolution"], {"width": 3840, "height": 2160})
+        self.assertEqual(options["crop_mode"], "none")
+        self.assertEqual(options["audio_mode"], "copy")
+        self.assertEqual(options["audio_languages"], [])
+        self.assertEqual(options["subtitle_languages"], [])
+        self.assertEqual(options["subtitle_mode"], "all")
+        self.assertEqual(args[args.index("--width") + 1], "3840")
+        self.assertEqual(args[args.index("--height") + 1], "2160")
+        self.assertIn("--keep-display-aspect", args)
+        self.assertEqual(args[args.index("--crop") + 1], "0:0:0:0")
+        self.assertIn("--all-audio", args)
+        self.assertIn("--all-subtitles", args)
+        self.assertNotIn("--audio-lang-list", args)
+        self.assertNotIn("--subtitle-lang-list", args)
+        self.assertEqual(args[args.index("-E") + 1], "copy")
+        self.assertEqual(args[args.index("--audio-fallback") + 1], "none")
 
 
 if __name__ == "__main__":

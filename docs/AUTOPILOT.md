@@ -69,7 +69,7 @@ Turn off **Ask for feedback after encodes** in the Autopilot policy if you do no
 
 ## Audio and subtitles
 
-Smart Presets keep every matching English and Spanish audio and subtitle track. Audio can be copied exactly or encoded to E-AC3 5.1 for additional savings while retaining surround sound. A post-encode audio or subtitle rejection teaches candidate selection that the chosen track strategy was unacceptable for a similar source.
+Smart Presets use the preservation rules saved in **Settings → Smart Presets**. By default they keep every audio and subtitle language, pass audio through without transcoding, retain source resolution and aspect ratio, and disable automatic cropping so black bars remain intact. You can turn off an individual protection and use an explicit language list or E-AC3 5.1 when that tradeoff is intentional. A post-encode audio or subtitle rejection teaches candidate selection that the chosen track strategy was unacceptable for a similar source.
 
 ## Decision meanings
 
