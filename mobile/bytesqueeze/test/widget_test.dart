@@ -31,12 +31,10 @@ void main() {
     await tester.tap(find.text('Shows'));
     await tester.pumpAndSettle();
     final foundation = find.text('Foundation').first;
-    await tester.ensureVisible(foundation);
+    await tester.scrollUntilVisible(foundation, 260,
+        scrollable: find.byType(Scrollable).first);
     await tester.pumpAndSettle();
-    final foundationCard = find
-        .ancestor(of: foundation, matching: find.byType(InkWell))
-        .first;
-    await tester.tap(foundationCard);
+    await tester.tap(foundation);
     await tester.pumpAndSettle();
 
     expect(find.byType(DraggableScrollableSheet), findsOneWidget);
