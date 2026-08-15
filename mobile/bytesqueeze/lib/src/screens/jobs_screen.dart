@@ -20,12 +20,16 @@ class _JobsScreenState extends State<JobsScreen> {
   @override
   Widget build(BuildContext context) {
     final allJobs = asList(widget.controller.jobs['jobs']).map(asMap).toList();
-    const activeStates = {'running', 'queued', 'waiting_to_upload'};
+    final runningJobs = allJobs
+        .where((job) => '${job['status'] ?? ''}'.toLowerCase() == 'running')
+        .toList();
+    const nonTerminalStates = {'running', 'queued', 'waiting_to_upload'};
+    const queuedStates = {'queued', 'waiting_to_upload'};
     final rows = allJobs.where((job) {
       final status = '${job['status'] ?? ''}'.toLowerCase();
       final inGroup = _history
-          ? !activeStates.contains(status)
-          : activeStates.contains(status);
+          ? !nonTerminalStates.contains(status)
+          : queuedStates.contains(status);
       return inGroup && (_filter == 'all' || status == _filter);
     }).toList();
     final paused = widget.controller.jobs['paused'] == true;
@@ -46,11 +50,11 @@ class _JobsScreenState extends State<JobsScreen> {
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Text('Jobs',
+                          Text('Queue',
                               style: Theme.of(context).textTheme.headlineLarge),
                           const SizedBox(height: 4),
                           Text(
-                            '${summary['running'] ?? 0} running · ${summary['queued'] ?? 0} queued · ${summary['done'] ?? 0} completed',
+                            "${summaryCount(summary, 'running')} running · ${summaryCount(summary, 'queued')} queued · ${summaryCount(summary, 'done')} completed",
                             style:
                                 const TextStyle(color: ByteSqueezeColors.muted),
                           ),
@@ -70,12 +74,39 @@ class _JobsScreenState extends State<JobsScreen> {
                   ],
                 ),
                 const SizedBox(height: 16),
+                SectionHeader(
+                  title: 'Running now',
+                  subtitle: _capacityLabel(summary, runningJobs.length),
+                ),
+                if (runningJobs.isEmpty)
+                  const SurfaceCard(
+                    child: Row(
+                      children: [
+                        Icon(Icons.check_circle_outline_rounded,
+                            color: ByteSqueezeColors.mint),
+                        SizedBox(width: 12),
+                        Expanded(
+                          child: Text(
+                              'No active transcodes. The next queued item starts when an encoder is available.'),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  ...runningJobs.map((job) => Padding(
+                        padding: const EdgeInsets.only(bottom: 11),
+                        child: _JobCard(
+                            controller: widget.controller,
+                            job: job,
+                            run: _run),
+                      )),
+                const SizedBox(height: 18),
                 SegmentedButton<bool>(
                   segments: const [
                     ButtonSegment(
                         value: false,
-                        label: Text('Active'),
-                        icon: Icon(Icons.motion_photos_on_rounded)),
+                        label: Text('Up next'),
+                        icon: Icon(Icons.queue_play_next_rounded)),
                     ButtonSegment(
                         value: true,
                         label: Text('History'),
@@ -97,16 +128,14 @@ class _JobsScreenState extends State<JobsScreen> {
                   child: Row(
                     children: (_history
                             ? const ['all', 'done', 'error', 'canceled']
-                            : const ['all', 'running', 'queued'])
+                            : const ['all', 'queued', 'waiting_to_upload'])
                         .map((value) => Padding(
                               padding: const EdgeInsets.only(right: 8),
                               child: ChoiceChip(
                                 selected: _filter == value,
                                 onSelected: (_) =>
                                     setState(() => _filter = value),
-                                label: Text(value == 'all'
-                                    ? 'All'
-                                    : '${value[0].toUpperCase()}${value.substring(1)}'),
+                                label: Text(_filterLabel(value)),
                               ),
                             ))
                         .toList(),
@@ -147,7 +176,7 @@ class _JobsScreenState extends State<JobsScreen> {
                     icon: _history
                         ? Icons.history_toggle_off_rounded
                         : Icons.check_circle_outline_rounded,
-                    title: _history ? 'No job history here' : 'No active jobs',
+                    title: _history ? 'No job history here' : 'Queue is clear',
                     message: _history
                         ? 'Completed, failed, and canceled jobs appear here.'
                         : 'Queue media from Library or let Autopilot choose eligible work.',
@@ -164,6 +193,21 @@ class _JobsScreenState extends State<JobsScreen> {
         ],
       ),
     );
+  }
+
+  String _capacityLabel(Map<String, dynamic> summary, int running) {
+    final limit =
+        (summary['hardware_transcode_concurrency'] as num?)?.toInt() ?? 1;
+    if (running == 0) {
+      return '$limit GPU slot${limit == 1 ? '' : 's'} available · CPU jobs remain exclusive';
+    }
+    return '$running active · GPU limit $limit · CPU jobs remain exclusive';
+  }
+
+  String _filterLabel(String value) {
+    if (value == 'all') return 'All';
+    if (value == 'waiting_to_upload') return 'Waiting upload';
+    return '${value[0].toUpperCase()}${value.substring(1)}';
   }
 
   Future<void> _confirmClear(String target) async {

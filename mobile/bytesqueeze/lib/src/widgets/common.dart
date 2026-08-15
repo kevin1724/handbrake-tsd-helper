@@ -8,6 +8,16 @@ Map<String, dynamic> asMap(dynamic value) =>
     value is Map<String, dynamic> ? value : <String, dynamic>{};
 List<dynamic> asList(dynamic value) => value is List ? value : <dynamic>[];
 
+int summaryCount(Map<String, dynamic> summary, String key) {
+  final counts = asMap(summary['counts']);
+  final value = summary[key] ?? counts[key];
+  if (value is num) return value.toInt();
+  if (key == 'queued' && summary['queued_count'] is num) {
+    return (summary['queued_count'] as num).toInt();
+  }
+  return int.tryParse('$value') ?? 0;
+}
+
 String fileName(dynamic path) {
   final value = '${path ?? ''}'.replaceAll('\\', '/');
   return value.split('/').where((part) => part.isNotEmpty).lastOrNull ??
@@ -82,7 +92,7 @@ class PageInsets extends StatelessWidget {
             MediaQuery.sizeOf(context).width < 600 ? 16 : 24,
             8,
             MediaQuery.sizeOf(context).width < 600 ? 16 : 24,
-            110,
+            MediaQuery.sizeOf(context).width < 880 ? 184 : 104,
           ),
           child: child,
         ),
@@ -209,6 +219,138 @@ class StatusPill extends StatelessWidget {
                 style: TextStyle(
                     color: color, fontSize: 12, fontWeight: FontWeight.w700)),
           ],
+        ),
+      ),
+    );
+  }
+}
+
+class OperationsDock extends StatelessWidget {
+  const OperationsDock({
+    super.key,
+    required this.summary,
+    required this.activeJobs,
+    required this.paused,
+    required this.onTap,
+  });
+
+  final Map<String, dynamic> summary;
+  final List<dynamic> activeJobs;
+  final bool paused;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final running = activeJobs
+        .map(asMap)
+        .where((job) => '${job['status'] ?? ''}'.toLowerCase() == 'running')
+        .toList();
+    final runningCount = summaryCount(summary, 'running');
+    final queuedCount = summaryCount(summary, 'queued');
+    final current = running.isEmpty ? <String, dynamic>{} : running.first;
+    final progress = ((current['progress'] as num?)?.toDouble() ?? 0)
+        .clamp(0, 100)
+        .toDouble();
+    final state = paused
+        ? 'Queue paused'
+        : runningCount > 0
+            ? '$runningCount encoding now'
+            : 'System ready';
+    final detail = current.isNotEmpty
+        ? fileName(current['src'])
+        : queuedCount > 0
+            ? '$queuedCount waiting to start'
+            : 'No active transcodes';
+    final color = paused
+        ? ByteSqueezeColors.amber
+        : runningCount > 0
+            ? ByteSqueezeColors.cyan
+            : ByteSqueezeColors.mint;
+
+    return Material(
+      color: const Color(0xF50B1119),
+      borderRadius: BorderRadius.circular(17),
+      clipBehavior: Clip.antiAlias,
+      elevation: 18,
+      shadowColor: Colors.black.withValues(alpha: .65),
+      child: InkWell(
+        onTap: onTap,
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border.all(color: ByteSqueezeColors.line),
+            borderRadius: BorderRadius.circular(17),
+          ),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(12, 10, 12, 9),
+            child: Row(
+              children: [
+                DecoratedBox(
+                  decoration: BoxDecoration(
+                    color: color.withValues(alpha: .12),
+                    borderRadius: BorderRadius.circular(11),
+                    border: Border.all(color: color.withValues(alpha: .25)),
+                  ),
+                  child: Padding(
+                    padding: const EdgeInsets.all(9),
+                    child: Icon(
+                      paused ? Icons.pause_rounded : Icons.graphic_eq_rounded,
+                      color: color,
+                      size: 19,
+                    ),
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Column(
+                    mainAxisSize: MainAxisSize.min,
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(state,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              fontWeight: FontWeight.w800, fontSize: 12)),
+                      const SizedBox(height: 2),
+                      Text(detail,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                              color: ByteSqueezeColors.muted, fontSize: 10)),
+                      if (runningCount > 0) ...[
+                        const SizedBox(height: 7),
+                        ClipRRect(
+                          borderRadius: BorderRadius.circular(999),
+                          child: LinearProgressIndicator(
+                            value: progress / 100,
+                            minHeight: 3,
+                          ),
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+                const SizedBox(width: 10),
+                Column(
+                  mainAxisSize: MainAxisSize.min,
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text('$queuedCount',
+                        style: const TextStyle(
+                            fontWeight: FontWeight.w800, fontSize: 15)),
+                    const Text('QUEUED',
+                        style: TextStyle(
+                            color: ByteSqueezeColors.muted,
+                            fontSize: 8,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: .7)),
+                  ],
+                ),
+                const SizedBox(width: 3),
+                const Icon(Icons.chevron_right_rounded,
+                    color: ByteSqueezeColors.muted, size: 20),
+              ],
+            ),
+          ),
         ),
       ),
     );

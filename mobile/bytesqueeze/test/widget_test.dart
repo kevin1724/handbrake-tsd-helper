@@ -10,10 +10,26 @@ void main() {
     await tester.pumpAndSettle();
 
     expect(find.text('ByteSqueeze'), findsNothing);
-    expect(find.text('Your media pipeline is under control.'), findsOneWidget);
+    expect(find.text('Media operations are ready.'), findsOneWidget);
+    expect(find.text('1 encoding now'), findsOneWidget);
     expect(find.text('Library'), findsOneWidget);
     expect(find.text('Automate'), findsOneWidget);
     expect(find.text('More'), findsOneWidget);
+  });
+
+  testWidgets('queue prioritizes running work and hardware capacity',
+      (tester) async {
+    final controller = AppController()..enterDemo();
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.motion_photos_on_outlined));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Queue'), findsWidgets);
+    expect(find.text('Running now'), findsOneWidget);
+    expect(find.textContaining('GPU limit 2'), findsOneWidget);
+    expect(find.text('Up next'), findsOneWidget);
   });
 
   testWidgets('library exposes friendly Smart preview and season actions',
