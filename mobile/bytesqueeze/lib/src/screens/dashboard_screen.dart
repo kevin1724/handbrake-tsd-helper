@@ -22,6 +22,10 @@ class DashboardScreen extends StatelessWidget {
     final autopilot = asMap(automationWrap['autopilot']);
     final paused = queue['paused'] == true;
     final savedBytes = storage['saved_bytes'] ?? summary['saved_bytes'] ?? 0;
+    final runningJobs = activeJobs
+        .map(asMap)
+        .where((job) => '${job['status'] ?? ''}'.toLowerCase() == 'running')
+        .toList();
 
     return RefreshIndicator(
       onRefresh: controller.refreshAll,
@@ -54,10 +58,8 @@ class DashboardScreen extends StatelessWidget {
                       children: [
                         MetricCard(
                           label: 'Active jobs',
-                          value:
-                              '${(summary['running'] as num?)?.toInt() ?? 0} running',
-                          detail:
-                              '${(summary['queued'] as num?)?.toInt() ?? 0} waiting',
+                          value: "${summaryCount(summary, 'running')} running",
+                          detail: "${summaryCount(summary, 'queued')} waiting",
                           icon: Icons.motion_photos_on_rounded,
                           color: ByteSqueezeColors.cyan,
                         ),
@@ -92,15 +94,15 @@ class DashboardScreen extends StatelessWidget {
                   },
                 ),
                 SectionHeader(
-                  title: 'Now encoding',
-                  subtitle: activeJobs.isEmpty
-                      ? 'The queue is clear'
-                      : 'Live work from the Docker controller',
+                  title: 'Running now',
+                  subtitle: runningJobs.isEmpty
+                      ? 'All encoders are available'
+                      : 'Live work from every controller and worker',
                   trailing: TextButton(
                       onPressed: () => controller.selectTab(2),
                       child: const Text('View jobs')),
                 ),
-                if (activeJobs.isEmpty)
+                if (runningJobs.isEmpty)
                   const SurfaceCard(
                     child: Row(
                       children: [
@@ -114,9 +116,9 @@ class DashboardScreen extends StatelessWidget {
                     ),
                   )
                 else
-                  ...activeJobs.take(4).map((row) => Padding(
+                  ...runningJobs.take(4).map((job) => Padding(
                         padding: const EdgeInsets.only(bottom: 10),
-                        child: _ActiveJobCard(job: asMap(row)),
+                        child: _ActiveJobCard(job: job),
                       )),
                 const SectionHeader(
                     title: 'Quick controls',
@@ -225,8 +227,10 @@ class _Hero extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final running = (summary['running'] as num?)?.toInt() ?? 0;
-    final queued = (summary['queued'] as num?)?.toInt() ?? 0;
+    final running = summaryCount(summary, 'running');
+    final queued = summaryCount(summary, 'queued');
+    final hardwareLimit =
+        (summary['hardware_transcode_concurrency'] as num?)?.toInt() ?? 1;
     final autoEnabled = autopilot['enabled'] == true;
     return SurfaceCard(
       padding: const EdgeInsets.all(22),
@@ -258,14 +262,16 @@ class _Hero extends StatelessWidget {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Good evening',
+                        Text('Operations overview',
                             style: Theme.of(context)
                                 .textTheme
                                 .titleMedium
                                 ?.copyWith(color: ByteSqueezeColors.cyan)),
                         const SizedBox(height: 5),
                         Text(
-                            'Your media pipeline is ${paused ? 'paused' : 'under control'}.',
+                            paused
+                                ? 'Your media pipeline is paused.'
+                                : 'Media operations are ready.',
                             style: Theme.of(context).textTheme.headlineMedium),
                       ],
                     ),
@@ -295,6 +301,11 @@ class _Hero extends StatelessWidget {
                     icon: paused
                         ? Icons.pause_circle_outline_rounded
                         : Icons.play_circle_outline_rounded,
+                  ),
+                  StatusPill(
+                    label: '$hardwareLimit GPU slot${hardwareLimit == 1 ? '' : 's'}',
+                    color: ByteSqueezeColors.blue,
+                    icon: Icons.developer_board_rounded,
                   ),
                   StatusPill(
                     label: autoEnabled

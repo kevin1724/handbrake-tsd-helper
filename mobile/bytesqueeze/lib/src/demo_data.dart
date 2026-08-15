@@ -8,6 +8,7 @@ abstract final class DemoData {
             'running': 1,
             'done': 148,
             'error': 0,
+            'hardware_transcode_concurrency': 2,
             'saved_bytes': 1897366597632,
           },
         },
@@ -34,7 +35,13 @@ abstract final class DemoData {
 
   static Map<String, dynamic> get jobs => {
         'paused': false,
-        'summary': {'queued': 3, 'running': 1, 'done': 148, 'error': 0},
+        'summary': {
+          'queued': 3,
+          'running': 1,
+          'done': 148,
+          'error': 0,
+          'hardware_transcode_concurrency': 2,
+        },
         'jobs': [
           {
             'id': 'demo-running',
