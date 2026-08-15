@@ -65,30 +65,30 @@
   <main class="home-shell">
     <header class="home-hero">
       <div><span class="home-kicker">System overview</span><h1>Everything important, at a glance.</h1><p>A calm view of the queue, library, workers, and Autopilot. Open a workspace only when something needs your attention.</p></div>
-      <div class="row" style="display:flex;gap:10px;align-items:center;margin:0"><span id="homeSystemStatus" class="home-status">System online</span><button id="homeRefreshBtn" type="button" class="ghost-btn">Refresh</button></div>
+      <div class="home-hero-actions"><span id="homeSystemStatus" class="home-status">System online</span><button id="homeCustomizeBtn" type="button" class="ghost-btn v3-only">Customize</button><button id="homeRefreshBtn" type="button" class="ghost-btn">Refresh</button></div>
     </header>
 
     <section class="home-metrics" aria-label="System totals">
-      <div class="home-metric"><span>Queue</span><strong id="homeQueueMetric">--</strong><small id="homeQueueDetail">Loading jobs</small></div>
-      <div class="home-metric"><span>Space recovered</span><strong id="homeSavedMetric">--</strong><small id="homeSavedDetail">Across verified encodes</small></div>
-      <div class="home-metric"><span>Media library</span><strong id="homeLibraryMetric">--</strong><small id="homeLibraryDetail">Loading catalog</small></div>
-      <div class="home-metric"><span>Workers</span><strong id="homeWorkersMetric">--</strong><small id="homeWorkersDetail">Loading node health</small></div>
+      <div class="home-metric" data-tone="cyan"><span>Queue</span><strong id="homeQueueMetric">--</strong><small id="homeQueueDetail">Loading jobs</small></div>
+      <div class="home-metric" data-tone="green"><span>Space recovered</span><strong id="homeSavedMetric">--</strong><small id="homeSavedDetail">Across verified encodes</small></div>
+      <div class="home-metric" data-tone="violet"><span>Media library</span><strong id="homeLibraryMetric">--</strong><small id="homeLibraryDetail">Loading catalog</small></div>
+      <div class="home-metric" data-tone="amber"><span>Workers</span><strong id="homeWorkersMetric">--</strong><small id="homeWorkersDetail">Loading node health</small></div>
     </section>
 
     <div class="home-grid" style="margin-top:16px">
       <div class="home-stack">
-        <section class="home-card">
+        <section class="home-card" data-home-widget="work">
           <div class="home-card-head"><h2>Current work</h2><a class="home-link" href="/jobs">Open jobs &rarr;</a></div>
           <div id="homeJobs" class="home-card-body"><div class="home-empty">Loading queue...</div></div>
         </section>
-        <section class="home-card">
+        <section class="home-card" data-home-widget="activity">
           <div class="home-card-head"><h2>Recent activity</h2><a class="home-link" href="/settings">View history &rarr;</a></div>
           <div id="homeEvents" class="home-card-body"><div class="home-empty">Loading activity...</div></div>
         </section>
       </div>
 
       <aside class="home-stack">
-        <section class="home-card">
+        <section class="home-card" data-home-widget="autopilot">
           <div class="home-card-head"><h2>Autopilot</h2><a class="home-link" href="/autopilot">Open workspace &rarr;</a></div>
           <div class="home-card-body autopilot-overview">
             <div class="autopilot-score-ring"><strong id="homeAutoScore">0%</strong><div><h3 id="homeAutoMode">Checking setup</h3><p id="homeAutoCopy">Loading readiness checks...</p></div></div>
@@ -96,7 +96,7 @@
             <a href="/autopilot" class="button-link">Review and train Autopilot</a>
           </div>
         </section>
-        <section class="home-card">
+        <section class="home-card" data-home-widget="quick">
           <div class="home-card-head"><h2>Quick actions</h2></div>
           <div class="home-card-body home-quick">
             <a href="/library"><strong>Browse library</strong><small>Movies, shows, posters</small></a>
@@ -108,6 +108,19 @@
       </aside>
     </div>
   </main>
+
+  <dialog id="homeCustomizeDialog" class="v3-home-config v3-only">
+    <form method="dialog">
+      <div class="v3-home-config-head"><div><span class="home-kicker">Your dashboard</span><h2>Choose what stays visible</h2><p>Keep the overview focused on the information you use every day.</p></div><button class="v3-dialog-close" value="close" aria-label="Close dashboard settings">×</button></div>
+      <div class="v3-home-config-grid">
+        <label><input type="checkbox" value="work" checked><span><strong>Current work</strong><small>Active and waiting transcodes</small></span></label>
+        <label><input type="checkbox" value="activity" checked><span><strong>Recent activity</strong><small>System events and completed actions</small></span></label>
+        <label><input type="checkbox" value="autopilot" checked><span><strong>Autopilot</strong><small>Readiness and feedback reminders</small></span></label>
+        <label><input type="checkbox" value="quick" checked><span><strong>Quick actions</strong><small>Shortcuts to common workspaces</small></span></label>
+      </div>
+      <div class="v3-home-config-actions"><button id="homeWidgetsReset" type="button" class="ghost-btn">Reset</button><button value="done">Done</button></div>
+    </form>
+  </dialog>
 
   <script>
     const homeFormatBytes = value => {
@@ -138,7 +151,12 @@
       homeText("homeWorkersDetail", nodes.length ? "linked workers online" : "Standalone encoder ready");
 
       const jobs = document.getElementById("homeJobs");
-      jobs.innerHTML = active.length ? active.map(job => `<div class="home-job"><div><strong>${homeEscape(job.src?.split(/[\\/]/).pop() || "Encode job")}</strong><small>${homeEscape(job.node_name || job.encoder || job.preset || "Local encoder")}${job.progress != null ? ` &middot; ${Math.round(Number(job.progress || 0))}%` : ""}</small></div><span class="home-job-state">${homeEscape(job.status || "queued")}</span></div>`).join("") : `<div class="home-empty"><strong>Nothing is encoding right now.</strong><br><span class="small">Autopilot or a manual job will appear here.</span></div>`;
+      jobs.innerHTML = active.length ? active.map(job => {
+        const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
+        const progressMarkup = String(job.status || '').toLowerCase() === 'running'
+          ? `<span class="home-job-track"><i style="width:${progress}%"></i></span>` : '';
+        return `<div class="home-job"><div class="home-job-copy"><strong>${homeEscape(job.src?.split(/[\\/]/).pop() || "Encode job")}</strong><small>${homeEscape(job.node_name || job.encoder || job.preset || "Local encoder")}${job.progress != null ? ` &middot; ${Math.round(progress)}%` : ""}</small>${progressMarkup}</div><span class="home-job-state">${homeEscape(job.status || "queued")}</span></div>`;
+      }).join("") : `<div class="home-empty"><strong>Nothing is encoding right now.</strong><br><span class="small">Autopilot or a manual job will appear here.</span></div>`;
 
       const events = Array.isArray(data.events) ? data.events : [];
       const eventBox = document.getElementById("homeEvents");
@@ -157,6 +175,29 @@
     }
 
     let homeLoadInFlight = false;
+    const homeWidgetStorageKey = 'bytesqueezeHomeWidgets';
+    const homeWidgetDefaults = ['work', 'activity', 'autopilot', 'quick'];
+
+    function getHomeWidgets() {
+      try {
+        const saved = JSON.parse(localStorage.getItem(homeWidgetStorageKey) || 'null');
+        return Array.isArray(saved) ? homeWidgetDefaults.filter(widget => saved.includes(widget)) : [...homeWidgetDefaults];
+      } catch (error) {
+        return [...homeWidgetDefaults];
+      }
+    }
+
+    function applyHomeWidgets(visibleWidgets) {
+      document.querySelectorAll('[data-home-widget]').forEach(card => card.classList.toggle('home-widget-hidden', !visibleWidgets.includes(card.dataset.homeWidget)));
+      document.querySelectorAll('#homeCustomizeDialog input[type="checkbox"]').forEach(input => { input.checked = visibleWidgets.includes(input.value); });
+    }
+
+    function saveHomeWidgets() {
+      const visible = Array.from(document.querySelectorAll('#homeCustomizeDialog input[type="checkbox"]:checked')).map(input => input.value);
+      try { localStorage.setItem(homeWidgetStorageKey, JSON.stringify(visible)); } catch (error) {}
+      applyHomeWidgets(visible);
+    }
+
     async function loadHome() {
       if (homeLoadInFlight || document.hidden) return;
       homeLoadInFlight = true;
@@ -175,6 +216,16 @@
     }
     document.addEventListener("DOMContentLoaded", () => {
       document.getElementById("homeRefreshBtn").onclick = loadHome;
+      const customize = document.getElementById('homeCustomizeDialog');
+      const customizeButton = document.getElementById('homeCustomizeBtn');
+      applyHomeWidgets(getHomeWidgets());
+      if (customizeButton && customize) customizeButton.onclick = () => customize.showModal();
+      customize?.querySelectorAll('input[type="checkbox"]').forEach(input => { input.onchange = saveHomeWidgets; });
+      const reset = document.getElementById('homeWidgetsReset');
+      if (reset) reset.onclick = () => {
+        try { localStorage.removeItem(homeWidgetStorageKey); } catch (error) {}
+        applyHomeWidgets([...homeWidgetDefaults]);
+      };
       document.addEventListener("visibilitychange", () => { if (!document.hidden) loadHome(); });
       loadHome();
       window.setInterval(loadHome, 30000);

@@ -3,6 +3,8 @@
 
   const body = document.body;
   if (!body || !body.classList.contains("ui-v3")) return;
+  if (body.dataset.v3Enhanced === "true") return;
+  body.dataset.v3Enhanced = "true";
 
   const icons = {
     overview: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 13h6V4H4v9Zm0 7h6v-4H4v4Zm10 0h6v-9h-6v9Zm0-16v4h6V4h-6Z"/></svg>',
@@ -13,6 +15,8 @@
     settings: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.6 2h2.8l.6 2.2c.5.2 1 .5 1.5.9l2.2-.7 1.4 2.4-1.7 1.6c.1.5.1 1.1 0 1.6l1.7 1.6-1.4 2.4-2.2-.7c-.5.4-1 .7-1.5.9l-.6 2.2h-2.8l-.6-2.2c-.5-.2-1-.5-1.5-.9l-2.2.7-1.4-2.4L6.6 10a8.2 8.2 0 0 1 0-1.6L4.9 6.8l1.4-2.4 2.2.7c.5-.4 1-.7 1.5-.9l.6-2.2ZM12 7a3 3 0 1 0 0 6 3 3 0 0 0 0-6Z"/></svg>',
     search: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M10.5 4a6.5 6.5 0 1 0 3.9 11.7l4 4 1.4-1.4-4-4A6.5 6.5 0 0 0 10.5 4Zm0 2a4.5 4.5 0 1 1 0 9 4.5 4.5 0 0 1 0-9Z"/></svg>',
     plus: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M11 5h2v6h6v2h-6v6h-2v-6H5v-2h6V5Z"/></svg>',
+    activity: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 12h4l2.2-6.2 4.1 12.4L16 12h5v2h-3.7l-4 9.2L9.1 10.7 8.4 14H3v-2Z"/></svg>',
+    alert: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 1.8 20h20.4L12 3Zm0 4 6.7 11H5.3L12 7Zm-1 3v4h2v-4h-2Zm0 5.5v2h2v-2h-2Z"/></svg>',
     switch: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 7h10l-2.5-2.5L16 3l5 5-5 5-1.5-1.5L17 9H7V7Zm10 10H7l2.5 2.5L8 21l-5-5 5-5 1.5 1.5L7 15h10v2Z"/></svg>'
   };
 
@@ -42,17 +46,23 @@
   function decorateNavigation() {
     const nav = document.querySelector(".app-nav");
     if (!nav) return;
+    nav.classList.add("v3-sidebar");
 
     const brand = nav.querySelector(".app-brand");
     if (brand) {
       brand.setAttribute("aria-label", "ByteSqueeze overview");
-      brand.innerHTML = '<span class="brand-mark">B3</span><span class="brand-copy"><strong>ByteSqueeze</strong><span>Cinema operations</span></span>';
+      brand.innerHTML = '<span class="brand-mark">BS</span><span class="brand-copy"><strong>ByteSqueeze</strong><span>Media operations</span></span>';
     }
+
+    const navLinks = nav.querySelector(".nav-links");
+    nav.querySelector(".v3-nav-section")?.remove();
+    navLinks?.querySelectorAll(".v3-nav-group").forEach(label => label.remove());
 
     nav.querySelectorAll(".nav-link").forEach(link => {
       const href = new URL(link.href, window.location.origin).pathname;
       const route = routes.find(item => item.href === href);
       if (!route) return;
+      link.classList.remove("nav-library", "nav-jobs", "nav-wizard", "nav-settings");
       link.innerHTML = `<span class="v3-nav-icon">${icons[route.icon]}</span><span class="v3-nav-label">${route.label}</span>`;
       link.title = route.label;
       link.setAttribute("aria-label", route.label);
@@ -61,27 +71,214 @@
       else link.removeAttribute("aria-current");
     });
 
+    if (navLinks) {
+      [
+        ["Operate", "/"],
+        ["Optimize", "/autopilot"],
+        ["System", "/settings"]
+      ].forEach(([label, href]) => {
+        const target = Array.from(navLinks.querySelectorAll(".nav-link")).find(link => new URL(link.href, window.location.origin).pathname === href);
+        if (!target) return;
+        const group = document.createElement("span");
+        group.className = "v3-nav-group";
+        group.textContent = label;
+        navLinks.insertBefore(group, target);
+      });
+    }
+
+    nav.querySelector(".v3-sidebar-footer")?.remove();
     const footer = document.createElement("div");
     footer.className = "v3-sidebar-footer";
-    footer.innerHTML = `<span class="v3-beta-chip">V3 BETA</span><span class="v3-sidebar-release">Release ${release}</span>`;
+    footer.innerHTML = `<span class="v3-beta-chip">V3</span><span class="v3-sidebar-release">${release}</span>`;
     nav.appendChild(footer);
   }
 
   function injectTopbar() {
     const main = document.querySelector("main");
     if (!main) return;
+    document.querySelector(".v3-topbar")?.remove();
     const topbar = document.createElement("header");
     topbar.className = "v3-topbar";
+    const isLibrary = currentPath.startsWith("/library");
+    const isQueue = currentPath.startsWith("/jobs");
+    const primaryHref = isLibrary ? "#libraryControls" : isQueue ? "#v3QueueComposer" : "/library#libraryControls";
+    const primaryLabel = isLibrary ? "Library controls" : isQueue ? "Add media" : "Queue media";
     topbar.innerHTML = `
-      <div class="v3-topbar-title"><span>Workspace</span><strong>${currentRoute.label}</strong></div>
+      <div class="v3-topbar-title"><span class="v3-topbar-wordmark">ByteSqueeze</span><span class="v3-topbar-divider" aria-hidden="true">/</span><strong>${currentRoute.label}</strong></div>
       <div class="v3-topbar-actions">
         <button class="v3-command-trigger" type="button" aria-label="Open command center">
           <span class="v3-command-icon">${icons.search}</span><span>Search and run a command</span><kbd>/</kbd>
         </button>
-        <a class="v3-quick-action" href="/library"><span>${icons.plus}</span>Queue media</a>
+        <a class="v3-quick-action" href="${primaryHref}"><span>${icons.plus}</span>${primaryLabel}</a>
       </div>`;
     main.parentNode.insertBefore(topbar, main);
     topbar.querySelector(".v3-command-trigger").addEventListener("click", openCommandCenter);
+  }
+
+  function formatBytes(value) {
+    let size = Number(value || 0);
+    const units = ["B", "KB", "MB", "GB", "TB"];
+    let unit = 0;
+    while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
+    return `${size >= 100 || unit === 0 ? size.toFixed(0) : size.toFixed(1)} ${units[unit]}`;
+  }
+
+  function fileName(path) {
+    return String(path || "").split(/[\\/]/).pop() || "Encode job";
+  }
+
+  function injectOperationsDock() {
+    document.querySelector(".v3-operations-dock")?.remove();
+    const dock = document.createElement("aside");
+    dock.className = "v3-operations-dock is-loading";
+    dock.setAttribute("aria-label", "Encoding operations status");
+    dock.innerHTML = `
+      <a class="v3-ops-primary" href="/jobs">
+        <span class="v3-ops-signal">${icons.activity}</span>
+        <span class="v3-ops-copy"><strong id="v3OpsState">Checking operations</strong><small id="v3OpsCurrent">Loading queue and worker status…</small></span>
+        <span class="v3-ops-progress" aria-hidden="true"><i id="v3OpsProgress"></i></span>
+      </a>
+      <div class="v3-ops-metrics">
+        <a href="/jobs?status=running"><small>Running</small><strong id="v3OpsRunning">—</strong></a>
+        <a href="/jobs?status=queued"><small>Queued</small><strong id="v3OpsQueued">—</strong></a>
+        <a href="/settings/nodes"><small>Workers</small><strong id="v3OpsWorkers">—</strong></a>
+        <a href="/settings"><small>Recovered</small><strong id="v3OpsSaved">—</strong></a>
+      </div>
+      <a id="v3OpsAlert" class="v3-ops-alert" href="/jobs?status=error" aria-label="No queue errors">${icons.alert}<span>0</span></a>`;
+    document.body.appendChild(dock);
+    refreshOperationsDock();
+    window.setInterval(refreshOperationsDock, 20000);
+    document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshOperationsDock(); });
+  }
+
+  let operationsRequestActive = false;
+  async function refreshOperationsDock() {
+    if (operationsRequestActive || document.hidden) return;
+    operationsRequestActive = true;
+    const dock = document.querySelector(".v3-operations-dock");
+    if (!dock) {
+      operationsRequestActive = false;
+      return;
+    }
+    try {
+      const response = await fetch("/api/home/summary", { cache: "no-store" });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Operations unavailable");
+      const summary = data.queue?.summary || {};
+      const counts = summary.counts || {};
+      const active = Array.isArray(data.queue?.active) ? data.queue.active : [];
+      const running = active.filter(job => String(job.status).toLowerCase() === "running");
+      const runningCount = Number(counts.running || running.length || 0);
+      const queuedCount = Number(counts.queued ?? summary.queued_count ?? 0);
+      const errors = Number(counts.error || summary.active_error_count || 0);
+      const progressValues = running.map(job => Number(job.progress || 0)).filter(Number.isFinite);
+      const progress = progressValues.length ? progressValues.reduce((total, value) => total + value, 0) / progressValues.length : 0;
+      const nodes = Array.isArray(data.nodes) ? data.nodes : [];
+      const workersOnline = nodes.filter(node => node.online).length;
+      const current = running[0];
+      const paused = Boolean(data.queue?.paused || summary.queue_paused);
+
+      dock.classList.remove("is-loading", "is-idle", "is-running", "is-warning");
+      dock.classList.add(errors ? "is-warning" : runningCount ? "is-running" : "is-idle");
+      document.getElementById("v3OpsState").textContent = errors ? "Queue needs attention" : paused ? "Queue paused" : runningCount ? `${runningCount} encoding now` : "System ready";
+      document.getElementById("v3OpsCurrent").textContent = current
+        ? `${fileName(current.src)}${runningCount > 1 ? ` + ${runningCount - 1} more` : ""}`
+        : queuedCount ? `${queuedCount} waiting to start` : "No active transcodes";
+      document.getElementById("v3OpsRunning").textContent = String(runningCount);
+      document.getElementById("v3OpsQueued").textContent = String(queuedCount);
+      document.getElementById("v3OpsWorkers").textContent = nodes.length ? `${workersOnline}/${nodes.length}` : "Local";
+      document.getElementById("v3OpsSaved").textContent = formatBytes(data.storage?.saved_bytes || data.storage?.total_saved_bytes || 0);
+      document.getElementById("v3OpsProgress").style.width = `${Math.max(0, Math.min(100, progress))}%`;
+      const alert = document.getElementById("v3OpsAlert");
+      alert.querySelector("span").textContent = String(errors);
+      alert.classList.toggle("has-errors", errors > 0);
+      alert.setAttribute("aria-label", errors ? `${errors} queue error${errors === 1 ? "" : "s"}` : "No queue errors");
+    } catch (error) {
+      dock.classList.remove("is-loading", "is-idle", "is-running");
+      dock.classList.add("is-warning");
+      const state = document.getElementById("v3OpsState");
+      const current = document.getElementById("v3OpsCurrent");
+      if (state) state.textContent = "Status unavailable";
+      if (current) current.textContent = "Open Queue to inspect the connection";
+    } finally {
+      operationsRequestActive = false;
+    }
+  }
+
+  function enhanceJobsPage() {
+    if (!currentPath.startsWith("/jobs")) return;
+    const main = document.querySelector("main.jobs-shell");
+    const browserCard = main?.querySelector(".browser-card");
+    const actionGrid = main?.querySelector(".jobs-action-grid");
+    const batchCard = main?.querySelector(".batch-tools-card");
+    if (!main || !browserCard || !actionGrid || !batchCard || main.querySelector(".v3-queue-compose")) return;
+
+    const composer = document.createElement("details");
+    composer.id = "v3QueueComposer";
+    composer.className = "v3-queue-compose";
+    composer.innerHTML = `<summary><span class="v3-compose-icon">${icons.plus}</span><span><strong>Add media to the queue</strong><small>Browse a file, use Smart Preset, or queue a complete folder.</small></span><b>Open</b></summary><div class="v3-queue-compose-body"></div>`;
+    browserCard.parentNode.insertBefore(composer, browserCard);
+    const composerBody = composer.querySelector(".v3-queue-compose-body");
+    composerBody.append(browserCard, actionGrid, batchCard);
+
+    const overview = document.getElementById("summaryQueued")?.closest("section");
+    const running = document.getElementById("v3RunningSection");
+    const history = main.querySelector(".jobs-history-card");
+    const nodes = document.getElementById("linkedNodesJobsPanel")?.closest("section");
+    overview?.classList.add("v3-queue-overview");
+    nodes?.classList.add("v3-worker-overview");
+    if (overview) main.insertBefore(overview, main.querySelector(".page-hero")?.nextSibling || main.firstChild);
+    if (running && overview) overview.insertAdjacentElement("afterend", running);
+    if (history && running) running.insertAdjacentElement("afterend", history);
+    if (history) history.insertAdjacentElement("afterend", composer);
+    if (nodes) composer.insertAdjacentElement("afterend", nodes);
+
+    const openComposerForHash = () => {
+      if (window.location.hash === "#v3QueueComposer") {
+        composer.open = true;
+        window.setTimeout(() => composer.scrollIntoView({ behavior: "smooth", block: "start" }), 0);
+      }
+    };
+    window.addEventListener("hashchange", openComposerForHash);
+    openComposerForHash();
+  }
+
+  function enhanceSettingsPage() {
+    if (!currentPath.startsWith("/settings")) return;
+    const shell = document.querySelector("main.settings-shell");
+    const grid = shell?.querySelector(".settings-grid");
+    const nav = shell?.querySelector(".settings-section-nav");
+    if (!shell || !grid || !nav || shell.querySelector(".v3-settings-search")) return;
+
+    const visibleCards = Array.from(grid.querySelectorAll(":scope > .section-card")).filter(card => getComputedStyle(card).display !== "none");
+    const search = document.createElement("div");
+    search.className = "v3-settings-search";
+    search.innerHTML = `<span>${icons.search}</span><input type="search" placeholder="Find a setting on this page" aria-label="Find a setting"><small>${visibleCards.length} sections</small>`;
+    nav.insertAdjacentElement("afterend", search);
+    const input = search.querySelector("input");
+    const count = search.querySelector("small");
+    input.addEventListener("input", () => {
+      const query = input.value.trim().toLowerCase();
+      let matches = 0;
+      visibleCards.forEach(card => {
+        const match = !query || card.textContent.toLowerCase().includes(query);
+        card.classList.toggle("v3-settings-filtered", !match);
+        if (match) matches += 1;
+      });
+      count.textContent = `${matches} section${matches === 1 ? "" : "s"}`;
+    });
+
+    grid.addEventListener("change", event => {
+      const card = event.target.closest(".section-card");
+      if (!card || !visibleCards.includes(card)) return;
+      card.classList.add("v3-settings-modified");
+      if (!card.querySelector(":scope > .v3-modified-pill")) {
+        const pill = document.createElement("span");
+        pill.className = "v3-modified-pill";
+        pill.textContent = "Modified";
+        card.appendChild(pill);
+      }
+    });
   }
 
   const commands = [
@@ -234,6 +431,9 @@
 
   decorateNavigation();
   injectTopbar();
+  injectOperationsDock();
+  enhanceJobsPage();
+  enhanceSettingsPage();
   addKeyboardShortcuts();
   applyLibrarySearch();
   addWizardProgress();

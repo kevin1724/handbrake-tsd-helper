@@ -84,7 +84,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         library_page = self.client.get("/library")
         self.assertEqual(library_page.status_code, 200)
-        self.assertIn(b"From Library to queue in three steps", library_page.data)
+        self.assertIn(b"See the three-step workflow", library_page.data)
         self.assertIn(b"Smart Queue", library_page.data)
         self.assertIn(b"Fine tune queue", library_page.data)
         self.assertIn(b"Real encode preview", library_page.data)
@@ -161,6 +161,75 @@ class ApiRouteSmokeTests(unittest.TestCase):
                 json={
                     "ui_version": original.get("ui_version", "v3"),
                     "ui_density": original.get("ui_density", "comfortable"),
+                },
+            )
+
+    def test_v3_library_shell_prevents_duplicate_icons_and_has_mobile_tabs(self):
+        library_page = self.client.get("/library?ui=v3")
+        self.assertEqual(library_page.status_code, 200)
+        self.assertIn(b'id="libraryControls"', library_page.data)
+        self.assertIn(b'id="libraryBatchBar"', library_page.data)
+        self.assertIn(b'data-library-view="movies"', library_page.data)
+        self.assertIn(b'data-library-view="shows"', library_page.data)
+        self.assertIn(b'data-mobile-view="movies"', library_page.data)
+
+        v3_css = self.client.get("/static/v3.css")
+        self.assertEqual(v3_css.status_code, 200)
+        self.assertIn(b"body.ui-v3 .nav-link::before", v3_css.data)
+        self.assertIn(b"content: none !important", v3_css.data)
+        v3_css.close()
+
+        v3_js = self.client.get("/static/v3.js")
+        self.assertEqual(v3_js.status_code, 200)
+        self.assertIn(b'link.classList.remove("nav-library"', v3_js.data)
+        self.assertIn(b'body.dataset.v3Enhanced === "true"', v3_js.data)
+        v3_js.close()
+
+    def test_v3_operations_console_has_live_queue_and_customizable_overview(self):
+        home_page = self.client.get("/?ui=v3")
+        self.assertEqual(home_page.status_code, 200)
+        self.assertIn(b'id="homeCustomizeDialog"', home_page.data)
+        self.assertIn(b'data-home-widget="work"', home_page.data)
+        self.assertIn(b"bytesqueezeHomeWidgets", home_page.data)
+
+        jobs_page = self.client.get("/jobs?ui=v3")
+        self.assertEqual(jobs_page.status_code, 200)
+        self.assertIn(b'id="v3RunningSection"', jobs_page.data)
+        self.assertIn(b"renderV3RunningJobs", jobs_page.data)
+
+        v3_js = self.client.get("/static/v3.js")
+        self.assertIn(b"v3-operations-dock", v3_js.data)
+        self.assertIn(b"v3QueueComposer", v3_js.data)
+        self.assertIn(b"v3-settings-search", v3_js.data)
+        v3_js.close()
+
+        v3_css = self.client.get("/static/v3.css")
+        self.assertIn(b"V3 media operations console", v3_css.data)
+        self.assertIn(b"body.ui-v3 .v3-operations-dock", v3_css.data)
+        v3_css.close()
+
+    def test_hardware_transcode_concurrency_setting_is_bounded_and_visible(self):
+        original = self.client.get("/api/settings").get_json()["settings"]
+        try:
+            saved = self.client.post(
+                "/api/settings",
+                json={"hardware_transcode_concurrency": 99},
+            )
+            self.assertEqual(saved.status_code, 200)
+            self.assertEqual(saved.get_json()["settings"]["hardware_transcode_concurrency"], 8)
+
+            settings_page = self.client.get("/settings")
+            self.assertEqual(settings_page.status_code, 200)
+            self.assertIn(b'id="hardwareTranscodeConcurrency"', settings_page.data)
+            self.assertIn(b"CPU/software jobs always run one at a time", settings_page.data)
+        finally:
+            self.client.post(
+                "/api/settings",
+                json={
+                    "hardware_transcode_concurrency": original.get(
+                        "hardware_transcode_concurrency",
+                        1,
+                    )
                 },
             )
 

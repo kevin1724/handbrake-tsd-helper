@@ -652,30 +652,59 @@
     }
 
     .library-guide {
-      display: grid;
-      grid-template-columns: minmax(210px, 1.2fr) repeat(3, minmax(150px, 1fr));
-      gap: 10px;
       margin-bottom: 14px;
-      padding: 14px;
       border: 1px solid rgba(34,211,238,0.2);
       border-radius: 14px;
       background:
         radial-gradient(circle at 0 0, rgba(34,211,238,0.11), transparent 40%),
         rgba(255,255,255,0.025);
+      overflow: hidden;
     }
 
-    .library-guide-intro h2 {
-      margin: 3px 0 6px;
-      font-size: 18px;
+    .library-guide summary {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding: 12px 14px;
+      cursor: pointer;
+      list-style: none;
     }
 
-    .library-guide-intro p,
+    .library-guide summary::-webkit-details-marker { display: none; }
+
+    .library-guide summary > span:first-child {
+      display: grid;
+      gap: 2px;
+    }
+
+    .library-guide summary small,
     .library-guide-step small {
-      margin: 0;
       color: rgba(229,229,229,0.62);
       font-size: 11px;
-      line-height: 1.45;
     }
+
+    .library-guide summary::after {
+      content: "+";
+      display: grid;
+      place-items: center;
+      width: 28px;
+      height: 28px;
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 9px;
+      color: rgba(229,229,229,0.72);
+    }
+
+    .library-guide[open] summary::after { content: "−"; }
+
+    .library-guide-body {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(150px, 1fr));
+      gap: 10px;
+      padding: 0 14px 14px;
+    }
+
+    .library-guide-step small { line-height: 1.45; }
 
     .library-guide-step {
       display: grid;
@@ -951,7 +980,7 @@
     @media (max-width: 860px) {
       .library-filterbar,
       .smart-tune-grid,
-      .library-guide {
+      .library-guide-body {
         grid-template-columns: 1fr;
       }
 
@@ -992,38 +1021,29 @@
   <main class="beta-shell">
     <header class="page-hero">
       <div>
+        <span class="page-kicker">Media workspace</span>
         <h1>Library</h1>
-        <p class="page-subtitle">Find the best space savings, preview the real Smart result, and queue a movie or complete season without leaving this page.</p>
+        <p class="page-subtitle">Search, preview, and queue movies or complete seasons with source-safe Smart Presets.</p>
       </div>
     </header>
 
-    <section class="section-card">
-      <div class="library-guide" aria-label="Library quick start">
-        <div class="library-guide-intro">
-          <div class="eyebrow">Quick start</div>
-          <h2>From Library to queue in three steps</h2>
-          <p>Smart Preset plans every file separately while your optional guardrails stay consistent across the batch.</p>
-        </div>
-        <div class="library-guide-step"><b>1</b><div><strong>Find good candidates</strong><small>Use savings, HDR, and tracked-show filters.</small></div></div>
-        <div class="library-guide-step"><b>2</b><div><strong>Preview or fine tune</strong><small>Compare a real encoded sample before committing.</small></div></div>
-        <div class="library-guide-step"><b>3</b><div><strong>Queue exactly the scope</strong><small>One movie, selected files, a season, or a full show.</small></div></div>
-      </div>
+    <section id="libraryControls" class="section-card library-control-card">
+      <div class="library-toolbar-stack">
+        <div class="beta-toolbar library-scanbar">
+          <div class="beta-field">
+            <label for="rootSelect">Library scope</label>
+            <select id="rootSelect"></select>
+          </div>
 
-      <div class="beta-toolbar">
-        <div class="beta-field">
-          <label for="rootSelect">Library scope</label>
-          <select id="rootSelect"></select>
+          <label class="beta-toggle">
+            <input id="posterToggle" type="checkbox" checked>
+            Artwork &amp; releases
+          </label>
+
+          <button id="scanBtn" type="button">Refresh library</button>
         </div>
 
-        <label class="beta-toggle">
-          <input id="posterToggle" type="checkbox" checked>
-          Artwork &amp; releases
-        </label>
-
-        <button id="scanBtn" type="button">Refresh Scan</button>
-      </div>
-
-      <div class="beta-toolbar library-filterbar" style="margin-top:10px;">
+        <div class="beta-toolbar library-filterbar">
         <div class="beta-field">
           <label for="searchInput">Search library</label>
           <input id="searchInput" type="search" placeholder="Title, year, filename">
@@ -1056,39 +1076,46 @@
         </label>
 
         <span id="betaStatus" class="small"></span>
+        </div>
       </div>
 
-      <div class="beta-bulkbar">
-        <label class="beta-toggle" for="queuePresetSelect">
-          Queue preset
-          <select id="queuePresetSelect">
-            <option value="smart" selected>Smart learned</option>
-            <option value="auto">Auto</option>
-            <option value="1080">1080p</option>
-            <option value="4k">4K</option>
+      <div id="libraryBatchBar" class="beta-bulkbar">
+        <div class="library-selection-summary">
+          <strong id="selectedCount">0 selected</strong>
+          <span>Select posters, episodes, seasons, or a complete show.</span>
+        </div>
+        <div class="library-queue-options">
+          <label class="beta-field" for="queuePresetSelect">
+            <span>Preset</span>
+            <select id="queuePresetSelect">
+              <option value="smart" selected>Smart learned</option>
+              <option value="auto">Auto</option>
+              <option value="1080">1080p</option>
+              <option value="4k">4K</option>
+            </select>
+          </label>
+          <label class="beta-field" for="dispatchModeSelect">
+            <span>Run on</span>
+            <select id="dispatchModeSelect">
+              <option value="local" selected>Local queue</option>
+              <option value="best">Best worker</option>
+              <option value="node">Selected worker</option>
+            </select>
+          </label>
+          <select id="dispatchNodeSelect" aria-label="Selected worker" disabled>
+            <option value="">No workers paired</option>
           </select>
-        </label>
-        <label class="beta-toggle" for="dispatchModeSelect">
-          Target
-          <select id="dispatchModeSelect">
-            <option value="local" selected>Local queue</option>
-            <option value="best">Best worker</option>
-            <option value="node">Selected worker</option>
-          </select>
-        </label>
-        <select id="dispatchNodeSelect" disabled>
-          <option value="">No workers paired</option>
-        </select>
-        <span id="nodePredictionHint" class="small node-prediction-hint"></span>
-        <button id="queueSelectedBtn" class="smart-queue-button" type="button" disabled>Smart queue selected</button>
-        <button id="tuneSelectedBtn" class="smart-tune-button" type="button" disabled>Fine tune</button>
-        <button id="selectVisibleBtn" type="button">Select visible</button>
-        <button id="clearSelectedBtn" type="button">Clear selection</button>
-        <span id="selectedCount" class="small">0 selected</span>
+          <span id="nodePredictionHint" class="small node-prediction-hint"></span>
+        </div>
+        <div class="library-selection-actions">
+          <button id="selectVisibleBtn" class="ghost-btn" type="button">Select visible</button>
+          <button id="clearSelectedBtn" class="ghost-btn" type="button">Clear</button>
+          <button id="tuneSelectedBtn" class="smart-tune-button" type="button" disabled>Fine tune</button>
+          <button id="queueSelectedBtn" class="smart-queue-button" type="button" disabled>Smart queue selected</button>
+        </div>
       </div>
-      <div class="library-command-note">Queue directly from posters, full shows, or individual seasons. Fine tuning stays on this page.</div>
 
-      <div class="beta-stats">
+      <div class="beta-stats" aria-label="Library totals">
         <div class="beta-stat"><span>Movies</span><strong id="statMovies">0</strong></div>
         <div class="beta-stat"><span>Shows</span><strong id="statShows">0</strong></div>
         <div class="beta-stat"><span>Episodes</span><strong id="statEpisodes">0</strong></div>
@@ -1097,6 +1124,17 @@
       </div>
 
       <div id="tmdbNotice" class="beta-attribution"></div>
+
+      <details class="library-guide">
+        <summary>
+          <span><small>New to Smart Queue?</small><strong>See the three-step workflow</strong></span>
+        </summary>
+        <div class="library-guide-body">
+          <div class="library-guide-step"><b>1</b><div><strong>Find good candidates</strong><small>Use savings, HDR, and tracked-show filters.</small></div></div>
+          <div class="library-guide-step"><b>2</b><div><strong>Preview or fine tune</strong><small>Compare a real encoded sample before committing.</small></div></div>
+          <div class="library-guide-step"><b>3</b><div><strong>Queue the right scope</strong><small>Choose a movie, files, a season, or a full show.</small></div></div>
+        </div>
+      </details>
     </section>
 
     <section class="section-card">
@@ -1110,8 +1148,13 @@
       <div id="releaseStrip" class="release-strip"></div>
     </section>
 
-    <section class="beta-layout">
-      <div class="beta-column">
+    <div class="library-view-tabs" role="tablist" aria-label="Library type">
+      <button class="library-view-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="libraryMoviesPanel" data-library-view="movies">Movies <span data-library-tab-count="movies">0</span></button>
+      <button class="library-view-tab" type="button" role="tab" aria-selected="false" aria-controls="libraryShowsPanel" data-library-view="shows">Shows <span data-library-tab-count="shows">0</span></button>
+    </div>
+
+    <section class="beta-layout" data-mobile-view="movies">
+      <div id="libraryMoviesPanel" class="beta-column library-movies-column" role="tabpanel">
         <div class="beta-column-header">
           <h2>Movies</h2>
           <span id="movieCount" class="beta-count">0</span>
@@ -1119,7 +1162,7 @@
         <div id="moviesGrid" class="beta-grid"></div>
       </div>
 
-      <div class="beta-column">
+      <div id="libraryShowsPanel" class="beta-column library-shows-column" role="tabpanel">
         <div class="beta-column-header">
           <h2>Shows</h2>
           <span id="showCount" class="beta-count">0</span>
@@ -1522,9 +1565,39 @@
       el("selectedCount").textContent = count ? `${count} selected · ${fmtBytes(totalBytes)}` : "0 selected";
       el("queueSelectedBtn").disabled = count === 0;
       el("tuneSelectedBtn").disabled = count === 0;
+      el("clearSelectedBtn").disabled = count === 0;
+      el("libraryBatchBar")?.classList.toggle("has-selection", count > 0);
       const preset = el("queuePresetSelect")?.value || "smart";
       el("queueSelectedBtn").textContent = preset === "smart" ? "Smart queue selected" : "Queue selected";
       updateNodePredictionHint();
+    }
+
+    function setLibraryMobileView(view, focusTab = false) {
+      const selectedView = view === "shows" ? "shows" : "movies";
+      const layout = document.querySelector(".beta-layout");
+      if (layout) layout.dataset.mobileView = selectedView;
+      document.querySelectorAll("[data-library-view]").forEach((button) => {
+        const active = button.dataset.libraryView === selectedView;
+        button.classList.toggle("is-active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+        button.tabIndex = active ? 0 : -1;
+        if (active && focusTab) button.focus();
+      });
+    }
+
+    function initLibraryViewTabs() {
+      const tabs = Array.from(document.querySelectorAll("[data-library-view]"));
+      tabs.forEach((button, index) => {
+        button.addEventListener("click", () => setLibraryMobileView(button.dataset.libraryView));
+        button.addEventListener("keydown", (event) => {
+          if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return;
+          event.preventDefault();
+          const step = event.key === "ArrowRight" ? 1 : -1;
+          const next = tabs[(index + step + tabs.length) % tabs.length];
+          setLibraryMobileView(next.dataset.libraryView, true);
+        });
+      });
+      setLibraryMobileView("movies");
     }
 
     function selectedNodeForPrediction() {
@@ -2547,6 +2620,8 @@
 
       el("movieCount").textContent = `${movies.length} shown`;
       el("showCount").textContent = `${shows.length} shown`;
+      document.querySelector('[data-library-tab-count="movies"]')?.replaceChildren(String(movies.length));
+      document.querySelector('[data-library-tab-count="shows"]')?.replaceChildren(String(shows.length));
     }
 
     function renderReleaseCalendar() {
@@ -2709,6 +2784,7 @@
 
     function start() {
       initRoots();
+      initLibraryViewTabs();
       renderStats({}, {});
       renderTmdbNotice({ tmdb_configured: tmdbConfigured });
       renderLibrary();
