@@ -1,4 +1,5 @@
 import os
+import json
 import tempfile
 import unittest
 from unittest import mock
@@ -75,8 +76,10 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
 
     def test_controller_encoding_policy_keeps_large_output_auto_stop(self):
         job = {
+            "mode": "remote_transfer",
             "encoding_policy": {
                 "hb_threads": 6,
+                "hardware_transcode_concurrency": 3,
                 "auto_stop_large_output_enabled": True,
                 "auto_stop_large_output_percent": 85,
             },
@@ -95,6 +98,45 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertIsNotNone(stop)
         self.assertEqual(stop["threshold_percent"], 85.0)
         self.assertEqual(jobs._job_encoding_policy(job)["hb_threads"], 6)
+        self.assertEqual(jobs._hardware_transcode_limit(job=job), 3)
+
+    def test_gpu_jobs_can_share_slots_but_software_jobs_remain_exclusive(self):
+        qsv = {"encoder": "qsv_h265_10bit", "encoder_family": "qsv"}
+        nvenc = {"encoder": "nvenc_h265", "encoder_family": "nvenc"}
+        software = {"encoder": "x265_10bit", "encoder_family": "software"}
+
+        self.assertTrue(jobs._job_uses_hardware_encoder(qsv))
+        self.assertTrue(jobs._job_uses_hardware_encoder(nvenc))
+        self.assertFalse(jobs._job_uses_hardware_encoder(software))
+        self.assertTrue(jobs._can_dispatch_job(nvenc, [qsv], 2))
+        self.assertFalse(jobs._can_dispatch_job(nvenc, [qsv, nvenc], 2))
+        self.assertFalse(jobs._can_dispatch_job(software, [qsv], 8))
+        self.assertFalse(jobs._can_dispatch_job(qsv, [software], 8))
+        self.assertTrue(jobs._can_dispatch_job(software, [], 8))
+
+    def test_hardware_preset_and_concurrency_limit_are_detected_safely(self):
+        preset = {
+            "PresetList": [
+                {
+                    "PresetName": "Remote QSV",
+                    "VideoEncoder": "qsv_h265_10bit",
+                }
+            ]
+        }
+        job = {
+            "preset": "4k",
+            "encoder_family": "preset",
+            "preset_bundle": {
+                "name": "Remote QSV",
+                "file_name": "remote-qsv.json",
+                "contents": json.dumps(preset),
+            },
+        }
+
+        self.assertTrue(jobs._job_uses_hardware_encoder(job))
+        self.assertEqual(jobs._hardware_transcode_limit({"hardware_transcode_concurrency": 0}), 1)
+        self.assertEqual(jobs._hardware_transcode_limit({"hardware_transcode_concurrency": 4}), 4)
+        self.assertEqual(jobs._hardware_transcode_limit({"hardware_transcode_concurrency": 99}), 8)
 
 
 if __name__ == "__main__":

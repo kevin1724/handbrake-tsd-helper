@@ -399,6 +399,17 @@ Requirements:
 
 Intel `F` and `KF` desktop CPUs usually do not include an iGPU.
 
+### Concurrent hardware transcodes
+
+**Settings → General → Encoding settings** includes **Simultaneous GPU
+transcodes per worker**. The safe default is `1`; `2` is a practical starting
+point for modern Intel Quick Sync systems. Values up to `8` are available for
+tested hardware. The limit applies to QSV, NVIDIA, AMD, VideoToolbox, and VAAPI
+jobs. CPU/software encodes always run alone, and a queued CPU job keeps its FIFO
+position instead of being bypassed by later GPU jobs. Lowering the limit does
+not stop work already running; it only prevents another job from starting until
+usage is below the new limit.
+
 ## Official Image
 
 Pull:

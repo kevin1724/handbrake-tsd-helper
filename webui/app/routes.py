@@ -87,6 +87,7 @@ from .jobs import (
     move_queued_job,
     get_job_summary,
     save_jobs,
+    ensure_dispatcher,
     _encoded_output_is_valid,
 )
 
@@ -6508,6 +6509,7 @@ def register_routes(app):
         data = request.get_json(silent=True) or {}
         old_tmdb_tag = _beta_tmdb_auth_cache_tag(load_settings())
         new_settings = save_settings(data)
+        ensure_dispatcher()
         tmdb_changed = _beta_tmdb_auth_cache_tag(new_settings) != old_tmdb_tag
         if tmdb_changed:
             BETA_POSTER_CACHE.clear()
@@ -7411,6 +7413,7 @@ def register_routes(app):
         controller_settings = load_settings()
         worker_encoding_policy = {
             "hb_threads": controller_settings.get("hb_threads", 0),
+            "hardware_transcode_concurrency": controller_settings.get("hardware_transcode_concurrency", 1),
             "auto_stop_large_output_enabled": controller_settings.get("auto_stop_large_output_enabled", False),
             "auto_stop_large_output_percent": controller_settings.get("auto_stop_large_output_percent", 90),
         }

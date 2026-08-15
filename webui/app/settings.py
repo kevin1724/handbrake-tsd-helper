@@ -35,6 +35,10 @@ DEFAULT_SETTINGS = {
     "cpu_profile": "i5-9500t",      # baseline CPU
     "cpu_speed_override": 1.0,       # multiplier (1.0 = no adjustment)
     "qsv_device_available": False,   # True only when /dev/dri is mounted into the container.
+    # Hardware encoders can safely share a worker when the GPU supports more
+    # than one session. Software encoders always remain exclusive regardless
+    # of this value. One preserves the previous behavior after an upgrade.
+    "hardware_transcode_concurrency": 1,
 
     # Stop a running encode when checkpoint-based projected output size is at
     # or above this percentage of the original source. Disabled by default.
@@ -202,6 +206,13 @@ def load_settings() -> dict:
         merged["ui_density"] = str(merged.get("ui_density") or "comfortable").strip().lower()
         if merged["ui_density"] not in {"comfortable", "compact"}:
             merged["ui_density"] = "comfortable"
+        merged["hardware_transcode_concurrency"] = _bounded_number(
+            merged.get("hardware_transcode_concurrency", 1),
+            1,
+            1,
+            8,
+            integer=True,
+        )
         merged["beta_media_folders"] = _normalize_beta_media_folders(merged.get("beta_media_folders"))
         _settings_cache = merged
         return merged
@@ -285,6 +296,16 @@ def _save_settings_unlocked(new_values: dict) -> dict:
     # ------------------------------------------------------------------
     base["qsv_device_available"] = bool(
         new_values.get("qsv_device_available", base.get("qsv_device_available", False))
+    )
+    base["hardware_transcode_concurrency"] = _bounded_number(
+        new_values.get(
+            "hardware_transcode_concurrency",
+            base.get("hardware_transcode_concurrency", 1),
+        ),
+        1,
+        1,
+        8,
+        integer=True,
     )
 
     base["auto_stop_large_output_enabled"] = bool(

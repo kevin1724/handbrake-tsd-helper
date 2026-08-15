@@ -3,7 +3,7 @@ Job management & dispatcher logic for HandBrake TSD Helper.
 
 This module is responsible for:
 - Keeping track of all jobs (in-memory + persisted to disk)
-- Running jobs one-at-a-time in a background dispatcher thread
+- Running CPU jobs exclusively and hardware jobs at the configured concurrency
 - Parsing HandBrake progress output to update job progress
 - Parsing ETA from HandBrake output to estimate remaining time
 - Canceling jobs, removing from queue, clearing finished jobs
@@ -77,11 +77,22 @@ dashboard_totals: dict[str, float | int] = {}
 # user chooses "Clear finished queue records".
 history_cleared_before: float = 0.0
 JOBS_SAVE_LOCK = threading.RLock()
+DISPATCH_LOCK = threading.RLock()
+DISPATCH_WAKE_EVENT = threading.Event()
+RUNNING_JOB_THREADS: dict[str, threading.Thread] = {}
 TRANSFER_WORK_DIR = os.path.join(DATA_DIR, "node_transfer_work")
 PRESET_WORK_DIR = os.path.join(DATA_DIR, "node_job_presets")
 OUTPUT_ESTIMATE_CHECKPOINTS = (2, 10, 25, 60, 90)
 TRANSFER_RETRY_MIN_SECONDS = 15
 TRANSFER_RETRY_MAX_SECONDS = 30 * 60
+HARDWARE_ENCODER_FAMILIES = frozenset({
+    "qsv",
+    "nvenc",
+    "vce",
+    "amf",
+    "videotoolbox",
+    "vaapi",
+})
 
 
 def _now_ts() -> float:
@@ -453,9 +464,14 @@ def _normalize_encoding_policy(policy: dict | None = None) -> dict:
         stop_percent = float(source.get("auto_stop_large_output_percent") or 90.0)
     except (TypeError, ValueError):
         stop_percent = 90.0
+    try:
+        hardware_concurrency = int(source.get("hardware_transcode_concurrency") or 1)
+    except (TypeError, ValueError):
+        hardware_concurrency = 1
 
     return {
         "hb_threads": hb_threads,
+        "hardware_transcode_concurrency": max(1, min(8, hardware_concurrency)),
         "auto_stop_large_output_enabled": bool(source.get("auto_stop_large_output_enabled", False)),
         "auto_stop_large_output_percent": round(max(1.0, min(500.0, stop_percent)), 1),
     }
@@ -765,6 +781,12 @@ def _encoder_method_from_encoder(encoder: str, preset: str = "") -> dict:
         family = "nvenc"
     elif value.startswith("vce_"):
         family = "vce"
+    elif value.startswith("amf_"):
+        family = "amf"
+    elif value.startswith("vt_") or "videotoolbox" in value:
+        family = "videotoolbox"
+    elif value.startswith("vaapi_"):
+        family = "vaapi"
 
     codec = ""
     if "av1" in value:
@@ -832,6 +854,96 @@ def _job_encode_metadata(job: dict | None) -> dict:
     )
 
 
+def _preset_video_encoder(job: dict | None) -> str:
+    """Read the selected HandBrake preset's encoder without materializing it."""
+    job = job if isinstance(job, dict) else {}
+    bundle = _normalize_preset_bundle(job.get("preset_bundle"))
+    preset_name = ""
+    data = None
+
+    try:
+        if bundle:
+            data = json.loads(bundle["contents"])
+            preset_name = str(bundle.get("name") or "").strip()
+        else:
+            preset_file, preset_name = resolve_preset_file_and_name(job.get("preset") or "1080")
+            with open(preset_file, "r", encoding="utf-8") as preset_stream:
+                data = json.load(preset_stream)
+    except Exception:
+        return ""
+
+    candidates = []
+    if isinstance(data, dict):
+        if data.get("VideoEncoder"):
+            candidates.append(data)
+        preset_list = data.get("PresetList")
+        if isinstance(preset_list, list):
+            candidates.extend(row for row in preset_list if isinstance(row, dict))
+    elif isinstance(data, list):
+        candidates.extend(row for row in data if isinstance(row, dict))
+
+    if preset_name:
+        expected = preset_name.casefold()
+        selected = next(
+            (
+                row
+                for row in candidates
+                if str(row.get("PresetName") or row.get("Name") or "").strip().casefold() == expected
+            ),
+            None,
+        )
+        if selected:
+            return str(selected.get("VideoEncoder") or "").strip()
+    return str(candidates[0].get("VideoEncoder") or "").strip() if candidates else ""
+
+
+def _job_uses_hardware_encoder(job: dict | None) -> bool:
+    """Return True only when a job is known to use a GPU encoder."""
+    job = job if isinstance(job, dict) else {}
+    method = _job_encode_metadata(job)
+    family = str(method.get("encoder_family") or "").strip().lower()
+    if family in HARDWARE_ENCODER_FAMILIES:
+        return True
+    if family == "software":
+        return False
+
+    preset_encoder = _preset_video_encoder(job)
+    if not preset_encoder:
+        return False
+    preset_method = _encoder_method_from_encoder(preset_encoder, job.get("preset") or "")
+    return str(preset_method.get("encoder_family") or "").lower() in HARDWARE_ENCODER_FAMILIES
+
+
+def _hardware_transcode_limit(settings: dict | None = None, job: dict | None = None) -> int:
+    """Return the bounded per-worker GPU encode limit."""
+    stored_policy = job.get("encoding_policy") if isinstance(job, dict) else None
+    if (
+        isinstance(job, dict)
+        and job.get("mode") == "remote_transfer"
+        and isinstance(stored_policy, dict)
+        and "hardware_transcode_concurrency" in stored_policy
+    ):
+        source = stored_policy
+    else:
+        source = settings if isinstance(settings, dict) else load_settings()
+    try:
+        value = int(source.get("hardware_transcode_concurrency") or 1)
+    except (TypeError, ValueError):
+        value = 1
+    return max(1, min(8, value))
+
+
+def _can_dispatch_job(job: dict | None, running_jobs: list[dict], hardware_limit: int) -> bool:
+    """Enforce GPU-only concurrency while keeping software jobs exclusive."""
+    if not running_jobs:
+        return True
+    if not _job_uses_hardware_encoder(job):
+        return False
+    if any(not _job_uses_hardware_encoder(row) for row in running_jobs):
+        return False
+    return len(running_jobs) < max(1, int(hardware_limit or 1))
+
+
 def _job_learning_metadata(metadata: dict | None) -> dict:
     """Keep the small, safe provenance needed for post-encode learning."""
     metadata = metadata if isinstance(metadata, dict) else {}
@@ -860,9 +972,12 @@ def save_jobs():
     """
     global queue_paused, dashboard_totals, history_cleared_before
 
+    acquired = False
     try:
+        JOBS_SAVE_LOCK.acquire()
+        acquired = True
         serializable = {}
-        for jid, j in jobs.items():
+        for jid, j in list(jobs.items()):
             serializable[jid] = {
                 "status": j.get("status"),
                 "src": j.get("src"),
@@ -913,16 +1028,18 @@ def save_jobs():
         }
 
         os.makedirs(DATA_DIR, exist_ok=True)
-        with JOBS_SAVE_LOCK:
-            tmp = JOBS_FILE + ".tmp"
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(state, f)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp, JOBS_FILE)
-            shutil.copy2(JOBS_FILE, JOBS_FILE + ".bak")
+        tmp = JOBS_FILE + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+            f.flush()
+            os.fsync(f.fileno())
+        os.replace(tmp, JOBS_FILE)
+        shutil.copy2(JOBS_FILE, JOBS_FILE + ".bak")
     except Exception as e:
         print(f"[WARN] Failed to save jobs.json: {e}", flush=True)
+    finally:
+        if acquired:
+            JOBS_SAVE_LOCK.release()
 
 
 def load_jobs():
@@ -2012,57 +2129,124 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     save_jobs()
 
 
-def dispatcher_loop():
-    """
-    Background worker that processes jobs from job_queue one by one.
+def _run_dispatched_job(job_id: str) -> None:
+    """Run one claimed job and always release its dispatcher slot."""
+    job = jobs.get(job_id)
+    if not job:
+        with DISPATCH_LOCK:
+            RUNNING_JOB_THREADS.pop(job_id, None)
+        DISPATCH_WAKE_EVENT.set()
+        return
+    if job.get("status") == "canceled":
+        with DISPATCH_LOCK:
+            if job_id in job_queue:
+                try:
+                    job_queue.remove(job_id)
+                except ValueError:
+                    pass
+            RUNNING_JOB_THREADS.pop(job_id, None)
+        save_jobs()
+        DISPATCH_WAKE_EVENT.set()
+        return
 
-    Behavior:
-      - If queue is paused (queue_paused == True), the dispatcher idles
-      - Otherwise, it finds the first job with status "queued"
-      - It runs the job (run_encode), then removes it from job_queue
-      - If no jobs are queued, it just sleeps briefly and checks again
-    """
+    try:
+        print(f"[DISPATCHER] starting job {job_id}", flush=True)
+        run_encode(job_id, job["src"], job["preset"])
+        print(f"[DISPATCHER] finished job {job_id}", flush=True)
+    except Exception as exc:
+        if job.get("status") != "canceled":
+            job["status"] = "error"
+            job["returncode"] = -1
+            job["eta_seconds"] = None
+            job["finished_at"] = _now_ts()
+            if job.get("started_at") is not None:
+                try:
+                    job["duration_seconds"] = max(0.0, float(job["finished_at"]) - float(job["started_at"]))
+                except Exception:
+                    job["duration_seconds"] = None
+            job["log"] = (str(job.get("log") or "") + f"\nDispatcher error: {exc}\n")[-4000:]
+        log_event(
+            "job_error",
+            f"Dispatcher failed: {os.path.basename(job.get('src') or job_id)} ({exc})",
+            level="error",
+            job_id=job_id,
+            src=job.get("src"),
+        )
+    finally:
+        with DISPATCH_LOCK:
+            if job_id in job_queue:
+                try:
+                    job_queue.remove(job_id)
+                except ValueError:
+                    pass
+            RUNNING_JOB_THREADS.pop(job_id, None)
+        save_jobs()
+        DISPATCH_WAKE_EVENT.set()
+
+
+def dispatcher_loop():
+    """Dispatch FIFO jobs with CPU exclusivity and bounded GPU concurrency."""
     global job_queue, queue_paused
     print("[DISPATCHER] started", flush=True)
 
     while True:
-        # If queue is paused, do nothing except sleep
-        if queue_paused:
-            time.sleep(2.0)
-            continue
+        launched = False
+        queue_changed = False
 
-        next_id = None
+        if not queue_paused:
+            with DISPATCH_LOCK:
+                for job_id, thread in list(RUNNING_JOB_THREADS.items()):
+                    if not thread.is_alive():
+                        RUNNING_JOB_THREADS.pop(job_id, None)
 
-        # Find the first "queued" job in job_queue
-        for jid in list(job_queue):
-            j = jobs.get(jid)
-            if not j:
-                continue
-            if j.get("status") == "queued":
-                next_id = jid
-                break
+                next_id = None
+                for job_id in list(job_queue):
+                    job = jobs.get(job_id)
+                    if not job:
+                        try:
+                            job_queue.remove(job_id)
+                        except ValueError:
+                            pass
+                        queue_changed = True
+                        continue
+                    if job.get("status") == "queued":
+                        next_id = job_id
+                        break
 
-        if not next_id:
-            # Nothing queued right now; idle briefly
-            time.sleep(2.0)
-            continue
+                if next_id:
+                    next_job = jobs.get(next_id)
+                    running_jobs = [
+                        jobs[job_id]
+                        for job_id in RUNNING_JOB_THREADS
+                        if job_id in jobs
+                    ]
+                    if next_job and _can_dispatch_job(
+                        next_job,
+                        running_jobs,
+                        _hardware_transcode_limit(job=next_job),
+                    ):
+                        # Claim before starting the thread so this loop cannot
+                        # overfill the GPU while the thread is still booting.
+                        next_job["status"] = "running"
+                        thread = threading.Thread(
+                            target=_run_dispatched_job,
+                            args=(next_id,),
+                            daemon=True,
+                            name=f"encode-{next_id[:8]}",
+                        )
+                        RUNNING_JOB_THREADS[next_id] = thread
+                        thread.start()
+                        launched = True
 
-        job = jobs.get(next_id)
-        if not job:
-            # Job disappeared; remove from queue and continue
-            if next_id in job_queue:
-                job_queue.remove(next_id)
+        if launched or queue_changed:
             save_jobs()
+        if launched:
+            # Re-evaluate immediately so another hardware job can fill the
+            # next slot without waiting for the polling interval.
             continue
 
-        print(f"[DISPATCHER] starting job {next_id}", flush=True)
-        run_encode(next_id, job["src"], job["preset"])
-        print(f"[DISPATCHER] finished job {next_id}", flush=True)
-
-        # Remove from queue after completion (if still present)
-        if next_id in job_queue:
-            job_queue.remove(next_id)
-        save_jobs()
+        DISPATCH_WAKE_EVENT.wait(1.0)
+        DISPATCH_WAKE_EVENT.clear()
 
 
 def transfer_retry_loop():
@@ -2125,17 +2309,14 @@ def ensure_dispatcher():
     the background thread.
     """
     global dispatcher_started, transfer_retry_started
-    if dispatcher_started:
+    with DISPATCH_LOCK:
+        if not dispatcher_started:
+            dispatcher_started = True
+            threading.Thread(target=dispatcher_loop, daemon=True, name="dispatcher").start()
         if not transfer_retry_started:
-            threading.Thread(target=transfer_retry_loop, daemon=True, name="transfer-retry").start()
             transfer_retry_started = True
-        return
-
-    t = threading.Thread(target=dispatcher_loop, daemon=True)
-    t.start()
-    dispatcher_started = True
-    threading.Thread(target=transfer_retry_loop, daemon=True, name="transfer-retry").start()
-    transfer_retry_started = True
+            threading.Thread(target=transfer_retry_loop, daemon=True, name="transfer-retry").start()
+    DISPATCH_WAKE_EVENT.set()
 
 
 # -------------------------------------------------------------------
@@ -2170,6 +2351,7 @@ def set_queue_paused(paused: bool | None = None) -> bool:
         queue_paused = not queue_paused
 
     save_jobs()
+    DISPATCH_WAKE_EVENT.set()
     log_event(
         "queue_state",
         "Queue paused" if queue_paused else "Queue resumed",
@@ -2419,13 +2601,24 @@ def get_job_summary() -> dict:
         pass
 
     queued_items = [jid for jid in job_queue if jid in jobs and jobs[jid].get("status") == "queued"]
-    running_job_id = next((jid for jid, j in jobs.items() if j.get("status") == "running"), None)
+    running_job_ids = [jid for jid, j in jobs.items() if j.get("status") == "running"]
+    running_job_id = running_job_ids[0] if running_job_ids else None
+    policy_job = next(
+        (
+            jobs[jid]
+            for jid in running_job_ids + queued_items
+            if jid in jobs
+        ),
+        None,
+    )
 
     return {
         "counts": status_counts,
         "queue_paused": bool(queue_paused),
         "queued_count": len(queued_items),
         "running_job_id": running_job_id,
+        "running_job_ids": running_job_ids,
+        "hardware_transcode_concurrency": _hardware_transcode_limit(job=policy_job),
         "active_error_count": active_error_count,
         "saved_bytes": total_saved_bytes,
         "saved_gb": round(total_saved_bytes / (1024**3), 3) if total_saved_bytes else 0.0,

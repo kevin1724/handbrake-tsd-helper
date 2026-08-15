@@ -569,6 +569,15 @@
       <span class="small">Turn this on only when <code>/dev/dri</code> is mounted and usable.</span>
     </div>
 
+    <div class="row hardware-concurrency-setting" style="margin-top:14px;">
+      <label for="hardwareTranscodeConcurrency"><strong>Simultaneous GPU transcodes per worker</strong></label>
+      <div class="inline-input-group">
+        <input id="hardwareTranscodeConcurrency" type="number" min="1" max="8" step="1" inputmode="numeric" style="width:90px;">
+        <span id="hardwareConcurrencyLabel" class="node-pill node-pill-idle">Stable</span>
+      </div>
+      <span class="small">Applies only to Intel Quick Sync, NVIDIA, AMD, VideoToolbox, and VAAPI jobs. CPU/software jobs always run one at a time. Start with 2 and increase only if playback, disk I/O, and GPU stability remain healthy.</span>
+    </div>
+
     <div class="row encoding-size-guard" style="margin-top:14px;">
       <label class="toggle-line" for="autoStopLargeOutputEnabled">
         <input id="autoStopLargeOutputEnabled" type="checkbox">
@@ -2048,10 +2057,26 @@
       const qsvDeviceAvailableInput = document.getElementById("qsvDeviceAvailableInput");
       if (qsvDeviceAvailableInput) qsvDeviceAvailableInput.checked = Boolean(initialSettings?.qsv_device_available);
 
+      const hardwareConcurrency = document.getElementById("hardwareTranscodeConcurrency");
+      if (hardwareConcurrency) {
+        hardwareConcurrency.value = safeNumber(initialSettings?.hardware_transcode_concurrency, 1, 1, 8);
+        hardwareConcurrency.addEventListener("input", updateHardwareConcurrencyLabel);
+        updateHardwareConcurrencyLabel();
+      }
+
       const autoStopEnabled = document.getElementById("autoStopLargeOutputEnabled");
       if (autoStopEnabled) autoStopEnabled.checked = Boolean(initialSettings?.auto_stop_large_output_enabled);
       const autoStopPercent = document.getElementById("autoStopLargeOutputPercent");
       if (autoStopPercent) autoStopPercent.value = Number(initialSettings?.auto_stop_large_output_percent || 90);
+    }
+
+    function updateHardwareConcurrencyLabel() {
+      const input = document.getElementById("hardwareTranscodeConcurrency");
+      const label = document.getElementById("hardwareConcurrencyLabel");
+      if (!input || !label) return;
+      const value = safeNumber(input.value, 1, 1, 8);
+      label.textContent = value === 1 ? "Stable" : value === 2 ? "Balanced" : value <= 4 ? "High throughput" : "Advanced";
+      label.className = `node-pill ${value <= 2 ? "node-pill-paired" : value <= 4 ? "node-pill-idle" : "node-pill-offline"}`;
     }
 
     async function loadCpuProfiles() {
@@ -2107,6 +2132,7 @@
       const episodeReleaseRefreshHours = safeNumber(document.getElementById("episodeRefreshHoursInput")?.value, 12, 1, 168);
       const remoteTransferTempDir = document.getElementById("remoteTransferTempDirInput")?.value || "";
       const qsvDeviceAvailable = Boolean(document.getElementById("qsvDeviceAvailableInput")?.checked);
+      const hardwareTranscodeConcurrency = safeNumber(document.getElementById("hardwareTranscodeConcurrency")?.value, 1, 1, 8);
       const autoStopLargeOutputEnabled = Boolean(document.getElementById("autoStopLargeOutputEnabled")?.checked);
       const autoStopLargeOutputPercent = safeNumber(document.getElementById("autoStopLargeOutputPercent")?.value, 90, 1, 500);
 
@@ -2123,6 +2149,7 @@
             hb_threads: threads,
             cpu_profile: cpuProfile,
             qsv_device_available: qsvDeviceAvailable,
+            hardware_transcode_concurrency: hardwareTranscodeConcurrency,
             auto_stop_large_output_enabled: autoStopLargeOutputEnabled,
             auto_stop_large_output_percent: autoStopLargeOutputPercent,
             queue_ui_mode: queueUiMode,

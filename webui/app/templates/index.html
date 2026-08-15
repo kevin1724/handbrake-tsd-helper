@@ -187,6 +187,20 @@
       </div>
     </section>
 
+    <section id="v3RunningSection" class="section-card v3-only v3-running-section" aria-labelledby="v3RunningHeading">
+      <div class="section-heading-row">
+        <div>
+          <span class="v3-section-kicker">Live workload</span>
+          <h2 id="v3RunningHeading">Running now</h2>
+          <div class="small">Every active encoder, progress bar, and estimated finish in one focused view.</div>
+        </div>
+        <span id="v3RunningCapacity" class="v3-capacity-pill">Checking capacity</span>
+      </div>
+      <div id="v3RunningJobs" class="v3-running-grid">
+        <div class="v3-running-empty">Checking active encoders…</div>
+      </div>
+    </section>
+
     <section class="section-card">
       <div class="section-heading-row">
         <div>
@@ -1046,6 +1060,74 @@ function renderJobsSummary(summary) {
   }
 }
 
+function renderV3RunningJobs(jobs, summary) {
+  const panel = document.getElementById('v3RunningJobs');
+  const capacity = document.getElementById('v3RunningCapacity');
+  if (!panel || !capacity) return;
+
+  const running = (Array.isArray(jobs) ? jobs : []).filter(job => String(job.status || '').toLowerCase() === 'running');
+  const limit = Math.max(1, Number(uiSettings?.hardware_transcode_concurrency || 1));
+  const queued = Number(summary?.queued_count ?? summary?.counts?.queued ?? 0);
+  capacity.textContent = running.length
+    ? `${running.length} active · GPU limit ${limit}`
+    : queued ? `${queued} waiting` : 'Encoders available';
+  capacity.classList.toggle('is-active', running.length > 0);
+
+  panel.innerHTML = '';
+  if (!running.length) {
+    const empty = document.createElement('div');
+    empty.className = 'v3-running-empty';
+    empty.innerHTML = queued
+      ? `<strong>Ready for the next job.</strong><span>${queued} queued item${queued === 1 ? '' : 's'} will start when capacity is available.</span>`
+      : '<strong>No active transcodes.</strong><span>Add media below or queue it directly from the Library.</span>';
+    panel.appendChild(empty);
+    return;
+  }
+
+  running.forEach(job => {
+    const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
+    const card = document.createElement('article');
+    card.className = 'v3-running-card';
+
+    const head = document.createElement('div');
+    head.className = 'v3-running-card-head';
+    const copy = document.createElement('div');
+    const title = document.createElement('strong');
+    title.textContent = (job.src || '').split(/[\\/]/).pop() || 'Encode job';
+    title.title = job.src || '';
+    const meta = document.createElement('small');
+    meta.textContent = [job.node_name || 'Local encoder', job.encoder || job.preset || 'Smart Preset'].filter(Boolean).join(' · ');
+    copy.append(title, meta);
+    const percentage = document.createElement('b');
+    percentage.textContent = `${Math.round(progress)}%`;
+    head.append(copy, percentage);
+
+    const track = document.createElement('div');
+    track.className = 'v3-running-track';
+    track.setAttribute('role', 'progressbar');
+    track.setAttribute('aria-valuemin', '0');
+    track.setAttribute('aria-valuemax', '100');
+    track.setAttribute('aria-valuenow', String(Math.round(progress)));
+    const fill = document.createElement('i');
+    fill.style.width = `${progress}%`;
+    track.appendChild(fill);
+
+    const footer = document.createElement('div');
+    footer.className = 'v3-running-card-foot';
+    const eta = document.createElement('span');
+    eta.textContent = job.eta_seconds ? `${formatEta(job.eta_seconds)} remaining` : 'Calculating finish time';
+    const cancel = document.createElement('button');
+    cancel.type = 'button';
+    cancel.className = 'v3-inline-danger';
+    cancel.textContent = 'Cancel';
+    cancel.onclick = () => cancelJobById(job.id);
+    footer.append(eta, cancel);
+
+    card.append(head, track, footer);
+    panel.appendChild(card);
+  });
+}
+
 function refreshJobsSummary() {
   return fetch('/jobs/summary')
     .then(r => {
@@ -1081,6 +1163,7 @@ function refreshJobs() {
       if (data.error) throw new Error(data.error);
 
       renderJobsSummary(data.summary || {});
+      renderV3RunningJobs(data.jobs || [], data.summary || {});
 
       const tbody = document.getElementById('jobsTableBody');
       tbody.innerHTML = '';
@@ -1560,6 +1643,11 @@ document.addEventListener('DOMContentLoaded', () => {
   // Start the critical Jobs request first. File browsing, optional controls,
   // or node-status initialization must never prevent queue/history data from
   // appearing on this page.
+  const requestedStatus = new URLSearchParams(window.location.search).get('status');
+  const statusFilter = document.getElementById('jobStatusFilter');
+  if (statusFilter && ['queued', 'running', 'done', 'error', 'canceled'].includes(requestedStatus)) {
+    statusFilter.value = requestedStatus;
+  }
   refreshJobs();
 
   populateRoots();
