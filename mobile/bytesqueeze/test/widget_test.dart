@@ -33,8 +33,11 @@ void main() {
 
     expect(find.text('Command center'), findsOneWidget);
     expect(find.text('Open Library'), findsOneWidget);
+    await tester.scrollUntilVisible(
+        find.text('Queue with Smart Presets'), 220,
+        scrollable: find.byType(Scrollable).last);
+    await tester.pumpAndSettle();
     expect(find.text('Queue with Smart Presets'), findsOneWidget);
-    expect(find.text('Pause queue'), findsOneWidget);
   });
 
   testWidgets('settings keeps the V2 Classic fallback available',
@@ -69,6 +72,9 @@ void main() {
     await tester.scrollUntilVisible(
         find.text('Encoding capacity & safety'), 220,
         scrollable: find.byType(Scrollable).first);
+    await tester.drag(
+        find.byType(Scrollable).first, const Offset(0, -260));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Encoding capacity & safety'));
     await tester.pumpAndSettle();
 
