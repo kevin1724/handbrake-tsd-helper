@@ -72,8 +72,6 @@ void main() {
     await tester.scrollUntilVisible(
         find.text('Encoding capacity & safety'), 220,
         scrollable: find.byType(Scrollable).first);
-    await tester.drag(
-        find.byType(Scrollable).first, const Offset(0, -260));
     await tester.pumpAndSettle();
     await tester.tap(find.text('Encoding capacity & safety'));
     await tester.pumpAndSettle();

@@ -152,9 +152,14 @@ class _AppShellState extends State<AppShell> {
     required bool wide,
   }) {
     final paused = queue['paused'] == true;
-    final showDock = paused ||
+    final workIsActive = paused ||
         summaryCount(summary, 'running') > 0 ||
         summaryCount(summary, 'queued') > 0;
+    // Queue already has full live status, and Settings should never have
+    // controls obscured by operational chrome.
+    final showDock = workIsActive &&
+        controller.selectedTab != 2 &&
+        controller.selectedTab != 4;
     final page = IndexedStack(index: controller.selectedTab, children: pages);
 
     if (wide) {
