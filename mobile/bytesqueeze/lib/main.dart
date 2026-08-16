@@ -3,6 +3,7 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 
 import 'src/app_controller.dart';
+import 'src/app_meta.dart';
 import 'src/screens/app_shell.dart';
 import 'src/screens/pairing_screen.dart';
 import 'src/theme.dart';
@@ -27,7 +28,10 @@ class ByteSqueezeApp extends StatelessWidget {
         return MaterialApp(
           title: 'ByteSqueeze',
           debugShowCheckedModeBanner: false,
-          theme: ByteSqueezeTheme.dark,
+          theme: controller.useV3
+              ? ByteSqueezeTheme.v3(compact: controller.compactInterface)
+              : ByteSqueezeTheme.classic,
+          themeAnimationDuration: const Duration(milliseconds: 280),
           home: AnimatedSwitcher(
             duration: const Duration(milliseconds: 360),
             child: controller.booting
@@ -67,6 +71,13 @@ class _LaunchScreen extends StatelessWidget {
               const SizedBox(height: 22),
               Text('ByteSqueeze',
                   style: Theme.of(context).textTheme.headlineMedium),
+              const SizedBox(height: 6),
+              const Text('$appReleaseLabel · $appVersion',
+                  style: TextStyle(
+                      color: ByteSqueezeColors.muted,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      letterSpacing: .8)),
               const SizedBox(height: 18),
               const SizedBox(
                 width: 28,

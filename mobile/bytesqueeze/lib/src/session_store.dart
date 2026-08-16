@@ -55,6 +55,33 @@ class SessionStore {
   static const _scopeKey = 'bytesqueeze.scope';
   static const _accessKey = 'bytesqueeze.access_token';
   static const _refreshKey = 'bytesqueeze.refresh_token';
+  static const _interfaceVersionKey = 'bytesqueeze.interface_version';
+  static const _interfaceDensityKey = 'bytesqueeze.interface_density';
+
+  Future<String> loadInterfaceVersion() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value = (prefs.getString(_interfaceVersionKey) ?? 'v3').toLowerCase();
+    return value == 'v2' ? 'v2' : 'v3';
+  }
+
+  Future<String> loadInterfaceDensity() async {
+    final prefs = await SharedPreferences.getInstance();
+    final value =
+        (prefs.getString(_interfaceDensityKey) ?? 'comfortable').toLowerCase();
+    return value == 'compact' ? 'compact' : 'comfortable';
+  }
+
+  Future<void> saveInterfacePreferences({
+    required String version,
+    required String density,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_interfaceVersionKey, version == 'v2' ? 'v2' : 'v3');
+    await prefs.setString(
+      _interfaceDensityKey,
+      density == 'compact' ? 'compact' : 'comfortable',
+    );
+  }
 
   Future<ServerSession?> load() async {
     final prefs = await SharedPreferences.getInstance();

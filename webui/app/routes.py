@@ -6821,6 +6821,54 @@ def register_routes(app):
             return jsonify(error="unauthorized mobile device"), 401
         return jsonify(ok=True, local=local_node_overview(), nodes=list_nodes_public())
 
+    @app.route("/api/mobile/v1/operations", methods=["GET", "POST"])
+    def mobile_operations_api():
+        required_scope = "control" if request.method == "POST" else "read"
+        device = _authenticated_mobile(required_scope)
+        if not device:
+            return jsonify(
+                error=(
+                    "control permission required"
+                    if request.method == "POST"
+                    else "unauthorized mobile device"
+                )
+            ), (403 if request.method == "POST" else 401)
+
+        editable_keys = {
+            "hardware_transcode_concurrency",
+            "auto_stop_large_output_enabled",
+            "auto_stop_large_output_percent",
+        }
+        if request.method == "POST":
+            data = request.get_json(silent=True) or {}
+            updates = {key: data[key] for key in editable_keys if key in data}
+            if not updates:
+                return jsonify(error="no supported operation settings supplied"), 400
+            save_settings(updates)
+            log_event(
+                "mobile_operations_settings",
+                f"{device.get('name')} updated encoder capacity and safety settings.",
+                level="info",
+            )
+
+        settings = load_settings()
+        public_settings = {
+            "hardware_transcode_concurrency": settings.get("hardware_transcode_concurrency", 1),
+            "qsv_device_available": bool(settings.get("qsv_device_available")),
+            "auto_stop_large_output_enabled": bool(settings.get("auto_stop_large_output_enabled")),
+            "auto_stop_large_output_percent": settings.get("auto_stop_large_output_percent", 90),
+        }
+        return jsonify(
+            ok=True,
+            settings=public_settings,
+            capabilities={
+                "hardware_concurrency_min": 1,
+                "hardware_concurrency_max": 8,
+                "software_concurrency": 1,
+                "software_jobs_are_exclusive": True,
+            },
+        )
+
     @app.route("/api/mobile/v1/automation", methods=["GET", "POST"])
     def mobile_automation_api():
         required_scope = "control" if request.method == "POST" else "read"

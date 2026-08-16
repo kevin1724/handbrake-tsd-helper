@@ -333,6 +333,13 @@ abstract final class DemoData {
         },
       };
 
+  static Map<String, dynamic> get operations => {
+        'hardware_transcode_concurrency': 2,
+        'qsv_device_available': true,
+        'auto_stop_large_output_enabled': true,
+        'auto_stop_large_output_percent': 90.0,
+      };
+
   static Map<String, dynamic> _movie(
           String title, int year, int bytes, String quality, int hue) =>
       {

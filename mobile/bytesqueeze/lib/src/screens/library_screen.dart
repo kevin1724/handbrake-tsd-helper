@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 
@@ -1224,40 +1225,91 @@ class _LibraryPreviewFrame extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    Widget image;
+    Uint8List? bytes;
     try {
-      image = Image.memory(
-        base64Decode(value),
-        fit: BoxFit.contain,
-        gaplessPlayback: true,
-      );
-    } catch (_) {
-      image = const SizedBox(
+      bytes = base64Decode(value);
+    } catch (_) {}
+    final previewBytes = bytes;
+    final image = previewBytes == null
+        ? const SizedBox(
         height: 120,
         child: Center(child: Icon(Icons.broken_image_outlined)),
-      );
-    }
-    return ClipRRect(
+      )
+        : Image.memory(previewBytes,
+            fit: BoxFit.contain, gaplessPlayback: true);
+    return Material(
+      color: const Color(0xFF020713),
       borderRadius: BorderRadius.circular(14),
-      child: DecoratedBox(
-        decoration: BoxDecoration(
-          color: const Color(0xFF020713),
-          border: Border.all(color: ByteSqueezeColors.line),
-          borderRadius: BorderRadius.circular(14),
+      clipBehavior: Clip.antiAlias,
+      child: InkWell(
+        onTap: previewBytes == null
+            ? null
+            : () => _openPreview(context, previewBytes),
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            border: Border.all(color: ByteSqueezeColors.line),
+            borderRadius: BorderRadius.circular(14),
+          ),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Padding(
+                padding: const EdgeInsets.fromLTRB(10, 8, 8, 7),
+                child: Row(
+                  children: [
+                    Expanded(
+                      child: Text(label.toUpperCase(),
+                          style: const TextStyle(
+                              color: ByteSqueezeColors.muted,
+                              fontSize: 10,
+                              fontWeight: FontWeight.w900,
+                              letterSpacing: 1)),
+                    ),
+                    if (previewBytes != null)
+                      const Icon(Icons.zoom_out_map_rounded,
+                          color: ByteSqueezeColors.muted, size: 15),
+                  ],
+                ),
+              ),
+              image,
+            ],
+          ),
         ),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.stretch,
+      ),
+    );
+  }
+
+  void _openPreview(BuildContext context, Uint8List bytes) {
+    showDialog<void>(
+      context: context,
+      builder: (context) => Dialog(
+        insetPadding: const EdgeInsets.all(12),
+        backgroundColor: const Color(0xFF020407),
+        child: Stack(
           children: [
-            Padding(
-              padding: const EdgeInsets.fromLTRB(10, 8, 10, 7),
-              child: Text(label.toUpperCase(),
-                  style: const TextStyle(
-                      color: ByteSqueezeColors.muted,
-                      fontSize: 10,
-                      fontWeight: FontWeight.w900,
-                      letterSpacing: 1)),
+            Positioned.fill(
+              child: InteractiveViewer(
+                minScale: .8,
+                maxScale: 5,
+                child: Center(child: Image.memory(bytes, fit: BoxFit.contain)),
+              ),
             ),
-            image,
+            Positioned(
+              top: 8,
+              left: 12,
+              child: StatusPill(
+                label: label,
+                color: ByteSqueezeColors.cyan,
+              ),
+            ),
+            Positioned(
+              top: 5,
+              right: 5,
+              child: IconButton.filled(
+                onPressed: () => Navigator.pop(context),
+                icon: const Icon(Icons.close_rounded),
+              ),
+            ),
           ],
         ),
       ),

@@ -18,6 +18,8 @@ class AppController extends ChangeNotifier {
   String? error;
   int selectedTab = 0;
   ServerSession? session;
+  String interfaceVersion = 'v3';
+  String interfaceDensity = 'comfortable';
 
   Map<String, dynamic> dashboard = {};
   Map<String, dynamic> jobs = {};
@@ -29,15 +31,20 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic> events = {};
   Map<String, dynamic> smartPresets = {};
   Map<String, dynamic> autopilotReview = {};
+  Map<String, dynamic> operations = {};
 
   bool get connected => demoMode || session != null;
   bool get canControl => demoMode || session?.canControl == true;
+  bool get useV3 => interfaceVersion == 'v3';
+  bool get compactInterface => interfaceDensity == 'compact';
   String get serverLabel =>
       demoMode ? 'Demo server' : (api.activeBaseUrl.isEmpty ? 'Not connected' : api.activeBaseUrl);
 
   Future<void> bootstrap() async {
     booting = true;
     notifyListeners();
+    interfaceVersion = await store.loadInterfaceVersion();
+    interfaceDensity = await store.loadInterfaceDensity();
     session = await store.load();
     api.session = session;
     if (session != null) {
@@ -88,6 +95,7 @@ class AppController extends ChangeNotifier {
     events = DemoData.events;
     smartPresets = DemoData.smart;
     autopilotReview = {};
+    operations = DemoData.operations;
     error = null;
     notifyListeners();
   }
@@ -107,11 +115,30 @@ class AppController extends ChangeNotifier {
     events = {};
     smartPresets = {};
     autopilotReview = {};
+    operations = {};
     notifyListeners();
   }
 
   void selectTab(int value) {
-    selectedTab = value;
+    selectedTab = value.clamp(0, 4).toInt();
+    notifyListeners();
+  }
+
+  Future<void> setInterfaceVersion(String value) async {
+    interfaceVersion = value == 'v2' ? 'v2' : 'v3';
+    await store.saveInterfacePreferences(
+      version: interfaceVersion,
+      density: interfaceDensity,
+    );
+    notifyListeners();
+  }
+
+  Future<void> setInterfaceDensity(String value) async {
+    interfaceDensity = value == 'compact' ? 'compact' : 'comfortable';
+    await store.saveInterfacePreferences(
+      version: interfaceVersion,
+      density: interfaceDensity,
+    );
     notifyListeners();
   }
 
@@ -137,6 +164,8 @@ class AppController extends ChangeNotifier {
       _load('/storage?limit=100', (value) => storage = value, failures),
       _load('/events?limit=100', (value) => events = value, failures),
       _load('/smart_presets', (value) => smartPresets = value, failures),
+      _load('/operations', (value) => operations = _map(value['settings']),
+          failures),
       _load('/autopilot/review',
           (value) => autopilotReview = _map(value['review']), failures),
     ]);
@@ -373,6 +402,27 @@ class AppController extends ChangeNotifier {
       return;
     }
     smartPresets = await api.post('/smart_presets', {'profile': profile});
+    notifyListeners();
+  }
+
+  Future<void> saveOperationsSettings(Map<String, dynamic> updates) async {
+    _requireControl();
+    if (demoMode) {
+      operations.addAll(updates);
+      final summary = _map(jobs['summary']);
+      final dashboardSummary = _map(_map(dashboard['queue'])['summary']);
+      if (updates['hardware_transcode_concurrency'] != null) {
+        summary['hardware_transcode_concurrency'] =
+            updates['hardware_transcode_concurrency'];
+        dashboardSummary['hardware_transcode_concurrency'] =
+            updates['hardware_transcode_concurrency'];
+      }
+      notifyListeners();
+      return;
+    }
+    final value = await api.post('/operations', updates);
+    operations = _map(value['settings']);
+    await refreshJobsAndDashboard();
     notifyListeners();
   }
 

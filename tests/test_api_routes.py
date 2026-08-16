@@ -979,6 +979,13 @@ class ApiRouteSmokeTests(unittest.TestCase):
         )
         self.assertEqual(preview.status_code, 403)
 
+        operation_update = self.client.post(
+            "/api/mobile/v1/operations",
+            json={"hardware_transcode_concurrency": 2},
+            headers=headers,
+        )
+        self.assertEqual(operation_update.status_code, 403)
+
     def test_bytesqueeze_dashboard_library_and_control_surface(self):
         pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "control"})
         self.assertEqual(pairing_response.status_code, 200)
@@ -1051,6 +1058,31 @@ class ApiRouteSmokeTests(unittest.TestCase):
         smart = self.client.get("/api/mobile/v1/smart_presets", headers=headers)
         self.assertEqual(smart.status_code, 200, smart.get_data(as_text=True))
         self.assertIn("profile", smart.get_json())
+
+        operations = self.client.get("/api/mobile/v1/operations", headers=headers)
+        self.assertEqual(operations.status_code, 200, operations.get_data(as_text=True))
+        self.assertEqual(operations.get_json()["capabilities"]["software_concurrency"], 1)
+        original_operations = operations.get_json()["settings"]
+        operations_update = self.client.post(
+            "/api/mobile/v1/operations",
+            json={
+                "hardware_transcode_concurrency": 4,
+                "auto_stop_large_output_enabled": True,
+                "auto_stop_large_output_percent": 88,
+            },
+            headers=headers,
+        )
+        self.assertEqual(operations_update.status_code, 200, operations_update.get_data(as_text=True))
+        self.assertEqual(operations_update.get_json()["settings"]["hardware_transcode_concurrency"], 4)
+        self.client.post(
+            "/api/mobile/v1/operations",
+            json={
+                "hardware_transcode_concurrency": original_operations["hardware_transcode_concurrency"],
+                "auto_stop_large_output_enabled": original_operations["auto_stop_large_output_enabled"],
+                "auto_stop_large_output_percent": original_operations["auto_stop_large_output_percent"],
+            },
+            headers=headers,
+        )
 
         node_target_path = os.path.join(TEST_MEDIA, "Node.Target.Movie.1080p.mkv")
         with open(node_target_path, "wb") as handle:

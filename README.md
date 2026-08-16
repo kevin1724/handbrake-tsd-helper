@@ -68,6 +68,13 @@ Autopilot is disabled and set to Observe by default. Its page now creates and di
 
 ByteSqueeze is the Android-first Flutter companion for managing a TSD controller from a phone. It can browse movie and show posters, track shows, queue server-side Smart Preset jobs, manage active jobs, tune Autopilot, review learned preset decisions, and monitor workers, storage savings, and events. All transcoding remains on the Docker controller and its workers.
 
+The mobile V3 Beta now mirrors the web workspace with an adaptive desktop
+sidebar, polished phone navigation, a searchable command center, real Smart
+comparison previews, full-season queues, mobile GPU-capacity controls, and a
+persistent **Settings → Interface & layout → V2 Classic** fallback. Interface
+density and V3/V2 selection are local to each device and never alter encoding
+settings.
+
 The same Flutter project includes an iOS target so networking, secure pairing, application state, responsive navigation, and screens can be carried into an iPhone release without a second implementation.
 
 - Source: [`mobile/bytesqueeze`](mobile/bytesqueeze)
