@@ -231,8 +231,15 @@ class ByteSqueezeApi {
       );
     }
     if (response.statusCode < 200 || response.statusCode >= 300) {
+      final serverMessage = '${data['error'] ?? data['message'] ?? ''}'.trim();
+      final fallbackMessage = switch (response.statusCode) {
+        404 => 'This app feature is not available on the connected server yet.',
+        502 || 503 || 504 =>
+          'The TSD server is temporarily unavailable (HTTP ${response.statusCode}).',
+        _ => 'The TSD server returned HTTP ${response.statusCode}.',
+      };
       throw ApiFailure(
-        '${data['error'] ?? data['message'] ?? 'Server request failed'}',
+        serverMessage.isNotEmpty ? serverMessage : fallbackMessage,
         statusCode: response.statusCode,
       );
     }

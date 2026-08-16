@@ -99,8 +99,9 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.developer_board_rounded,
                       color: ByteSqueezeColors.cyan,
                       title: 'Encoding capacity & safety',
-                      subtitle:
-                          '${controller.operations['hardware_transcode_concurrency'] ?? asMap(controller.jobs['summary'])['hardware_transcode_concurrency'] ?? 1} GPU slots · CPU stays at one',
+                      subtitle: controller.serverSupportsOperationsSettings
+                          ? '${controller.operations['hardware_transcode_concurrency'] ?? asMap(controller.jobs['summary'])['hardware_transcode_concurrency'] ?? 1} GPU slots · CPU stays at one'
+                          : 'Server update needed for mobile controls',
                       onTap: () => _open(
                           context, OperationsSettingsPage(controller: controller)),
                     ),
@@ -459,11 +460,41 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
   @override
   Widget build(BuildContext context) {
     final qsv = controller.operations['qsv_device_available'] == true;
+    final supported = controller.serverSupportsOperationsSettings;
     return _DetailScaffold(
       title: 'Encoding capacity & safety',
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
+          if (!supported) ...[
+            SurfaceCard(
+              borderColor: ByteSqueezeColors.amber.withValues(alpha: .48),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.system_update_alt_rounded,
+                      color: ByteSqueezeColors.amber),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Server update required',
+                            style: TextStyle(fontWeight: FontWeight.w800)),
+                        SizedBox(height: 4),
+                        Text(
+                          'The rest of ByteSqueeze remains connected. Update the TSD server to the V3 beta to change these encoder controls from the app.',
+                          style: TextStyle(
+                              color: ByteSqueezeColors.softInk, fontSize: 12.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
           SurfaceCard(
             gradient: const LinearGradient(
               begin: Alignment.topLeft,
@@ -489,8 +520,10 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
                   ),
                 ),
                 StatusPill(
-                  label: qsv ? 'QSV READY' : 'GPU STATUS UNKNOWN',
-                  color: qsv
+                  label: !supported
+                      ? 'LEGACY SERVER'
+                      : (qsv ? 'QSV READY' : 'GPU STATUS UNKNOWN'),
+                  color: supported && qsv
                       ? ByteSqueezeColors.mint
                       : ByteSqueezeColors.amber,
                 ),
@@ -534,7 +567,7 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
                   max: 8,
                   divisions: 7,
                   label: '$_hardwareSlots',
-                  onChanged: controller.canControl
+                  onChanged: controller.canControl && supported
                       ? (value) =>
                           setState(() => _hardwareSlots = value.round())
                       : null,
@@ -563,7 +596,7 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
                     'Uses encode checkpoints; the original source remains safe.',
                     style: TextStyle(color: ByteSqueezeColors.muted),
                   ),
-                  onChanged: controller.canControl
+                  onChanged: controller.canControl && supported
                       ? (value) => setState(() => _autoStop = value)
                       : null,
                 ),
@@ -586,7 +619,7 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
                     max: 150,
                     divisions: 20,
                     label: '${_stopPercent.round()}%',
-                    onChanged: controller.canControl
+                    onChanged: controller.canControl && supported
                         ? (value) => setState(() => _stopPercent = value)
                         : null,
                   ),
@@ -596,7 +629,9 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
           ),
           const SizedBox(height: 14),
           FilledButton.icon(
-            onPressed: controller.canControl && !_saving ? _save : null,
+            onPressed: controller.canControl && supported && !_saving
+                ? _save
+                : null,
             icon: _saving
                 ? const SizedBox(
                     width: 18,
@@ -606,10 +641,13 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
             label: const Text('Save encoder settings'),
           ),
           const SizedBox(height: 10),
-          const Text(
-            'These are server settings and apply to the web interface, Autopilot, linked workers, and every paired ByteSqueeze device.',
+          Text(
+            supported
+                ? 'These are server settings and apply to the web interface, Autopilot, linked workers, and every paired ByteSqueeze device.'
+                : 'No connection was lost. This page is read-only until the server is updated.',
             textAlign: TextAlign.center,
-            style: TextStyle(color: ByteSqueezeColors.muted, fontSize: 11.5),
+            style: const TextStyle(
+                color: ByteSqueezeColors.muted, fontSize: 11.5),
           ),
         ],
       ),

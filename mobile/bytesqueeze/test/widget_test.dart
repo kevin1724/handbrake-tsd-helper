@@ -82,6 +82,28 @@ void main() {
     expect(find.text('Stop unexpectedly large outputs'), findsOneWidget);
   });
 
+  testWidgets('older server keeps the app connected and explains one limitation',
+      (tester) async {
+    final controller = AppController()..enterDemo();
+    controller.serverSupportsOperationsSettings = false;
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Server request failed'), findsNothing);
+    await tester.tap(find.byIcon(Icons.tune_outlined));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+        find.text('Encoding capacity & safety'), 220,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Encoding capacity & safety'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Server update required'), findsOneWidget);
+    expect(find.textContaining('rest of ByteSqueeze remains connected'),
+        findsOneWidget);
+    expect(find.text('LEGACY SERVER'), findsOneWidget);
+  });
+
   testWidgets('queue prioritizes running work and hardware capacity',
       (tester) async {
     final controller = AppController()..enterDemo();

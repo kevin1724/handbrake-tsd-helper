@@ -12,6 +12,8 @@ ByteSqueeze is the Flutter remote-control app for HandBrake TSD Helper.
 - Running-now, up-next, and history queue views with GPU-capacity guidance
 - Mobile control of safe GPU concurrency and projected-output-size protection;
   CPU/software encoding always remains exclusive
+- Graceful compatibility with older TSD servers: unsupported V3 controls become
+  read-only without falsely reporting that the entire server connection failed
 - Complete movie/show catalog, TMDb-first artwork with no-key fallback, upcoming episode calendar,
   friendly savings/HDR/tracked filters, movie and season Smart Queue guardrails,
   real Library comparison previews, guided Autopilot preview training, preservation-first Smart Presets,
