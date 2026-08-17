@@ -570,12 +570,12 @@
     </div>
 
     <div class="row hardware-concurrency-setting" style="margin-top:14px;">
-      <label for="hardwareTranscodeConcurrency"><strong>Simultaneous GPU transcodes per worker</strong></label>
+      <label for="hardwareTranscodeConcurrency"><strong>Default simultaneous GPU transcodes</strong></label>
       <div class="inline-input-group">
         <input id="hardwareTranscodeConcurrency" type="number" min="1" max="8" step="1" inputmode="numeric" style="width:90px;">
         <span id="hardwareConcurrencyLabel" class="node-pill node-pill-idle">Stable</span>
       </div>
-      <span class="small">Applies only to Intel Quick Sync, NVIDIA, AMD, VideoToolbox, and VAAPI jobs. CPU/software jobs always run one at a time. Start with 2 and increase only if playback, disk I/O, and GPU stability remain healthy.</span>
+      <span class="small">Controls this main node and becomes the starting value for newly paired workers. Change an existing worker in Linked Workers below. It applies only to Intel Quick Sync, NVIDIA, AMD, VideoToolbox, and VAAPI jobs; CPU/software jobs always run one at a time.</span>
     </div>
 
     <div class="row encoding-size-guard" style="margin-top:14px;">
@@ -966,10 +966,14 @@
             <ol>
               <li>Use Library to select Local queue, Best worker, or a specific worker.</li>
               <li>The controller sends the selected preset JSON to the worker with each node job.</li>
-              <li>No media paths, folder mappings, or preset folders are needed on the worker.</li>
+              <li>Set each worker's GPU slots below. CPU/software work always remains limited to one.</li>
             </ol>
           </div>
         </div>
+        <p class="small" style="margin-top:14px;">
+          <a href="https://github.com/kevin1724/handbrake-tsd-helper/wiki/Headless-Worker-Setup" target="_blank" rel="noopener">Open the complete Headless Worker Setup wiki</a>
+          for Linux, Unraid, Windows, drive sizing, updates, and troubleshooting.
+        </p>
       </div>
     </div>
 
@@ -3189,6 +3193,11 @@
           workerType.textContent = "headless";
           header.appendChild(workerType);
         }
+        const capacityPill = document.createElement("span");
+        capacityPill.className = "node-pill node-pill-worker";
+        const savedCapacity = Math.max(1, Math.min(8, Number(node.hardware_transcode_concurrency || 1)));
+        capacityPill.textContent = `${savedCapacity} GPU slot${savedCapacity === 1 ? "" : "s"}`;
+        header.appendChild(capacityPill);
         header.appendChild(pill);
         main.appendChild(header);
 
@@ -3246,6 +3255,29 @@
         modeRow.appendChild(transferInfo);
         main.appendChild(modeRow);
 
+        const capacityRow = document.createElement("div");
+        capacityRow.className = "node-capacity-row";
+        const capacityCopy = document.createElement("div");
+        const capacityTitle = document.createElement("strong");
+        capacityTitle.textContent = "Simultaneous hardware transcodes";
+        const capacityHelp = document.createElement("span");
+        capacityHelp.textContent = "Managed by this main node. GPU jobs may share slots; CPU/software jobs always run alone.";
+        capacityCopy.appendChild(capacityTitle);
+        capacityCopy.appendChild(capacityHelp);
+        const capacitySelect = document.createElement("select");
+        capacitySelect.className = "node-capacity-select";
+        capacitySelect.setAttribute("aria-label", `GPU slots for ${node.name || "worker"}`);
+        for (let value = 1; value <= 8; value += 1) {
+          const option = document.createElement("option");
+          option.value = String(value);
+          option.textContent = `${value} GPU job${value === 1 ? "" : "s"}`;
+          option.selected = savedCapacity === value;
+          capacitySelect.appendChild(option);
+        }
+        capacityRow.appendChild(capacityCopy);
+        capacityRow.appendChild(capacitySelect);
+        main.appendChild(capacityRow);
+
         const textarea = document.createElement("textarea");
         textarea.className = "path-map-textarea";
         textarea.rows = 3;
@@ -3257,12 +3289,13 @@
         const actions = document.createElement("div");
         actions.className = "node-actions";
         const actionRows = [
+          ["Save GPU capacity", () => saveWorkerCapacity(node.id, capacitySelect.value)],
           ["Refresh", () => refreshNode(node.id)],
           ["Rotate secret", () => rotateNodeSecret(node.id)],
           ["Unlink", () => unlinkNode(node.id)],
           ["Forget local record", () => forgetNode(node.id)]
         ];
-        if (!headless) actionRows.splice(1, 0, ["Save settings", () => saveNodeSettings(node.id, textarea.value, modeSelect.value)]);
+        if (!headless) actionRows.splice(1, 0, ["Save drive mapping", () => saveNodeSettings(node.id, textarea.value, modeSelect.value)]);
         actionRows.forEach(([label, handler]) => {
           const btn = document.createElement("button");
           btn.type = "button";
@@ -3412,6 +3445,27 @@
         await loadNodes();
       } catch (err) {
         if (window.appToast) appToast(err.message || "Failed to save node settings.", "error");
+      }
+    }
+
+    async function saveWorkerCapacity(nodeId, hardwareTranscodeConcurrency) {
+      try {
+        const res = await fetch(`/api/nodes/${encodeURIComponent(nodeId)}/settings`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            hardware_transcode_concurrency: Number(hardwareTranscodeConcurrency || 1)
+          })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to save worker capacity");
+        const message = data.applied_online
+          ? "Worker GPU capacity applied now."
+          : (data.warning || "Worker GPU capacity saved on the main node.");
+        if (window.appToast) appToast(message, data.applied_online ? "success" : "info");
+        await loadNodes();
+      } catch (err) {
+        if (window.appToast) appToast(err.message || "Failed to save worker capacity.", "error");
       }
     }
 

@@ -11,6 +11,9 @@ services:
       TSD_WORKER_NAME: ${TSD_WORKER_NAME:-ByteSqueeze Worker}
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
+      # Map a fast, durable host drive to /work. This preserves pairing state
+      # in /work/state and holds temporary sources/outputs in /work/jobs.
+      # See docs/HEADLESS_WORKER.md for Linux, Unraid, and Windows examples.
       - type: bind
         source: ${TSD_WORKER_WORK_DIR:-./worker-work}
         target: /work

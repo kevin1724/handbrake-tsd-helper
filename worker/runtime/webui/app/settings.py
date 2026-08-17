@@ -18,6 +18,8 @@ SETTINGS_FILE = os.path.join(DATA_DIR, "settings.json")
 SETTINGS_LOCK = threading.RLock()
 DEFAULT_SETTINGS = {
     "hb_threads": 0,
+    "hardware_transcode_concurrency": 1,
+    "worker_controller_managed_capacity": False,
     "auto_stop_large_output_enabled": False,
     "auto_stop_large_output_percent": 90.0,
     "remote_transfer_temp_dir": "/work/jobs",
@@ -35,8 +37,19 @@ def _normalized(values: dict | None) -> dict:
         stop_percent = float(values.get("auto_stop_large_output_percent") or 90.0)
     except (TypeError, ValueError):
         stop_percent = 90.0
+    try:
+        hardware_concurrency = max(
+            1,
+            min(8, int(values.get("hardware_transcode_concurrency") or 1)),
+        )
+    except (TypeError, ValueError):
+        hardware_concurrency = 1
     return {
         "hb_threads": hb_threads,
+        "hardware_transcode_concurrency": hardware_concurrency,
+        "worker_controller_managed_capacity": bool(
+            values.get("worker_controller_managed_capacity", False)
+        ),
         "auto_stop_large_output_enabled": bool(values.get("auto_stop_large_output_enabled", False)),
         "auto_stop_large_output_percent": round(max(1.0, min(500.0, stop_percent)), 1),
         "remote_transfer_temp_dir": str(values.get("remote_transfer_temp_dir") or "/work/jobs").strip()[:500],

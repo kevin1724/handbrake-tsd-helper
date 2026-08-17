@@ -35,6 +35,10 @@ NODE_CAPABILITIES = [
     "preset-bundle",
     "job-dispatch",
     "diagnostics",
+    "controller-encoding-policy",
+    "gpu-multi-encode",
+    "cpu-software-exclusive",
+    "output-size-guard",
 ]
 STATE_LOCK = threading.RLock()
 TRANSFER_LOCK = threading.RLock()
@@ -196,6 +200,15 @@ def normalize_transfer_mode(value: str) -> str:
     if mode in {"remote", "remote_transfer", "transfer"}:
         return "remote"
     return "local"
+
+
+def normalize_hardware_transcode_concurrency(value, default: int = 1) -> int:
+    """Return the safe GPU slot count stored by the controller per worker."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        parsed = int(default or 1)
+    return max(1, min(8, parsed))
 
 
 def node_has_running_work(row: dict) -> bool:
@@ -411,6 +424,16 @@ def public_node(row: dict) -> dict:
         "transfer_mode": normalize_transfer_mode(row.get("transfer_mode")),
         "controller_url": row.get("controller_url") or "",
         "remote_temp_dir": row.get("remote_temp_dir") or "",
+        "hardware_transcode_concurrency": normalize_hardware_transcode_concurrency(
+            row.get("hardware_transcode_concurrency"),
+            1,
+        ),
+        "worker_encoding_policy": (
+            row.get("worker_encoding_policy")
+            if isinstance(row.get("worker_encoding_policy"), dict)
+            else {}
+        ),
+        "worker_release": row.get("worker_release") or "",
         "worker_mode": row.get("worker_mode") or "full",
         "requires_remote_transfer": bool(row.get("requires_remote_transfer")),
         "paired_at": row.get("paired_at") or 0,
@@ -625,7 +648,17 @@ def _request_json(
     return payload if isinstance(payload, dict) else {}
 
 
-def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: list | None = None, transfer_mode: str = "local", controller_url: str = "", remote_temp_dir: str = "") -> dict:
+def pair_worker(
+    worker_url: str,
+    code: str,
+    *,
+    name: str = "",
+    path_mappings: list | None = None,
+    transfer_mode: str = "local",
+    controller_url: str = "",
+    remote_temp_dir: str = "",
+    hardware_transcode_concurrency: int = 1,
+) -> dict:
     url = normalize_url(worker_url)
     local = local_node_info()
     try:
@@ -679,6 +712,10 @@ def pair_worker(worker_url: str, code: str, *, name: str = "", path_mappings: li
         "transfer_mode": selected_transfer_mode,
         "controller_url": stored_controller_url,
         "remote_temp_dir": str(remote_temp_dir or "").strip()[:500],
+        "hardware_transcode_concurrency": normalize_hardware_transcode_concurrency(
+            hardware_transcode_concurrency,
+            1,
+        ),
         "worker_mode": worker_mode,
         "requires_remote_transfer": requires_remote_transfer,
         "protocol_version": max(1, _safe_int(data.get("protocol_version"), discovery.get("protocol_version") or 1)),

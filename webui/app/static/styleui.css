@@ -2765,6 +2765,7 @@ body.settings-page .folder-add-choice {
 
 .node-status-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -3034,6 +3035,36 @@ body.settings-page .folder-add-choice {
   word-break: break-word;
 }
 
+.node-capacity-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 210px);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.09), rgba(22, 199, 214, 0.05));
+}
+
+.node-capacity-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.node-capacity-row strong {
+  color: #fff;
+}
+
+.node-capacity-row span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.node-capacity-select {
+  width: 100%;
+}
+
 .path-map-textarea {
   width: 100%;
   min-height: 92px;
@@ -3152,6 +3183,10 @@ body.settings-page .folder-add-choice {
   }
 
   .node-mode-row {
+    grid-template-columns: 1fr;
+  }
+
+  .node-capacity-row {
     grid-template-columns: 1fr;
   }
 

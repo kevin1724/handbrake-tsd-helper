@@ -917,7 +917,23 @@ def _job_uses_hardware_encoder(job: dict | None) -> bool:
 def _hardware_transcode_limit(settings: dict | None = None, job: dict | None = None) -> int:
     """Return the bounded per-worker GPU encode limit."""
     stored_policy = job.get("encoding_policy") if isinstance(job, dict) else None
-    if (
+    worker_settings = {}
+    if str(os.environ.get("TSD_WORKER_MODE") or "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }:
+        try:
+            worker_settings = load_settings()
+        except Exception:
+            worker_settings = {}
+    if worker_settings.get("worker_controller_managed_capacity"):
+        # The headless service has no local settings UI. Once a paired
+        # controller manages its capacity, the latest controller value wins
+        # for all queued work instead of leaving stale limits on older jobs.
+        source = worker_settings
+    elif (
         isinstance(job, dict)
         and job.get("mode") == "remote_transfer"
         and isinstance(stored_policy, dict)

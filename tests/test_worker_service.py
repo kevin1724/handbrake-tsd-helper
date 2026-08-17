@@ -71,6 +71,11 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         self.assertEqual(response.get_json()["worker_mode"], "headless")
         self.assertTrue(response.get_json()["requires_remote_transfer"])
+        self.assertIn("gpu-multi-encode", response.get_json()["capabilities"])
+        self.assertIn(
+            "controller-encoding-policy",
+            response.get_json()["capabilities"],
+        )
         self.assertTrue(response.get_json()["token"])
         self.assertEqual(self.client.get("/api/node/status").status_code, 401)
 
@@ -113,6 +118,48 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertFalse(jobs._can_dispatch_job(software, [qsv], 8))
         self.assertFalse(jobs._can_dispatch_job(qsv, [software], 8))
         self.assertTrue(jobs._can_dispatch_job(software, [], 8))
+
+    def test_main_controller_can_change_worker_gpu_capacity(self):
+        pairing = node_linking.create_pairing_code()
+        paired = self.client.post(
+            "/api/node/pair/accept",
+            json={
+                "code": pairing["code"],
+                "controller_id": "controller-capacity",
+                "controller_name": "Main node",
+                "controller_url": "http://controller:8080",
+                "protocol_version": 2,
+            },
+        ).get_json()
+        policy = {"hardware_transcode_concurrency": 3}
+        body = json.dumps(policy).encode("utf-8")
+        headers = node_linking.hmac_headers(
+            "POST",
+            "/api/node/config",
+            body,
+            node_id="controller-capacity",
+            token=paired["token"],
+        )
+        response = self.client.post(
+            "/api/node/config",
+            data=body,
+            content_type="application/json",
+            headers=headers,
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        applied = response.get_json()["encoding_policy"]
+        self.assertEqual(applied["hardware_transcode_concurrency"], 3)
+        self.assertTrue(applied["controller_managed"])
+        stale_job = {
+            "mode": "remote_transfer",
+            "encoding_policy": {"hardware_transcode_concurrency": 1},
+        }
+        self.assertEqual(jobs._hardware_transcode_limit(job=stale_job), 3)
+
+        health = self.client.get("/api/health").get_json()
+        self.assertEqual(health["release"], "2.3.0")
+        self.assertEqual(health["encoding_policy"]["hardware_transcode_concurrency"], 3)
 
     def test_hardware_preset_and_concurrency_limit_are_detected_safely(self):
         preset = {

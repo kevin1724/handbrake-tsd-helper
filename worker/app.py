@@ -1,8 +1,8 @@
 """Minimal HTTP service for a transfer-only ByteSqueeze worker.
 
-The controller owns the media library. A worker receives a short-lived download
-grant, stages one source under /work, runs HandBrake locally, and uploads the
-result to the controller. No media-library mount or browser UI is exposed.
+The controller owns the media library. A worker receives short-lived download
+grants, stages sources under /work, runs HandBrake locally, and uploads results
+to the controller. No media-library mount or browser UI is exposed.
 """
 
 from __future__ import annotations
@@ -36,10 +36,47 @@ from webui.app.node_linking import (
     verify_hmac,
 )
 from webui.app.presets import guess_preset_from_filename, load_preset_config
-from webui.app.settings import save_settings
+from webui.app.settings import load_settings, save_settings
 
 
-WORKER_RELEASE = "2.2.0"
+WORKER_RELEASE = "2.3.0"
+
+
+def _public_encoding_policy() -> dict:
+    settings = load_settings()
+    return {
+        "hardware_transcode_concurrency": int(
+            settings.get("hardware_transcode_concurrency") or 1
+        ),
+        "software_transcode_concurrency": 1,
+        "software_jobs_are_exclusive": True,
+        "controller_managed": bool(
+            settings.get("worker_controller_managed_capacity", False)
+        ),
+        "auto_stop_large_output_enabled": bool(
+            settings.get("auto_stop_large_output_enabled", False)
+        ),
+        "auto_stop_large_output_percent": settings.get(
+            "auto_stop_large_output_percent",
+            90,
+        ),
+    }
+
+
+def _apply_controller_encoding_policy(policy: dict | None) -> dict:
+    policy = policy if isinstance(policy, dict) else {}
+    allowed = {
+        "hb_threads",
+        "hardware_transcode_concurrency",
+        "auto_stop_large_output_enabled",
+        "auto_stop_large_output_percent",
+    }
+    updates = {key: policy[key] for key in allowed if key in policy}
+    if "hardware_transcode_concurrency" in updates:
+        updates["worker_controller_managed_capacity"] = True
+    if updates:
+        save_settings(updates)
+    return _public_encoding_policy()
 
 
 def _work_dir() -> str:
@@ -131,6 +168,7 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             node_id=local.get("id"),
             node_name=local.get("name"),
             paired=bool(local.get("paired_controller_count")),
+            encoding_policy=_public_encoding_policy(),
             message="Headless worker only. Pairing code is printed in docker logs.",
         )
 
@@ -145,6 +183,7 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             service="bytesqueeze-headless-worker",
             work={"path": work_dir, "free_bytes": int(usage.free), "total_bytes": int(usage.total)},
             queue=summary,
+            encoding_policy=_public_encoding_policy(),
         )
 
     @app.get("/api/node/discovery")
@@ -160,6 +199,7 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             accepted = accept_pairing(data.get("code") or "", data)
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
+        accepted["capabilities"] = node_discovery().get("capabilities") or []
         print(
             f"[WORKER] Paired with controller {data.get('controller_name') or data.get('controller_id')} "
             f"at {accepted.get('controller_url') or data.get('controller_url')}",
@@ -177,6 +217,7 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             recovered = recover_pairing(data)
         except ValueError as exc:
             return jsonify(error=str(exc)), 401
+        recovered["capabilities"] = node_discovery().get("capabilities") or []
         return jsonify(ok=True, worker_mode="headless", requires_remote_transfer=True, **recovered)
 
     @app.post("/api/node/pair/enable-recovery")
@@ -197,8 +238,10 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             return jsonify(error="unauthorized"), 401
         local = local_node_overview()
         usage = shutil.disk_usage(work_dir)
+        discovery = node_discovery()
         return jsonify(
             ok=True,
+            release=WORKER_RELEASE,
             id=local.get("id"),
             name=local.get("name"),
             role="worker",
@@ -206,13 +249,40 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             worker_mode="headless",
             requires_remote_transfer=True,
             protocol_version=NODE_PROTOCOL_VERSION,
+            capabilities=discovery.get("capabilities") or [],
             paired_controllers=list_trusted_controllers_public(),
             remote_transfer_temp_dir=work_dir,
             work_free_bytes=int(usage.free),
             summary=get_job_summary(),
             jobs=list_jobs_for_api(),
+            encoding_policy=_public_encoding_policy(),
             prediction_profile={},
         )
+
+    @app.post("/api/node/config")
+    def worker_controller_config():
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        policy = request.get_json(silent=True) or {}
+        if not any(
+            key in policy
+            for key in (
+                "hb_threads",
+                "hardware_transcode_concurrency",
+                "auto_stop_large_output_enabled",
+                "auto_stop_large_output_percent",
+            )
+        ):
+            return jsonify(error="no supported worker settings supplied"), 400
+        applied = _apply_controller_encoding_policy(policy)
+        log_event(
+            "worker_capacity_updated",
+            f"{controller.get('name') or 'Controller'} set this worker to "
+            f"{applied['hardware_transcode_concurrency']} GPU slot(s).",
+            level="info",
+        )
+        return jsonify(ok=True, encoding_policy=applied)
 
     @app.post("/api/node/jobs")
     def worker_receive_jobs():
@@ -223,6 +293,9 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
         jobs_payload = payload.get("jobs")
         if not isinstance(jobs_payload, list):
             return jsonify(error="missing jobs"), 400
+        applied_policy = _apply_controller_encoding_policy(
+            payload.get("encoding_policy")
+        )
 
         count = 0
         skipped = []
@@ -260,7 +333,13 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
 
         print(f"[WORKER] Accepted {count} remote job(s); skipped {len(skipped)}.", flush=True)
         log_event("node_jobs_received", f"Received {count} headless worker job(s).", level="info")
-        return jsonify(ok=True, count=count, skipped=skipped, summary=get_job_summary())
+        return jsonify(
+            ok=True,
+            count=count,
+            skipped=skipped,
+            summary=get_job_summary(),
+            encoding_policy=applied_policy,
+        )
 
     @app.post("/api/node/rotate_secret")
     def worker_rotate_secret():

@@ -144,6 +144,7 @@ from .node_linking import (
     list_nodes_public,
     local_node_overview,
     node_discovery,
+    normalize_hardware_transcode_concurrency,
     normalize_path_mappings,
     normalize_transfer_mode,
     node_has_running_work,
@@ -2876,7 +2877,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.14.0-beta.1"
+APP_RELEASE = "3.15.0-beta.1"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -3948,7 +3949,11 @@ def _beta_choose_tmdb_result(rows: list, title: str, year=None) -> dict | None:
 def _public_settings(settings: dict) -> dict:
     """Return browser-safe settings without cloud-provider secrets."""
     public = dict(settings or {})
-    for key in ("gemini_api_key", "openai_api_key"):
+    for key in (
+        "gemini_api_key",
+        "openai_api_key",
+        "worker_controller_managed_capacity",
+    ):
         public.pop(key, None)
     public["gemini_api_configured"] = bool(os.environ.get("GEMINI_API_KEY") or settings.get("gemini_api_key"))
     public["openai_api_configured"] = bool(os.environ.get("OPENAI_API_KEY") or settings.get("openai_api_key"))
@@ -5277,6 +5282,10 @@ def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
         if not reported_controller_url and paired_controllers:
             first_controller = next((item for item in paired_controllers if isinstance(item, dict) and item.get("url")), {})
             reported_controller_url = str(first_controller.get("url") or "").strip().rstrip("/")
+        try:
+            protocol_version = max(1, int(data.get("protocol_version") or row.get("protocol_version") or 1))
+        except (TypeError, ValueError):
+            protocol_version = 1
         row.update({
             "name": data.get("name") or row.get("name") or "Worker",
             "last_heartbeat": time.time(),
@@ -5291,6 +5300,10 @@ def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
             "paired_controllers": paired_controllers,
             "jobs": data.get("jobs") if isinstance(data.get("jobs"), list) else [],
             "prediction_profile": data.get("prediction_profile") if isinstance(data.get("prediction_profile"), dict) else {},
+            "worker_encoding_policy": data.get("encoding_policy") if isinstance(data.get("encoding_policy"), dict) else {},
+            "worker_release": str(data.get("release") or row.get("worker_release") or "")[:80],
+            "capabilities": data.get("capabilities") if isinstance(data.get("capabilities"), list) else row.get("capabilities", []),
+            "protocol_version": protocol_version,
             "remote_temp_dir": str(data.get("remote_transfer_temp_dir") or row.get("remote_temp_dir") or "").strip()[:500],
             "worker_mode": str(data.get("worker_mode") or row.get("worker_mode") or "full").strip().lower(),
             "requires_remote_transfer": bool(data.get("requires_remote_transfer") or row.get("requires_remote_transfer")),
@@ -7320,6 +7333,7 @@ def register_routes(app):
         worker_url = data.get("url") or ""
         controller_url = _controller_base_url(data.get("controller_url") or request.host_url, worker_url)
         try:
+            controller_settings = load_settings()
             node = pair_worker(
                 worker_url,
                 data.get("code") or "",
@@ -7328,6 +7342,10 @@ def register_routes(app):
                 transfer_mode=data.get("transfer_mode") or "remote",
                 controller_url=controller_url,
                 remote_temp_dir="",
+                hardware_transcode_concurrency=controller_settings.get(
+                    "hardware_transcode_concurrency",
+                    1,
+                ),
             )
         except Exception as e:
             return jsonify(error=str(e)), 400
@@ -7381,6 +7399,70 @@ def register_routes(app):
         row["controller_url"] = _controller_base_url(row.get("controller_url") or "", row.get("url") or "")
         save_node(row)
         return jsonify(ok=True, node=public_node(row))
+
+    @app.route("/api/nodes/<node_id>/settings", methods=["POST"])
+    def nodes_worker_settings_api(node_id):
+        """Store worker capacity on the controller and apply it when online."""
+        row = get_node_private(node_id)
+        if not row:
+            return jsonify(error="node not found"), 404
+        data = request.get_json(silent=True) or {}
+        if "hardware_transcode_concurrency" not in data:
+            return jsonify(error="hardware_transcode_concurrency is required"), 400
+
+        limit = normalize_hardware_transcode_concurrency(
+            data.get("hardware_transcode_concurrency"),
+            row.get("hardware_transcode_concurrency") or 1,
+        )
+        row["hardware_transcode_concurrency"] = limit
+        save_node(row)
+
+        controller_settings = load_settings()
+        policy = {
+            "hb_threads": controller_settings.get("hb_threads", 0),
+            "hardware_transcode_concurrency": limit,
+            "auto_stop_large_output_enabled": controller_settings.get(
+                "auto_stop_large_output_enabled",
+                False,
+            ),
+            "auto_stop_large_output_percent": controller_settings.get(
+                "auto_stop_large_output_percent",
+                90,
+            ),
+        }
+        applied_online = False
+        warning = ""
+        try:
+            result = signed_json_request(
+                row,
+                "/api/node/config",
+                method="POST",
+                body=policy,
+                timeout=8,
+            )
+            applied_online = bool(result.get("ok"))
+            if isinstance(result.get("encoding_policy"), dict):
+                row["worker_encoding_policy"] = result["encoding_policy"]
+                save_node(row)
+        except Exception as exc:
+            # Older workers still receive the controller policy with every
+            # newly dispatched job, so saving centrally remains useful.
+            warning = (
+                "Saved on the controller. The worker will receive this limit "
+                f"with its next dispatch ({str(exc)[:120]})."
+            )
+
+        log_event(
+            "worker_capacity_updated",
+            f"Set {row.get('name') or node_id} to {limit} simultaneous GPU transcode(s).",
+            level="info",
+        )
+        return jsonify(
+            ok=True,
+            node=public_node(row),
+            applied_online=applied_online,
+            warning=warning,
+        )
 
     @app.route("/api/nodes/<node_id>/rotate_secret", methods=["POST"])
     def nodes_rotate_secret_api(node_id):
@@ -7461,7 +7543,10 @@ def register_routes(app):
         controller_settings = load_settings()
         worker_encoding_policy = {
             "hb_threads": controller_settings.get("hb_threads", 0),
-            "hardware_transcode_concurrency": controller_settings.get("hardware_transcode_concurrency", 1),
+            "hardware_transcode_concurrency": normalize_hardware_transcode_concurrency(
+                selected.get("hardware_transcode_concurrency"),
+                controller_settings.get("hardware_transcode_concurrency", 1),
+            ),
             "auto_stop_large_output_enabled": controller_settings.get("auto_stop_large_output_enabled", False),
             "auto_stop_large_output_percent": controller_settings.get("auto_stop_large_output_percent", 90),
         }
@@ -7559,7 +7644,10 @@ def register_routes(app):
                 selected,
                 "/api/node/jobs",
                 method="POST",
-                body={"jobs": jobs_payload},
+                body={
+                    "jobs": jobs_payload,
+                    "encoding_policy": worker_encoding_policy,
+                },
                 timeout=15,
             )
         except Exception as e:
@@ -7600,7 +7688,10 @@ def register_routes(app):
                         selected,
                         "/api/node/jobs",
                         method="POST",
-                        body={"jobs": retry_payload},
+                        body={
+                            "jobs": retry_payload,
+                            "encoding_policy": worker_encoding_policy,
+                        },
                         timeout=15,
                     )
                     result["count"] = int(result.get("count") or 0) + int(retry_result.get("count") or 0)

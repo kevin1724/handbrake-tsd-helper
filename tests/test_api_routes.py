@@ -25,6 +25,7 @@ from webui.app import create_app  # noqa: E402
 from webui.app import config as app_config  # noqa: E402
 from webui.app import events as app_events  # noqa: E402
 from webui.app import jobs as app_jobs  # noqa: E402
+from webui.app import node_linking as app_node_linking  # noqa: E402
 from webui.app import routes as app_routes  # noqa: E402
 from webui.app import wizard_llm as app_wizard_llm  # noqa: E402
 from webui.app.media_metadata import _cache_sidecar, _choose_movie, _sidecar_directories  # noqa: E402
@@ -78,7 +79,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.14.0-beta.1")
+        self.assertEqual(status.get_json()["release"], "3.15.0-beta.1")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -232,6 +233,122 @@ class ApiRouteSmokeTests(unittest.TestCase):
                     )
                 },
             )
+
+    def test_worker_gpu_capacity_is_saved_on_main_node(self):
+        node_id = "controller-managed-worker"
+        app_node_linking.save_node(
+            {
+                "id": node_id,
+                "name": "Garage worker",
+                "url": "http://worker:8080",
+                "token": "test-token",
+                "worker_mode": "headless",
+                "requires_remote_transfer": True,
+            }
+        )
+        try:
+            with patch(
+                "webui.app.routes.signed_json_request",
+                return_value={
+                    "ok": True,
+                    "encoding_policy": {
+                        "hardware_transcode_concurrency": 5,
+                        "software_jobs_are_exclusive": True,
+                        "controller_managed": True,
+                    },
+                },
+            ) as signed_request:
+                response = self.client.post(
+                    f"/api/nodes/{node_id}/settings",
+                    json={"hardware_transcode_concurrency": 5},
+                )
+
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            payload = response.get_json()
+            self.assertTrue(payload["applied_online"])
+            self.assertEqual(payload["node"]["hardware_transcode_concurrency"], 5)
+            self.assertEqual(
+                app_node_linking.get_node_private(node_id)["hardware_transcode_concurrency"],
+                5,
+            )
+            self.assertEqual(signed_request.call_args.args[1], "/api/node/config")
+            self.assertEqual(
+                signed_request.call_args.kwargs["body"]["hardware_transcode_concurrency"],
+                5,
+            )
+
+            settings_page = self.client.get("/settings")
+            self.assertIn(b"Simultaneous hardware transcodes", settings_page.data)
+            self.assertIn(b"Save GPU capacity", settings_page.data)
+            self.assertIn(b"CPU/software jobs always run alone", settings_page.data)
+        finally:
+            app_node_linking.delete_node(node_id)
+
+    def test_worker_dispatch_carries_the_selected_workers_capacity(self):
+        node_id = "four-slot-worker"
+        media_path = os.path.join(TEST_MEDIA, "Worker.Capacity.Movie.1080p.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"worker-capacity")
+        worker = app_node_linking.save_node(
+            {
+                "id": node_id,
+                "name": "Four slot worker",
+                "url": "http://worker:8080",
+                "token": "test-token",
+                "controller_url": "http://controller:8080",
+                "worker_mode": "headless",
+                "requires_remote_transfer": True,
+                "transfer_mode": "remote",
+                "hardware_transcode_concurrency": 4,
+            }
+        )
+        try:
+            with (
+                patch(
+                    "webui.app.routes._refresh_linked_node",
+                    side_effect=lambda row: {**row, "online": True, "status": "idle"},
+                ),
+                patch(
+                    "webui.app.routes._node_queue_plan",
+                    return_value={
+                        "preset": "1080",
+                        "preset_bundle": None,
+                        "extra_args": "--encoder qsv_h265_10bit",
+                        "encode_metadata": {
+                            "encoder": "qsv_h265_10bit",
+                            "encoder_family": "qsv",
+                        },
+                    },
+                ),
+                patch(
+                    "webui.app.routes.signed_json_request",
+                    return_value={"ok": True, "count": 1, "skipped": []},
+                ) as signed_request,
+            ):
+                response = self.client.post(
+                    "/api/nodes/dispatch",
+                    json={
+                        "mode": "node",
+                        "node_id": node_id,
+                        "preset": "auto",
+                        "paths": [media_path],
+                    },
+                )
+
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            dispatch_call = next(
+                call
+                for call in signed_request.call_args_list
+                if call.args[1] == "/api/node/jobs"
+            )
+            body = dispatch_call.kwargs["body"]
+            self.assertEqual(body["encoding_policy"]["hardware_transcode_concurrency"], 4)
+            self.assertEqual(
+                body["jobs"][0]["encoding_policy"]["hardware_transcode_concurrency"],
+                4,
+            )
+        finally:
+            app_node_linking.delete_node(worker["id"])
 
     def test_library_local_smart_batch_keeps_tuning_for_every_file(self):
         paths = []
@@ -1021,7 +1138,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.14.0-beta.1")
+        self.assertEqual(dashboard_payload["release"], "3.15.0-beta.1")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

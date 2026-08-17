@@ -296,8 +296,9 @@ The dedicated web workspace provides a first-time tour, an explicit accurate-pre
 
 The recommended worker is a separate, headless container. It has no media
 browser, library scanner, settings website, or mapped media drives. The main
-controller sends one temporary job at a time to the worker's `/work` drive and
-receives the verified result when the encode finishes.
+controller sends temporary jobs to the worker's `/work` drive and receives each
+verified result when its encode finishes. Hardware workers can run multiple
+encodes at the controller-managed limit; CPU/software work always runs alone.
 
 - The main container owns the media library and queue
 - Workers only expose authenticated node/health APIs
@@ -311,8 +312,14 @@ receives the verified result when the encode finishes.
 - Workers report heartbeat, status, progress, completed jobs, and errors
 - Nodes can reconnect after normal offline periods
 - Prediction history is tracked per worker
+- Per-worker GPU capacity is configured only on the main node website
 
 The controller can send jobs to the local node, the best available worker, or a selected worker.
+
+See the [Headless Worker Setup wiki](https://github.com/kevin1724/handbrake-tsd-helper/wiki/Headless-Worker-Setup)
+for complete Linux, Unraid, and Windows work-drive mapping, pairing,
+multi-encode, update, and troubleshooting instructions. The same guide is
+versioned with the code in [`docs/HEADLESS_WORKER.md`](docs/HEADLESS_WORKER.md).
 
 Use `GET /api/nodes/diagnostics` to inspect protocol, monitor health, heartbeat failures, and linked-node totals.
 
@@ -408,14 +415,15 @@ Intel `F` and `KF` desktop CPUs usually do not include an iGPU.
 
 ### Concurrent hardware transcodes
 
-**Settings → General → Encoding settings** includes **Simultaneous GPU
-transcodes per worker**. The safe default is `1`; `2` is a practical starting
-point for modern Intel Quick Sync systems. Values up to `8` are available for
-tested hardware. The limit applies to QSV, NVIDIA, AMD, VideoToolbox, and VAAPI
-jobs. CPU/software encodes always run alone, and a queued CPU job keeps its FIFO
-position instead of being bypassed by later GPU jobs. Lowering the limit does
-not stop work already running; it only prevents another job from starting until
-usage is below the new limit.
+**Settings → General → Encoding settings** controls the local node default.
+**Settings → Linked Workers** adds a separate **Simultaneous hardware
+transcodes** value for every paired worker. The safe default is `1`; `2` is a
+practical starting point for modern Intel Quick Sync systems. Values up to `8`
+are available for tested hardware. The limit applies to QSV, NVIDIA, AMD,
+VideoToolbox, and VAAPI jobs. CPU/software encodes always run alone, and a queued
+CPU job keeps its FIFO position instead of being bypassed by later GPU jobs.
+Lowering the limit does not stop work already running; it only prevents another
+job from starting until usage is below the new limit.
 
 ## Official Image
 
@@ -446,7 +454,7 @@ The encoding-only worker has its own public Docker Hub image:
 [kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
 
 `latest` follows the main branch. Versioned releases also publish tags such as
-`2.2.0` and `2.2`:
+`2.3.0` and `2.3`:
 
 ```bash
 docker pull kevina1724/handbrake-tsd-worker:latest
