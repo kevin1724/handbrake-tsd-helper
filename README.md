@@ -316,10 +316,9 @@ encodes at the controller-managed limit; CPU/software work always runs alone.
 
 The controller can send jobs to the local node, the best available worker, or a selected worker.
 
-See the [Headless Worker Setup wiki](https://github.com/kevin1724/handbrake-tsd-helper/wiki/Headless-Worker-Setup)
-for complete Linux, Unraid, and Windows work-drive mapping, pairing,
-multi-encode, update, and troubleshooting instructions. The same guide is
-versioned with the code in [`docs/HEADLESS_WORKER.md`](docs/HEADLESS_WORKER.md).
+See the versioned [Headless Worker Setup guide](docs/HEADLESS_WORKER.md) for
+complete Linux, Unraid, and Windows work-drive mapping, pairing, multi-encode,
+update, and troubleshooting instructions.
 
 Use `GET /api/nodes/diagnostics` to inspect protocol, monitor health, heartbeat failures, and linked-node totals.
 
