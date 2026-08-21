@@ -453,7 +453,7 @@ class AppController extends ChangeNotifier {
     }
     if (!serverSupportsOperationsSettings) {
       throw const ApiFailure(
-        'Update the TSD server to the V3 beta before changing encoder settings from ByteSqueeze.',
+        'Update the TSD server to version 3.15 or newer before changing encoder settings from ByteSqueeze.',
       );
     }
     try {
@@ -466,7 +466,7 @@ class AppController extends ChangeNotifier {
         serverSupportsOperationsSettings = false;
         notifyListeners();
         throw const ApiFailure(
-          'Update the TSD server to the V3 beta before changing encoder settings from ByteSqueeze.',
+          'Update the TSD server to version 3.15 or newer before changing encoder settings from ByteSqueeze.',
         );
       }
       rethrow;

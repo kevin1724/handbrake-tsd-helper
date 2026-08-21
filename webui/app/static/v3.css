@@ -1,4 +1,4 @@
-/* ByteSqueeze V3 Beta
+/* ByteSqueeze V3
    --------------------------------------------------------------------------
    This layer is intentionally scoped to .ui-v3. V2 remains the unmodified
    styleui.css experience and can be restored from Settings or with ?ui=v2.
@@ -225,8 +225,8 @@
   font-size: 10px;
 }
 
-.ui-v3 .v3-beta-chip,
-.ui-v3 .v3-beta-pill {
+.ui-v3 .v3-release-chip,
+.ui-v3 .v3-release-pill {
   display: inline-flex;
   align-items: center;
   min-height: 23px;

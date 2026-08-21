@@ -711,7 +711,7 @@ class _MobileWorkspaceBar extends StatelessWidget {
                 const Text('ByteSqueeze',
                     style: TextStyle(
                         fontSize: 16, fontWeight: FontWeight.w800)),
-                Text('${destination.label} workspace · V3 beta',
+                Text('${destination.label} workspace · V3',
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(

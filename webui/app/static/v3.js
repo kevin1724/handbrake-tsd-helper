@@ -31,7 +31,7 @@
 
   const currentPath = window.location.pathname;
   const currentRoute = routes.find(route => route.match(currentPath)) || routes[0];
-  const release = body.dataset.release || "Beta";
+  const release = body.dataset.release || "3.15.0";
 
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, character => ({
@@ -89,7 +89,7 @@
     nav.querySelector(".v3-sidebar-footer")?.remove();
     const footer = document.createElement("div");
     footer.className = "v3-sidebar-footer";
-    footer.innerHTML = `<span class="v3-beta-chip">V3</span><span class="v3-sidebar-release">${release}</span>`;
+    footer.innerHTML = `<span class="v3-release-chip">V3</span><span class="v3-sidebar-release">${release}</span>`;
     nav.appendChild(footer);
   }
 
@@ -289,7 +289,7 @@
     { label: "Open Size Wizard", detail: "Fine-tune a one-off plan", href: "/size_wizard", icon: "wizard" },
     { label: "Manage Smart Presets", detail: "Preservation and language safeguards", href: "/settings/smart", icon: "settings" },
     { label: "Open Settings", detail: "Interface, workers, storage, and AI", href: "/settings", icon: "settings" },
-    { label: "Switch to V2 Classic", detail: "Use the stable legacy interface", href: "/settings?ui=v2", icon: "switch" }
+    { label: "Switch to V2 Classic", detail: "Use the preserved classic interface", href: "/settings?ui=v2", icon: "switch" }
   ];
 
   let commandDialog;

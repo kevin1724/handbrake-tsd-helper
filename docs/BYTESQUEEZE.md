@@ -12,9 +12,9 @@ jobs, tune automation, and watch node and storage health.
 - The visual language is original to ByteSqueeze: deep navy surfaces, electric
   blue/cyan status accents, soft elevated cards, large poster art, and compact
   operational controls.
-- V3 Beta adds an adaptive desktop sidebar, a purpose-built phone dock, a
+- V3 is the primary experience and adds an adaptive desktop sidebar, a purpose-built phone dock, a
   searchable command center, quieter live operations status, and focused
-  settings. V2 Classic remains selectable on each device during the beta.
+  settings. V2 Classic remains selectable on each device.
 - Media-manager apps such as nzb360 informed the information hierarchy—one
   dashboard, fast service switching, poster-rich libraries, and controls close
   to live status—but ByteSqueeze does not copy its layouts, assets, or branding.

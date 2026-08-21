@@ -26,27 +26,17 @@ Completed output files are tagged with `-TSD`, short for "Transcoded", so the ap
 - Versioned mobile API with hashed tokens, refresh, read/control scopes, and device revocation
 - Safer cleanup behavior for failed or canceled jobs
 
-## V3 Beta
+## V3 Interface
 
-V3 Beta is a full interface overhaul built around a cinema-operations workspace. It adds a persistent desktop sidebar, a phone-friendly bottom dock, a global command center (`Ctrl/Cmd+K` or `/`), faster Library search and queue actions, clearer Smart Preset surfaces, and a visible Source → Intent → Preview → Queue workflow in Size Wizard. The poster framework and encoding engine are unchanged.
+V3 is the primary interface, built around a cinema-operations workspace. It adds a persistent desktop sidebar, a phone-friendly bottom dock, a global command center (`Ctrl/Cmd+K` or `/`), faster Library search and queue actions, clearer Smart Preset surfaces, and a visible Source → Intent → Preview → Queue workflow in Size Wizard. The poster framework and encoding engine are unchanged.
 
-V2 Classic remains available while V3 is in beta. Open **Settings > Interface**, select **V2 Classic**, and save. For an immediate one-page fallback, add `?ui=v2` to any ByteSqueeze URL. The saved V3/V2 choice and comfortable/compact density are independent of encoding settings.
+V2 Classic remains available as an option. Open **Settings > Interface**, select **V2 Classic**, and save. For an immediate one-page switch, add `?ui=v2` to any ByteSqueeze URL. The saved V3/V2 choice and comfortable/compact density are independent of encoding settings.
 
-The beta Docker tags are intentionally separate from `main` and `latest`:
-
-```bash
-docker pull kevina1724/handbrake-tsd-helper:beta
-docker pull kevina1724/handbrake-tsd-worker:beta
-```
-
-For Compose, layer the included beta override over the normal file so all mounts, devices, and environment settings stay the same:
+V3 is published in the standard `latest` and `main` Docker channels:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.beta.yml pull hb-web
-docker compose -f docker-compose.yml -f docker-compose.beta.yml up -d hb-web
-
-docker compose -f docker-compose.worker.yml -f docker-compose.worker.beta.yml pull bytesqueeze-worker
-docker compose -f docker-compose.worker.yml -f docker-compose.worker.beta.yml up -d bytesqueeze-worker
+docker pull kevina1724/handbrake-tsd-helper:latest
+docker pull kevina1724/handbrake-tsd-worker:latest
 ```
 
 ## Release 3.12 Autopilot Refresh
@@ -68,7 +58,7 @@ Autopilot is disabled and set to Observe by default. Its page now creates and di
 
 ByteSqueeze is the Android-first Flutter companion for managing a TSD controller from a phone. It can browse movie and show posters, track shows, queue server-side Smart Preset jobs, manage active jobs, tune Autopilot, review learned preset decisions, and monitor workers, storage savings, and events. All transcoding remains on the Docker controller and its workers.
 
-The mobile V3 Beta now mirrors the web workspace with an adaptive desktop
+The mobile V3 interface mirrors the web workspace with an adaptive desktop
 sidebar, polished phone navigation, a searchable command center, real Smart
 comparison previews, full-season queues, mobile GPU-capacity controls, and a
 persistent **Settings → Interface & layout → V2 Classic** fallback. Interface
@@ -452,15 +442,15 @@ docker run -d \
   kevina1724/handbrake-tsd-helper:latest
 ```
 
-The `latest` image is published automatically from `main`. Version tags such as
-`v1.2.3` also publish `1.2.3` and `1.2` tags.
+The `latest` and `main` images are published automatically from `main`. Stable
+controller releases also publish `3.15.0` and `3.15` tags.
 
 The encoding-only worker has its own public Docker Hub image:
 
 [kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
 
-`latest` follows the main branch. Versioned releases also publish tags such as
-`2.4.0` and `2.4`:
+`latest` and `main` follow the main branch. Stable worker releases also publish
+`2.4.0` and `2.4` tags:
 
 ```bash
 docker pull kevina1724/handbrake-tsd-worker:latest

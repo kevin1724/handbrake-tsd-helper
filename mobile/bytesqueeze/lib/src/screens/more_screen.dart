@@ -90,7 +90,7 @@ class MoreScreen extends StatelessWidget {
                       color: ByteSqueezeColors.violet,
                       title: 'Interface & layout',
                       subtitle: controller.useV3
-                          ? 'V3 Beta · ${controller.compactInterface ? 'compact' : 'comfortable'} density'
+                          ? 'V3 · ${controller.compactInterface ? 'compact' : 'comfortable'} density'
                           : 'V2 Classic fallback is active',
                       onTap: () => _open(
                           context, InterfacePage(controller: controller)),
@@ -159,7 +159,7 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.info_outline_rounded,
                       color: ByteSqueezeColors.muted,
                       title: 'About',
-                      subtitle: 'ByteSqueeze $appVersion · TSD 3.15 beta',
+                      subtitle: 'ByteSqueeze $appVersion · TSD 3.15',
                       onTap: () => showAboutDialog(
                         context: context,
                         applicationName: 'ByteSqueeze',
@@ -268,7 +268,7 @@ class _InterfacePageState extends State<InterfacePage> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('V3 is a beta you can leave anytime',
+                      Text('V3 is the current ByteSqueeze experience',
                           style: TextStyle(
                               fontWeight: FontWeight.w800, fontSize: 17)),
                       SizedBox(height: 5),
@@ -290,7 +290,7 @@ class _InterfacePageState extends State<InterfacePage> {
             selected: controller.useV3,
             icon: Icons.view_quilt_rounded,
             color: ByteSqueezeColors.cyan,
-            title: 'V3 Beta',
+            title: 'V3',
             badge: 'RECOMMENDED',
             description:
                 'Adaptive workspace, command center, cleaner navigation, live operations dock, and focused settings.',
@@ -304,7 +304,7 @@ class _InterfacePageState extends State<InterfacePage> {
             title: 'V2 Classic',
             badge: 'FALLBACK',
             description:
-                'The previous navigation shell remains available throughout the V3 beta.',
+                'The previous navigation shell remains available as an optional classic interface.',
             onTap: () => _setVersion('v2'),
           ),
           const SectionHeader(
@@ -483,7 +483,7 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
                             style: TextStyle(fontWeight: FontWeight.w800)),
                         SizedBox(height: 4),
                         Text(
-                          'The rest of ByteSqueeze remains connected. Update the TSD server to the V3 beta to change these encoder controls from the app.',
+                          'The rest of ByteSqueeze remains connected. Update the TSD server to version 3.15 or newer to change these encoder controls from the app.',
                           style: TextStyle(
                               color: ByteSqueezeColors.softInk, fontSize: 12.5),
                         ),

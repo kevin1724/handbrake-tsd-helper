@@ -875,21 +875,21 @@
       <div>
         <div class="eyebrow">Interface generation</div>
         <h2>Choose your workspace</h2>
-        <p class="small">V3 Beta is the new cinema-operations workspace. V2 Classic remains fully available while V3 is being finished.</p>
+        <p class="small">V3 is the primary cinema-operations workspace. V2 Classic remains fully available whenever you prefer the previous interface.</p>
       </div>
-      <span class="v3-beta-pill">V3 BETA</span>
+      <span class="v3-release-pill">V3 CURRENT</span>
     </div>
 
     <div class="ui-version-grid" role="radiogroup" aria-label="Interface version">
       <label class="ui-version-choice">
         <input type="radio" name="uiVersion" value="v3">
         <span class="ui-version-preview ui-version-preview-v3" aria-hidden="true"><i></i><b></b><em></em></span>
-        <span><strong>V3 Beta</strong><small>Sidebar workspace, global command search, clearer hierarchy, responsive bottom navigation, and modern media controls.</small></span>
+        <span><strong>V3</strong><small>The current sidebar workspace with global command search, clearer hierarchy, responsive bottom navigation, and modern media controls.</small></span>
       </label>
       <label class="ui-version-choice">
         <input type="radio" name="uiVersion" value="v2">
         <span class="ui-version-preview ui-version-preview-v2" aria-hidden="true"><i></i><b></b><em></em></span>
-        <span><strong>V2 Classic</strong><small>The previous interface, preserved unchanged as a reliable fallback during the beta.</small></span>
+        <span><strong>V2 Classic</strong><small>The previous interface, preserved as an optional classic workspace.</small></span>
       </label>
     </div>
 
@@ -971,7 +971,7 @@
           </div>
         </div>
         <p class="small" style="margin-top:14px;">
-          <a href="https://github.com/kevin1724/handbrake-tsd-helper/blob/agent/bytesqueeze-v3-beta-overhaul/docs/HEADLESS_WORKER.md" target="_blank" rel="noopener">Open the complete Headless Worker Setup guide</a>
+          <a href="https://github.com/kevin1724/handbrake-tsd-helper/blob/main/docs/HEADLESS_WORKER.md" target="_blank" rel="noopener">Open the complete Headless Worker Setup guide</a>
           for Linux, Unraid, Windows, drive sizing, updates, and troubleshooting.
         </p>
       </div>
@@ -2188,7 +2188,7 @@
         if (window.appToast) appToast(data.tmdb_changed ? "Settings saved. Poster cache cleared." : "Settings saved.", "success");
         activeUiVersion = data?.settings?.ui_version === "v2" ? "v2" : "v3";
         if (uiVersionChanged && statusElementId === "uiSettingsSaveStatus") {
-          if (statusEl) statusEl.textContent = `Opening ${activeUiVersion === "v3" ? "V3 Beta" : "V2 Classic"}…`;
+          if (statusEl) statusEl.textContent = `Opening ${activeUiVersion === "v3" ? "V3" : "V2 Classic"}…`;
           window.setTimeout(() => window.location.assign(`/settings?ui=${activeUiVersion}`), 350);
         }
         return true;

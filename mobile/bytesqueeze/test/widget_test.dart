@@ -53,7 +53,7 @@ void main() {
     await tester.tap(find.text('Interface & layout'));
     await tester.pumpAndSettle();
 
-    expect(find.text('V3 Beta'), findsOneWidget);
+    expect(find.text('V3'), findsOneWidget);
     expect(find.text('V2 Classic'), findsOneWidget);
     await tester.tap(find.text('V2 Classic'));
     await tester.pumpAndSettle();

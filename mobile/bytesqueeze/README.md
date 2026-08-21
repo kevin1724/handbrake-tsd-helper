@@ -4,7 +4,7 @@ ByteSqueeze is the Flutter remote-control app for HandBrake TSD Helper.
 
 - Android first, with the iOS target maintained from day one
 - Secure one-time pairing and refreshable bearer sessions
-- V3 Beta adaptive workspace with a desktop sidebar, polished phone dock, and
+- V3 adaptive workspace with a desktop sidebar, polished phone dock, and
   global command center
 - Persistent V2 Classic fallback and comfortable/compact density controls in
   **Settings → Interface & layout**
@@ -44,7 +44,7 @@ the same local Smart Preset profile.
 V3 adds a command center for navigation, refresh, queue pause/resume, library
 scans, and Smart Queue entry. Open it from the search button, or with `Ctrl/Cmd+K`
 or `/` when ByteSqueeze is running on a keyboard-equipped device. The interface
-choice is stored only on that device; changing between V3 Beta and V2 Classic
+choice is stored only on that device; changing between V3 and V2 Classic
 never changes server settings or media data.
 
 Smart Preset protections are editable from both **Settings → Smart Presets** on the web and the

@@ -2880,7 +2880,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.15.0-beta.2"
+APP_RELEASE = "3.15.0"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -6123,7 +6123,7 @@ def register_routes(app):
 
     @app.context_processor
     def inject_interface_context():
-        """Expose the switchable V3 beta shell to every rendered page."""
+        """Expose the stable V3 shell and optional V2 Classic UI."""
         settings = load_settings()
         requested = str(request.args.get("ui") or "").strip().lower()
         saved = str(settings.get("ui_version") or "v3").strip().lower()
@@ -6136,7 +6136,7 @@ def register_routes(app):
         return {
             "ui_version": ui_version,
             "ui_density": density,
-            "ui_release_label": "V3 Beta",
+            "ui_release_label": "V3",
             "app_release": APP_RELEASE,
         }
 
