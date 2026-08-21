@@ -4,9 +4,16 @@ ByteSqueeze is the Flutter remote-control app for HandBrake TSD Helper.
 
 - Android first, with the iOS target maintained from day one
 - Secure one-time pairing and refreshable bearer sessions
-- Content-first dashboard with no persistent branded toolbar
+- V3 adaptive workspace with a desktop sidebar, polished phone dock, and
+  global command center
+- Persistent V2 Classic fallback and comfortable/compact density controls in
+  **Settings → Interface & layout**
 - Persistent live operations dock with automatic queue/progress refresh
 - Running-now, up-next, and history queue views with GPU-capacity guidance
+- Mobile control of safe GPU concurrency and projected-output-size protection;
+  CPU/software encoding always remains exclusive
+- Graceful compatibility with older TSD servers: unsupported V3 controls become
+  read-only without falsely reporting that the entire server connection failed
 - Complete movie/show catalog, TMDb-first artwork with no-key fallback, upcoming episode calendar,
   friendly savings/HDR/tracked filters, movie and season Smart Queue guardrails,
   real Library comparison previews, guided Autopilot preview training, preservation-first Smart Presets,
@@ -33,6 +40,12 @@ after-watch feedback use the same learning profile as the web dashboard. Generat
 accurate preview, compare the original and proposed frames, then approve it or
 choose what needs improvement. Reviews made on the phone and web dashboard feed
 the same local Smart Preset profile.
+
+V3 adds a command center for navigation, refresh, queue pause/resume, library
+scans, and Smart Queue entry. Open it from the search button, or with `Ctrl/Cmd+K`
+or `/` when ByteSqueeze is running on a keyboard-equipped device. The interface
+choice is stored only on that device; changing between V3 and V2 Classic
+never changes server settings or media data.
 
 Smart Preset protections are editable from both **Settings → Smart Presets** on the web and the
 phone. They can lock source resolution, black bars, display aspect ratio, every

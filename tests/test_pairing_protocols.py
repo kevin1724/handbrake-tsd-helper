@@ -74,6 +74,9 @@ class NodePairingProtocolTests(unittest.TestCase):
         self.assertTrue(discovery["requires_remote_transfer"])
         self.assertEqual(discovery["recommended_transfer_mode"], "remote")
         self.assertIn("remote-transfer-only", discovery["capabilities"])
+        self.assertIn("controller-encoding-policy", discovery["capabilities"])
+        self.assertIn("gpu-multi-encode", discovery["capabilities"])
+        self.assertIn("cpu-software-exclusive", discovery["capabilities"])
 
     def test_headless_worker_forces_remote_mode_and_drops_path_mappings(self):
         responses = [
@@ -100,12 +103,14 @@ class NodePairingProtocolTests(unittest.TestCase):
                 transfer_mode="local",
                 path_mappings=[{"controller": "/media", "worker": "/mnt/media"}],
                 controller_url="http://controller:8080",
+                hardware_transcode_concurrency=4,
             )
 
         self.assertEqual(worker["worker_mode"], "headless")
         self.assertTrue(worker["requires_remote_transfer"])
         self.assertEqual(worker["transfer_mode"], "remote")
         self.assertEqual(worker["path_mappings"], [])
+        self.assertEqual(worker["hardware_transcode_concurrency"], 4)
 
 
 class MobilePairingProtocolTests(unittest.TestCase):

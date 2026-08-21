@@ -63,4 +63,37 @@ void main() {
     );
     expect(requestedHosts, ['192.168.1.50']);
   });
+
+  test('non-JSON 404 responses explain server version compatibility', () async {
+    final api = ByteSqueezeApi(
+      SessionStore(),
+      client: MockClient(
+        (_) async => http.Response(
+          '<html>not found</html>',
+          404,
+          headers: {'content-type': 'text/html'},
+        ),
+      ),
+    )..session = const ServerSession(
+        baseUrl: 'http://bytesqueeze.test',
+        deviceId: 'phone',
+        deviceName: 'Test phone',
+        scope: 'control',
+        accessToken: 'access',
+        refreshToken: 'refresh',
+      );
+
+    await expectLater(
+      api.get('/operations'),
+      throwsA(
+        isA<ApiFailure>()
+            .having((failure) => failure.statusCode, 'statusCode', 404)
+            .having(
+              (failure) => failure.message,
+              'message',
+              'This app feature is not available on the connected server yet.',
+            ),
+      ),
+    );
+  });
 }

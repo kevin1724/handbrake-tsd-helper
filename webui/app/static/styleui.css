@@ -664,6 +664,31 @@ td button {
   white-space: nowrap;
 }
 
+.worker-log-details {
+  min-width: 0;
+  margin-top: 4px;
+}
+
+.worker-log-details summary,
+.worker-log-link {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.worker-log-tail {
+  max-height: 260px;
+  margin: 8px 0 0;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.35);
+  padding: 10px;
+  color: #d8e2e8;
+  font: 0.76rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .job-actions-cell {
   min-width: 170px;
 }
@@ -2765,6 +2790,7 @@ body.settings-page .folder-add-choice {
 
 .node-status-head {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
@@ -3034,6 +3060,36 @@ body.settings-page .folder-add-choice {
   word-break: break-word;
 }
 
+.node-capacity-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(150px, 210px);
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border: 1px solid rgba(96, 165, 250, 0.24);
+  border-radius: var(--radius-sm);
+  background: linear-gradient(135deg, rgba(96, 165, 250, 0.09), rgba(22, 199, 214, 0.05));
+}
+
+.node-capacity-row > div {
+  display: grid;
+  gap: 4px;
+}
+
+.node-capacity-row strong {
+  color: #fff;
+}
+
+.node-capacity-row span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.node-capacity-select {
+  width: 100%;
+}
+
 .path-map-textarea {
   width: 100%;
   min-height: 92px;
@@ -3152,6 +3208,10 @@ body.settings-page .folder-add-choice {
   }
 
   .node-mode-row {
+    grid-template-columns: 1fr;
+  }
+
+  .node-capacity-row {
     grid-template-columns: 1fr;
   }
 

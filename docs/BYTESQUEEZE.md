@@ -12,6 +12,9 @@ jobs, tune automation, and watch node and storage health.
 - The visual language is original to ByteSqueeze: deep navy surfaces, electric
   blue/cyan status accents, soft elevated cards, large poster art, and compact
   operational controls.
+- V3 is the primary experience and adds an adaptive desktop sidebar, a purpose-built phone dock, a
+  searchable command center, quieter live operations status, and focused
+  settings. V2 Classic remains selectable on each device.
 - Media-manager apps such as nzb360 informed the information hierarchy—one
   dashboard, fast service switching, poster-rich libraries, and controls close
   to live status—but ByteSqueeze does not copy its layouts, assets, or branding.
@@ -26,8 +29,9 @@ jobs, tune automation, and watch node and storage health.
    cancellation, and history.
 4. **Autopilot** — first-run and restartable tours, accurate preview training,
    policy guardrails, decision explanations, and after-watch feedback.
-5. **More** — upcoming-episode calendar, worker, storage, event, and connection
-   controls.
+5. **Settings** — V3/V2 and density preferences, safe GPU concurrency,
+   projected-output protection, calendar, workers, storage, events, and
+   connection controls.
 
 Wide screens use a navigation rail while phones use bottom navigation. This
 keeps tablets and a future iPad build useful without creating a second UI.
@@ -81,6 +85,8 @@ ByteSqueeze uses bearer-authenticated routes under `/api/mobile/v1`:
 - explicit local, best-worker, or selected-worker queue targets
 - Autopilot onboarding, preview training, after-watch feedback, policy updates, and run-now
 - Smart Preset profile and learning state
+- encoder capacity and output-size safety settings; hardware jobs may use the
+  configured slots while CPU/software jobs remain exclusive
 - nodes, storage statistics, and events
 
 Read-scoped devices cannot call control routes. Tokens are returned only to the

@@ -9,8 +9,15 @@ services:
     environment:
       TZ: ${TZ:-America/Los_Angeles}
       TSD_WORKER_NAME: ${TSD_WORKER_NAME:-ByteSqueeze Worker}
+      # Large sources may pause while the controller/NAS catches up. The
+      # worker retries interrupted downloads before marking a job failed.
+      TSD_WORKER_TRANSFER_TIMEOUT_SECONDS: ${TSD_WORKER_TRANSFER_TIMEOUT_SECONDS:-300}
+      TSD_WORKER_TRANSFER_ATTEMPTS: ${TSD_WORKER_TRANSFER_ATTEMPTS:-3}
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
+      # Map a fast, durable host drive to /work. This preserves pairing state
+      # in /work/state and holds temporary sources/outputs in /work/jobs.
+      # See docs/HEADLESS_WORKER.md for Linux, Unraid, and Windows examples.
       - type: bind
         source: ${TSD_WORKER_WORK_DIR:-./worker-work}
         target: /work

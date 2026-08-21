@@ -9,17 +9,23 @@ on:
   workflow_dispatch:
     inputs:
       channel:
-        description: Image channel to publish
+        description: Optional extra image channel
         required: true
-        default: beta
+        default: stable
         type: choice
         options:
+          - stable
           - beta
           - sha-only
-      version_tag:
-        description: Optional immutable image tag
+      controller_version_tag:
+        description: Optional additional controller image tag
         required: false
-        default: 3.14.0-beta.1
+        default: ""
+        type: string
+      worker_version_tag:
+        description: Optional additional worker image tag
+        required: false
+        default: ""
         type: string
 
 permissions:
@@ -32,6 +38,8 @@ concurrency:
 env:
   IMAGE_NAME: kevina1724/handbrake-tsd-helper
   WORKER_IMAGE_NAME: kevina1724/handbrake-tsd-worker
+  CONTROLLER_VERSION: 3.15.0
+  WORKER_VERSION: 2.4.0
 
 jobs:
   publish:
@@ -59,8 +67,10 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=main,enable={{is_default_branch}}
+            type=raw,value=${{ env.CONTROLLER_VERSION }},enable={{is_default_branch}}
+            type=raw,value=3.15,enable={{is_default_branch}}
             type=raw,value=beta,enable=${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'beta' }}
-            type=raw,value=${{ inputs.version_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.version_tag != '' }}
+            type=raw,value=${{ inputs.controller_version_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.controller_version_tag != '' }}
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}
             type=sha,prefix=sha-
@@ -91,10 +101,10 @@ jobs:
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=main,enable={{is_default_branch}}
+            type=raw,value=${{ env.WORKER_VERSION }},enable={{is_default_branch}}
+            type=raw,value=2.4,enable={{is_default_branch}}
             type=raw,value=beta,enable=${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'beta' }}
-            type=raw,value=${{ inputs.version_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.version_tag != '' }}
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=${{ inputs.worker_version_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.worker_version_tag != '' }}
             type=sha,prefix=sha-
           labels: |
             org.opencontainers.image.title=ByteSqueeze Headless Worker

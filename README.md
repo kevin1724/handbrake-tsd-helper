@@ -26,27 +26,17 @@ Completed output files are tagged with `-TSD`, short for "Transcoded", so the ap
 - Versioned mobile API with hashed tokens, refresh, read/control scopes, and device revocation
 - Safer cleanup behavior for failed or canceled jobs
 
-## V3 Beta
+## V3 Interface
 
-V3 Beta is a full interface overhaul built around a cinema-operations workspace. It adds a persistent desktop sidebar, a phone-friendly bottom dock, a global command center (`Ctrl/Cmd+K` or `/`), faster Library search and queue actions, clearer Smart Preset surfaces, and a visible Source → Intent → Preview → Queue workflow in Size Wizard. The poster framework and encoding engine are unchanged.
+V3 is the primary interface, built around a cinema-operations workspace. It adds a persistent desktop sidebar, a phone-friendly bottom dock, a global command center (`Ctrl/Cmd+K` or `/`), faster Library search and queue actions, clearer Smart Preset surfaces, and a visible Source → Intent → Preview → Queue workflow in Size Wizard. The poster framework and encoding engine are unchanged.
 
-V2 Classic remains available while V3 is in beta. Open **Settings > Interface**, select **V2 Classic**, and save. For an immediate one-page fallback, add `?ui=v2` to any ByteSqueeze URL. The saved V3/V2 choice and comfortable/compact density are independent of encoding settings.
+V2 Classic remains available as an option. Open **Settings > Interface**, select **V2 Classic**, and save. For an immediate one-page switch, add `?ui=v2` to any ByteSqueeze URL. The saved V3/V2 choice and comfortable/compact density are independent of encoding settings.
 
-The beta Docker tags are intentionally separate from `main` and `latest`:
-
-```bash
-docker pull kevina1724/handbrake-tsd-helper:beta
-docker pull kevina1724/handbrake-tsd-worker:beta
-```
-
-For Compose, layer the included beta override over the normal file so all mounts, devices, and environment settings stay the same:
+V3 is published in the standard `latest` and `main` Docker channels:
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.beta.yml pull hb-web
-docker compose -f docker-compose.yml -f docker-compose.beta.yml up -d hb-web
-
-docker compose -f docker-compose.worker.yml -f docker-compose.worker.beta.yml pull bytesqueeze-worker
-docker compose -f docker-compose.worker.yml -f docker-compose.worker.beta.yml up -d bytesqueeze-worker
+docker pull kevina1724/handbrake-tsd-helper:latest
+docker pull kevina1724/handbrake-tsd-worker:latest
 ```
 
 ## Release 3.12 Autopilot Refresh
@@ -67,6 +57,13 @@ Autopilot is disabled and set to Observe by default. Its page now creates and di
 ## ByteSqueeze Mobile
 
 ByteSqueeze is the Android-first Flutter companion for managing a TSD controller from a phone. It can browse movie and show posters, track shows, queue server-side Smart Preset jobs, manage active jobs, tune Autopilot, review learned preset decisions, and monitor workers, storage savings, and events. All transcoding remains on the Docker controller and its workers.
+
+The mobile V3 interface mirrors the web workspace with an adaptive desktop
+sidebar, polished phone navigation, a searchable command center, real Smart
+comparison previews, full-season queues, mobile GPU-capacity controls, and a
+persistent **Settings → Interface & layout → V2 Classic** fallback. Interface
+density and V3/V2 selection are local to each device and never alter encoding
+settings.
 
 The same Flutter project includes an iOS target so networking, secure pairing, application state, responsive navigation, and screens can be carried into an iPhone release without a second implementation.
 
@@ -289,12 +286,13 @@ The dedicated web workspace provides a first-time tour, an explicit accurate-pre
 
 The recommended worker is a separate, headless container. It has no media
 browser, library scanner, settings website, or mapped media drives. The main
-controller sends one temporary job at a time to the worker's `/work` drive and
-receives the verified result when the encode finishes.
+controller sends temporary jobs to the worker's `/work` drive and receives each
+verified result when its encode finishes. Hardware workers can run multiple
+encodes at the controller-managed limit; CPU/software work always runs alone.
 
 - The main container owns the media library and queue
 - Workers only expose authenticated node/health APIs
-- The pairing code is printed in `docker logs`
+- The pairing code is printed in `docker logs` and can be regenerated without a restart
 - `/work` is the worker's only required mount
 - Remote transfer is selected automatically; path mappings are unnecessary
 - Pairing is idempotently recoverable for the same controller when a network response is lost
@@ -304,8 +302,13 @@ receives the verified result when the encode finishes.
 - Workers report heartbeat, status, progress, completed jobs, and errors
 - Nodes can reconnect after normal offline periods
 - Prediction history is tracked per worker
+- Per-worker GPU capacity is configured only on the main node website
 
 The controller can send jobs to the local node, the best available worker, or a selected worker.
+
+See the versioned [Headless Worker Setup guide](docs/HEADLESS_WORKER.md) for
+complete Linux, Unraid, and Windows work-drive mapping, pairing, multi-encode,
+update, and troubleshooting instructions.
 
 Use `GET /api/nodes/diagnostics` to inspect protocol, monitor health, heartbeat failures, and linked-node totals.
 
@@ -324,6 +327,13 @@ The log contains a banner like:
 ```text
 ByteSqueeze headless worker is ready
 Pairing code:  ABCDE-FGHJK
+```
+
+Generate a new one-time code without restarting the worker or interrupting an
+active encode:
+
+```bash
+docker exec bytesqueeze-worker python -m worker.app pairing-code
 ```
 
 On the main server, open **Settings → Linked Workers**, enter the worker URL
@@ -401,14 +411,15 @@ Intel `F` and `KF` desktop CPUs usually do not include an iGPU.
 
 ### Concurrent hardware transcodes
 
-**Settings → General → Encoding settings** includes **Simultaneous GPU
-transcodes per worker**. The safe default is `1`; `2` is a practical starting
-point for modern Intel Quick Sync systems. Values up to `8` are available for
-tested hardware. The limit applies to QSV, NVIDIA, AMD, VideoToolbox, and VAAPI
-jobs. CPU/software encodes always run alone, and a queued CPU job keeps its FIFO
-position instead of being bypassed by later GPU jobs. Lowering the limit does
-not stop work already running; it only prevents another job from starting until
-usage is below the new limit.
+**Settings → General → Encoding settings** controls the local node default.
+**Settings → Linked Workers** adds a separate **Simultaneous hardware
+transcodes** value for every paired worker. The safe default is `1`; `2` is a
+practical starting point for modern Intel Quick Sync systems. Values up to `8`
+are available for tested hardware. The limit applies to QSV, NVIDIA, AMD,
+VideoToolbox, and VAAPI jobs. CPU/software encodes always run alone, and a queued
+CPU job keeps its FIFO position instead of being bypassed by later GPU jobs.
+Lowering the limit does not stop work already running; it only prevents another
+job from starting until usage is below the new limit.
 
 ## Official Image
 
@@ -431,15 +442,15 @@ docker run -d \
   kevina1724/handbrake-tsd-helper:latest
 ```
 
-The `latest` image is published automatically from `main`. Version tags such as
-`v1.2.3` also publish `1.2.3` and `1.2` tags.
+The `latest` and `main` images are published automatically from `main`. Stable
+controller releases also publish `3.15.0` and `3.15` tags.
 
 The encoding-only worker has its own public Docker Hub image:
 
 [kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
 
-`latest` follows the main branch. Versioned releases also publish tags such as
-`2.2.0` and `2.2`:
+`latest` and `main` follow the main branch. Stable worker releases also publish
+`2.4.0` and `2.4` tags:
 
 ```bash
 docker pull kevina1724/handbrake-tsd-worker:latest
@@ -544,8 +555,8 @@ Confirm `/dev/dri` exists in the container and that the host iGPU is enabled.
 
 Run `docker logs bytesqueeze-worker`, use the newest code, and confirm the URL
 is reachable from the controller. Pairing codes are one-use and expire after an
-hour. Restarting the worker prints a fresh code without deleting an existing
-trusted controller.
+hour. Run `docker exec bytesqueeze-worker python -m worker.app pairing-code` to
+print a fresh code without restarting or deleting an existing pairing.
 
 ### Worker cannot access a media path
 

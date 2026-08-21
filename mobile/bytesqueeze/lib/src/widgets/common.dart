@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/material.dart';
 
+import '../app_meta.dart';
 import '../theme.dart';
 
 Map<String, dynamic> asMap(dynamic value) =>
@@ -119,7 +120,8 @@ class SurfaceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final radius = BorderRadius.circular(17);
+    final compact = Theme.of(context).visualDensity == VisualDensity.compact;
+    final radius = BorderRadius.circular(compact ? 15 : 20);
     return Material(
       color: Colors.transparent,
       borderRadius: radius,
@@ -439,7 +441,7 @@ class BrandMark extends StatelessWidget {
             child: Padding(
               padding: EdgeInsets.symmetric(horizontal: 7, vertical: 4),
               child: Text(
-                'V3 BETA',
+                appReleaseLabel,
                 style: TextStyle(
                   color: Color(0xFFD8CCFF),
                   fontSize: 9,

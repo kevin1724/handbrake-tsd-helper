@@ -1,6 +1,6 @@
 abstract final class DemoData {
   static Map<String, dynamic> get dashboard => {
-        'release': '3.14.0-beta.1',
+        'release': '3.15.0',
         'queue': {
           'paused': false,
           'summary': {
@@ -331,6 +331,13 @@ abstract final class DemoData {
           'approval_probability': .84,
           'message': 'Ready to choose similar presets automatically.',
         },
+      };
+
+  static Map<String, dynamic> get operations => {
+        'hardware_transcode_concurrency': 2,
+        'qsv_device_available': true,
+        'auto_stop_large_output_enabled': true,
+        'auto_stop_large_output_percent': 90.0,
       };
 
   static Map<String, dynamic> _movie(

@@ -1421,6 +1421,12 @@ function renderLinkedNodeJobs(nodes) {
       error.textContent = node.last_error;
       card.appendChild(error);
     }
+    if (node.last_job_error) {
+      const error = document.createElement('div');
+      error.className = 'node-error small';
+      error.textContent = `Latest worker job: ${node.last_job_error}`;
+      card.appendChild(error);
+    }
 
     const jobs = Array.isArray(node.jobs) ? node.jobs.slice(0, 6) : [];
     const list = document.createElement('div');
@@ -1447,6 +1453,34 @@ function renderLinkedNodeJobs(nodes) {
 
         appendEncodingProgress(row, job);
         appendTransferProgress(row, job.transfer);
+
+        if (job.error_message) {
+          const error = document.createElement('div');
+          error.className = 'node-error small';
+          error.textContent = job.error_message;
+          row.appendChild(error);
+        }
+
+        if (job.log_tail) {
+          const details = document.createElement('details');
+          details.className = 'worker-log-details';
+          const summary = document.createElement('summary');
+          summary.textContent = 'Show worker log tail';
+          const log = document.createElement('pre');
+          log.className = 'worker-log-tail';
+          log.textContent = job.log_tail;
+          details.appendChild(summary);
+          details.appendChild(log);
+          row.appendChild(details);
+        }
+
+        if (job.has_log || job.log_tail) {
+          const logLink = document.createElement('a');
+          logLink.className = 'worker-log-link small';
+          logLink.href = `/api/nodes/${encodeURIComponent(node.id)}/jobs/${encodeURIComponent(job.id)}/log`;
+          logLink.textContent = 'Download full worker log';
+          row.appendChild(logLink);
+        }
 
         list.appendChild(row);
       });

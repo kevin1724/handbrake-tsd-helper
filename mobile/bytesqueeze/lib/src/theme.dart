@@ -1,134 +1,210 @@
 import 'package:flutter/material.dart';
 
 abstract final class ByteSqueezeColors {
-  static const ink = Color(0xFFF4F7FB);
-  static const muted = Color(0xFF929EAE);
+  static const ink = Color(0xFFF5F7FB);
+  static const softInk = Color(0xFFCCD4DF);
+  static const muted = Color(0xFF8C98A8);
   static const canvas = Color(0xFF07090D);
-  static const navy = Color(0xFF0C1017);
-  static const surface = Color(0xFF10151D);
-  static const raised = Color(0xFF171E29);
-  static const line = Color(0xFF283240);
-  static const blue = Color(0xFF7790FF);
-  static const cyan = Color(0xFF4DD7E7);
-  static const mint = Color(0xFF46D6A3);
-  static const amber = Color(0xFFF5BB4D);
+  static const navy = Color(0xFF0B0F16);
+  static const shell = Color(0xFF0D121A);
+  static const surface = Color(0xFF111720);
+  static const raised = Color(0xFF18212D);
+  static const line = Color(0xFF273241);
+  static const subtleLine = Color(0xFF1C2632);
+  static const blue = Color(0xFF7C91FF);
+  static const cyan = Color(0xFF48D7E8);
+  static const mint = Color(0xFF42D6A0);
+  static const amber = Color(0xFFF3B94F);
   static const danger = Color(0xFFFF7185);
+  static const violet = Color(0xFFAC8CFF);
 
   static const backdrop = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [Color(0xFF101520), canvas, Color(0xFF05070A)],
-    stops: [0, .48, 1],
+    colors: [Color(0xFF101722), canvas, Color(0xFF05070A)],
+    stops: [0, .46, 1],
+  );
+
+  static const commandBackdrop = RadialGradient(
+    center: Alignment(-.7, -1.15),
+    radius: 1.25,
+    colors: [Color(0x3322D3EE), Color(0x00101722)],
   );
 
   static const brand = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: [cyan, Color(0xFF7790FF), Color(0xFFA78BFA)],
+    colors: [cyan, blue, violet],
   );
 }
 
 abstract final class ByteSqueezeTheme {
-  static ThemeData get dark {
+  static ThemeData v3({bool compact = false}) =>
+      _build(classic: false, compact: compact);
+
+  static ThemeData get classic => _build(classic: true, compact: false);
+
+  static ThemeData get dark => v3();
+
+  static ThemeData _build({required bool classic, required bool compact}) {
+    final primary = classic ? ByteSqueezeColors.blue : ByteSqueezeColors.cyan;
     final scheme = ColorScheme.fromSeed(
-      seedColor: ByteSqueezeColors.blue,
+      seedColor: primary,
       brightness: Brightness.dark,
       surface: ByteSqueezeColors.surface,
       error: ByteSqueezeColors.danger,
     );
+    final radius = classic ? 17.0 : (compact ? 14.0 : 20.0);
+    final verticalControlPadding = compact ? 12.0 : 15.0;
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
       colorScheme: scheme.copyWith(
-        primary: ByteSqueezeColors.blue,
-        secondary: ByteSqueezeColors.cyan,
+        primary: primary,
+        onPrimary: const Color(0xFF041014),
+        secondary: ByteSqueezeColors.blue,
+        tertiary: ByteSqueezeColors.violet,
         surface: ByteSqueezeColors.surface,
+        surfaceContainer: ByteSqueezeColors.raised,
         outline: ByteSqueezeColors.line,
       ),
       scaffoldBackgroundColor: ByteSqueezeColors.canvas,
-      fontFamily: 'sans-serif',
+      visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
       textTheme: const TextTheme(
         displaySmall:
-            TextStyle(fontWeight: FontWeight.w800, letterSpacing: -1.5),
+            TextStyle(fontWeight: FontWeight.w800, letterSpacing: -1.4),
         headlineLarge:
-            TextStyle(fontWeight: FontWeight.w800, letterSpacing: -1.1),
+            TextStyle(fontWeight: FontWeight.w800, letterSpacing: -1.0),
         headlineMedium:
-            TextStyle(fontWeight: FontWeight.w800, letterSpacing: -.8),
+            TextStyle(fontWeight: FontWeight.w800, letterSpacing: -.7),
         headlineSmall:
-            TextStyle(fontWeight: FontWeight.w700, letterSpacing: -.5),
-        titleLarge: TextStyle(fontWeight: FontWeight.w700, letterSpacing: -.3),
+            TextStyle(fontWeight: FontWeight.w700, letterSpacing: -.4),
+        titleLarge: TextStyle(fontWeight: FontWeight.w700, letterSpacing: -.25),
         titleMedium: TextStyle(fontWeight: FontWeight.w700),
-        bodyLarge: TextStyle(height: 1.35),
-        bodyMedium: TextStyle(height: 1.35),
+        titleSmall: TextStyle(fontWeight: FontWeight.w700),
+        bodyLarge: TextStyle(height: 1.42),
+        bodyMedium: TextStyle(height: 1.4),
+        labelLarge: TextStyle(fontWeight: FontWeight.w700),
       ).apply(
-          bodyColor: ByteSqueezeColors.ink,
-          displayColor: ByteSqueezeColors.ink),
+        bodyColor: ByteSqueezeColors.ink,
+        displayColor: ByteSqueezeColors.ink,
+      ),
       cardTheme: CardThemeData(
         elevation: 0,
         color: ByteSqueezeColors.surface,
+        surfaceTintColor: Colors.transparent,
         shape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(17),
-          side: const BorderSide(color: ByteSqueezeColors.line, width: .7),
+          borderRadius: BorderRadius.circular(radius),
+          side: BorderSide(
+            color: classic
+                ? ByteSqueezeColors.line
+                : ByteSqueezeColors.subtleLine,
+            width: .8,
+          ),
         ),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
         fillColor: ByteSqueezeColors.surface,
         hintStyle: const TextStyle(color: ByteSqueezeColors.muted),
+        labelStyle: const TextStyle(color: ByteSqueezeColors.softInk),
         border: OutlineInputBorder(
-            borderRadius: BorderRadius.circular(13),
-            borderSide: BorderSide.none),
+          borderRadius: BorderRadius.circular(radius - 4),
+          borderSide: BorderSide.none,
+        ),
         enabledBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(13),
+          borderRadius: BorderRadius.circular(radius - 4),
           borderSide: const BorderSide(color: ByteSqueezeColors.line),
         ),
         focusedBorder: OutlineInputBorder(
-          borderRadius: BorderRadius.circular(13),
-          borderSide:
-              const BorderSide(color: ByteSqueezeColors.cyan, width: 1.4),
+          borderRadius: BorderRadius.circular(radius - 4),
+          borderSide: BorderSide(color: primary, width: 1.4),
         ),
-        contentPadding:
-            const EdgeInsets.symmetric(horizontal: 16, vertical: 15),
+        contentPadding: EdgeInsets.symmetric(
+          horizontal: 16,
+          vertical: verticalControlPadding,
+        ),
       ),
-      navigationBarTheme: const NavigationBarThemeData(
-        backgroundColor: Color(0xF20C1118),
-        indicatorColor: Color(0xFF173841),
-        indicatorShape: StadiumBorder(),
-        labelTextStyle: WidgetStatePropertyAll(
-            TextStyle(fontWeight: FontWeight.w600, fontSize: 12)),
-        height: 74,
+      navigationBarTheme: NavigationBarThemeData(
+        backgroundColor: const Color(0xF50C1118),
+        surfaceTintColor: Colors.transparent,
+        indicatorColor: primary.withValues(alpha: .16),
+        indicatorShape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.circular(14),
+        ),
+        labelTextStyle: const WidgetStatePropertyAll(
+          TextStyle(fontWeight: FontWeight.w700, fontSize: 11),
+        ),
+        height: compact ? 66 : 72,
       ),
-      navigationRailTheme: const NavigationRailThemeData(
-        backgroundColor: Color(0xFF0C1017),
-        indicatorColor: Color(0x334DD7E7),
-        selectedIconTheme: IconThemeData(color: ByteSqueezeColors.cyan),
-        selectedLabelTextStyle: TextStyle(
-            color: ByteSqueezeColors.ink, fontWeight: FontWeight.w700),
-        unselectedLabelTextStyle: TextStyle(color: ByteSqueezeColors.muted),
+      navigationRailTheme: NavigationRailThemeData(
+        backgroundColor: ByteSqueezeColors.shell,
+        indicatorColor: primary.withValues(alpha: .14),
+        selectedIconTheme: IconThemeData(color: primary),
+        selectedLabelTextStyle: const TextStyle(
+          color: ByteSqueezeColors.ink,
+          fontWeight: FontWeight.w700,
+        ),
+        unselectedLabelTextStyle:
+            const TextStyle(color: ByteSqueezeColors.muted),
       ),
       appBarTheme: const AppBarTheme(
         backgroundColor: Colors.transparent,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
+        centerTitle: false,
+      ),
+      dialogTheme: DialogThemeData(
+        backgroundColor: ByteSqueezeColors.shell,
+        surfaceTintColor: Colors.transparent,
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+      ),
+      bottomSheetTheme: const BottomSheetThemeData(
+        backgroundColor: ByteSqueezeColors.navy,
+        surfaceTintColor: Colors.transparent,
+        modalBarrierColor: Color(0xB8000000),
       ),
       snackBarTheme: SnackBarThemeData(
         backgroundColor: ByteSqueezeColors.raised,
         contentTextStyle: const TextStyle(color: ByteSqueezeColors.ink),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
         behavior: SnackBarBehavior.floating,
       ),
       filledButtonTheme: FilledButtonThemeData(
         style: FilledButton.styleFrom(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 15),
-          shape:
-              RoundedRectangleBorder(borderRadius: BorderRadius.circular(13)),
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 17 : 20,
+            vertical: verticalControlPadding,
+          ),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(radius - 4),
+          ),
           textStyle: const TextStyle(fontWeight: FontWeight.w700),
         ),
       ),
+      outlinedButtonTheme: OutlinedButtonThemeData(
+        style: OutlinedButton.styleFrom(
+          padding: EdgeInsets.symmetric(
+            horizontal: compact ? 17 : 20,
+            vertical: verticalControlPadding,
+          ),
+          side: const BorderSide(color: ByteSqueezeColors.line),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(radius - 4),
+          ),
+        ),
+      ),
+      chipTheme: ChipThemeData(
+        backgroundColor: ByteSqueezeColors.surface,
+        selectedColor: primary.withValues(alpha: .14),
+        side: const BorderSide(color: ByteSqueezeColors.line),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(999)),
+        labelStyle: const TextStyle(fontWeight: FontWeight.w600),
+      ),
       dividerColor: ByteSqueezeColors.line,
-      progressIndicatorTheme: const ProgressIndicatorThemeData(
-        color: ByteSqueezeColors.cyan,
-        linearTrackColor: Color(0xFF242D3A),
+      progressIndicatorTheme: ProgressIndicatorThemeData(
+        color: primary,
+        linearTrackColor: const Color(0xFF242D3A),
       ),
     );
   }

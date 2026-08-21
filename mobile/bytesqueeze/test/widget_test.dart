@@ -2,19 +2,106 @@ import 'package:bytesqueeze/main.dart';
 import 'package:bytesqueeze/src/app_controller.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() {
+  setUp(() {
+    SharedPreferences.setMockInitialValues({});
+  });
+
   testWidgets('demo opens the ByteSqueeze dashboard', (tester) async {
     final controller = AppController()..enterDemo();
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
     await tester.pumpAndSettle();
 
-    expect(find.text('ByteSqueeze'), findsNothing);
+    expect(find.text('ByteSqueeze'), findsOneWidget);
     expect(find.text('Media operations are ready.'), findsOneWidget);
     expect(find.text('1 encoding now'), findsOneWidget);
     expect(find.text('Library'), findsOneWidget);
     expect(find.text('Automate'), findsOneWidget);
     expect(find.text('More'), findsOneWidget);
+  });
+
+  testWidgets('V3 command center exposes navigation and safe actions',
+      (tester) async {
+    final controller = AppController()..enterDemo();
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byTooltip('Command center'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Command center'), findsOneWidget);
+    expect(find.text('Open Library'), findsOneWidget);
+    await tester.scrollUntilVisible(
+        find.text('Queue with Smart Presets'), 220,
+        scrollable: find.byType(Scrollable).last);
+    await tester.pumpAndSettle();
+    expect(find.text('Queue with Smart Presets'), findsOneWidget);
+  });
+
+  testWidgets('settings keeps the V2 Classic fallback available',
+      (tester) async {
+    final controller = AppController()..enterDemo();
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune_outlined));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Interface & layout'), 220,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Interface & layout'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('V3'), findsOneWidget);
+    expect(find.text('V2 Classic'), findsOneWidget);
+    await tester.tap(find.text('V2 Classic'));
+    await tester.pumpAndSettle();
+    expect(controller.useV3, isFalse);
+    expect(await controller.store.loadInterfaceVersion(), 'v2');
+  });
+
+  testWidgets('mobile settings expose GPU slots and CPU exclusivity',
+      (tester) async {
+    final controller = AppController()..enterDemo();
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune_outlined));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+        find.text('Encoding capacity & safety'), 220,
+        scrollable: find.byType(Scrollable).first);
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Encoding capacity & safety'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Simultaneous hardware transcodes'), findsOneWidget);
+    expect(find.textContaining('CPU/software encoding always stays at one'),
+        findsOneWidget);
+    expect(find.text('Stop unexpectedly large outputs'), findsOneWidget);
+  });
+
+  testWidgets('older server keeps the app connected and explains one limitation',
+      (tester) async {
+    final controller = AppController()..enterDemo();
+    controller.serverSupportsOperationsSettings = false;
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Server request failed'), findsNothing);
+    await tester.tap(find.byIcon(Icons.tune_outlined));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(
+        find.text('Encoding capacity & safety'), 220,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Encoding capacity & safety'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Server update required'), findsOneWidget);
+    expect(find.textContaining('rest of ByteSqueeze remains connected'),
+        findsOneWidget);
+    expect(find.text('LEGACY SERVER'), findsOneWidget);
   });
 
   testWidgets('queue prioritizes running work and hardware capacity',

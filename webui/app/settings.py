@@ -39,6 +39,9 @@ DEFAULT_SETTINGS = {
     # than one session. Software encoders always remain exclusive regardless
     # of this value. One preserves the previous behavior after an upgrade.
     "hardware_transcode_concurrency": 1,
+    # Used only when this code is running as a headless worker. It lets the
+    # paired controller change GPU capacity without a worker-side website.
+    "worker_controller_managed_capacity": False,
 
     # Stop a running encode when checkpoint-based projected output size is at
     # or above this percentage of the original source. Disabled by default.
@@ -213,6 +216,9 @@ def load_settings() -> dict:
             8,
             integer=True,
         )
+        merged["worker_controller_managed_capacity"] = bool(
+            merged.get("worker_controller_managed_capacity", False)
+        )
         merged["beta_media_folders"] = _normalize_beta_media_folders(merged.get("beta_media_folders"))
         _settings_cache = merged
         return merged
@@ -306,6 +312,12 @@ def _save_settings_unlocked(new_values: dict) -> dict:
         1,
         8,
         integer=True,
+    )
+    base["worker_controller_managed_capacity"] = bool(
+        new_values.get(
+            "worker_controller_managed_capacity",
+            base.get("worker_controller_managed_capacity", False),
+        )
     )
 
     base["auto_stop_large_output_enabled"] = bool(

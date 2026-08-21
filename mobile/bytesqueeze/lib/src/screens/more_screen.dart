@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
+import '../app_meta.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
 import 'calendar_screen.dart';
@@ -24,16 +25,17 @@ class MoreScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('SERVER',
+              const Text('SETTINGS & SERVER',
                   style: TextStyle(
                       color: ByteSqueezeColors.cyan,
                       fontSize: 11,
                       fontWeight: FontWeight.w800,
                       letterSpacing: 1.6)),
               const SizedBox(height: 5),
-              Text('Server', style: Theme.of(context).textTheme.headlineLarge),
+              Text('Control room',
+                  style: Theme.of(context).textTheme.headlineLarge),
               const SizedBox(height: 4),
-              const Text('Workers, storage, activity, and this connection',
+              const Text('App experience, encoder safety, and server health',
                   style: TextStyle(color: ByteSqueezeColors.muted)),
               const SizedBox(height: 18),
               SurfaceCard(
@@ -83,6 +85,26 @@ class MoreScreen extends StatelessWidget {
                 padding: const EdgeInsets.symmetric(vertical: 4),
                 child: Column(
                   children: [
+                    _MoreTile(
+                      icon: Icons.dashboard_customize_rounded,
+                      color: ByteSqueezeColors.violet,
+                      title: 'Interface & layout',
+                      subtitle: controller.useV3
+                          ? 'V3 · ${controller.compactInterface ? 'compact' : 'comfortable'} density'
+                          : 'V2 Classic fallback is active',
+                      onTap: () => _open(
+                          context, InterfacePage(controller: controller)),
+                    ),
+                    _MoreTile(
+                      icon: Icons.developer_board_rounded,
+                      color: ByteSqueezeColors.cyan,
+                      title: 'Encoding capacity & safety',
+                      subtitle: controller.serverSupportsOperationsSettings
+                          ? '${controller.operations['hardware_transcode_concurrency'] ?? asMap(controller.jobs['summary'])['hardware_transcode_concurrency'] ?? 1} GPU slots · CPU stays at one'
+                          : 'Server update needed for mobile controls',
+                      onTap: () => _open(
+                          context, OperationsSettingsPage(controller: controller)),
+                    ),
                     _MoreTile(
                       icon: Icons.calendar_month_rounded,
                       color: ByteSqueezeColors.blue,
@@ -137,11 +159,11 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.info_outline_rounded,
                       color: ByteSqueezeColors.muted,
                       title: 'About',
-                      subtitle: 'ByteSqueeze 0.5.0 beta · TSD 3.14 beta',
+                      subtitle: 'ByteSqueeze $appVersion · TSD 3.15',
                       onTap: () => showAboutDialog(
                         context: context,
                         applicationName: 'ByteSqueeze',
-                        applicationVersion: '0.5.0-beta.1',
+                        applicationVersion: '$appVersion+$appBuildNumber',
                         applicationIcon: ClipRRect(
                           borderRadius: BorderRadius.circular(18),
                           child: Image.asset(
@@ -207,6 +229,451 @@ class MoreScreen extends StatelessWidget {
             ) ==
             true;
     if (confirmed) await controller.disconnect();
+  }
+}
+
+class InterfacePage extends StatefulWidget {
+  const InterfacePage({super.key, required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<InterfacePage> createState() => _InterfacePageState();
+}
+
+class _InterfacePageState extends State<InterfacePage> {
+  AppController get controller => widget.controller;
+
+  @override
+  Widget build(BuildContext context) {
+    return _DetailScaffold(
+      title: 'Interface & layout',
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          SurfaceCard(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF183D64), Color(0xFF11162B)],
+            ),
+            borderColor: ByteSqueezeColors.cyan.withValues(alpha: .35),
+            child: const Row(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Icon(Icons.auto_awesome_rounded,
+                    color: ByteSqueezeColors.cyan, size: 30),
+                SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('V3 is the current ByteSqueeze experience',
+                          style: TextStyle(
+                              fontWeight: FontWeight.w800, fontSize: 17)),
+                      SizedBox(height: 5),
+                      Text(
+                        'Your server, pairing, library, queue, and Smart Preset data stay unchanged when the interface switches.',
+                        style: TextStyle(color: ByteSqueezeColors.softInk),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SectionHeader(
+            title: 'App experience',
+            subtitle: 'Switch instantly; no restart or re-pairing required',
+          ),
+          _ExperienceOption(
+            selected: controller.useV3,
+            icon: Icons.view_quilt_rounded,
+            color: ByteSqueezeColors.cyan,
+            title: 'V3',
+            badge: 'RECOMMENDED',
+            description:
+                'Adaptive workspace, command center, cleaner navigation, live operations dock, and focused settings.',
+            onTap: () => _setVersion('v3'),
+          ),
+          const SizedBox(height: 10),
+          _ExperienceOption(
+            selected: !controller.useV3,
+            icon: Icons.view_sidebar_outlined,
+            color: ByteSqueezeColors.blue,
+            title: 'V2 Classic',
+            badge: 'FALLBACK',
+            description:
+                'The previous navigation shell remains available as an optional classic interface.',
+            onTap: () => _setVersion('v2'),
+          ),
+          const SectionHeader(
+            title: 'Information density',
+            subtitle: 'Choose how much space controls and cards use',
+          ),
+          SegmentedButton<String>(
+            segments: const [
+              ButtonSegment(
+                value: 'comfortable',
+                label: Text('Comfortable'),
+                icon: Icon(Icons.space_bar_rounded),
+              ),
+              ButtonSegment(
+                value: 'compact',
+                label: Text('Compact'),
+                icon: Icon(Icons.density_small_rounded),
+              ),
+            ],
+            selected: {controller.interfaceDensity},
+            showSelectedIcon: false,
+            onSelectionChanged: controller.useV3
+                ? (values) => _setDensity(values.first)
+                : null,
+          ),
+          const SizedBox(height: 12),
+          Text(
+            controller.useV3
+                ? 'This preference is stored on this phone only.'
+                : 'Density is saved and will apply when you return to V3.',
+            style: const TextStyle(
+                color: ByteSqueezeColors.muted, fontSize: 12),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _setVersion(String version) async {
+    await controller.setInterfaceVersion(version);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _setDensity(String density) async {
+    await controller.setInterfaceDensity(density);
+    if (mounted) setState(() {});
+  }
+}
+
+class _ExperienceOption extends StatelessWidget {
+  const _ExperienceOption({
+    required this.selected,
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.badge,
+    required this.description,
+    required this.onTap,
+  });
+
+  final bool selected;
+  final IconData icon;
+  final Color color;
+  final String title;
+  final String badge;
+  final String description;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    return SurfaceCard(
+      onTap: onTap,
+      borderColor: selected ? color : ByteSqueezeColors.line,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: color.withValues(alpha: .12),
+              borderRadius: BorderRadius.circular(14),
+            ),
+            child: Icon(icon, color: color),
+          ),
+          const SizedBox(width: 13),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(title,
+                          style: Theme.of(context).textTheme.titleLarge),
+                    ),
+                    StatusPill(label: badge, color: color),
+                  ],
+                ),
+                const SizedBox(height: 6),
+                Text(description,
+                    style: const TextStyle(color: ByteSqueezeColors.muted)),
+              ],
+            ),
+          ),
+          const SizedBox(width: 8),
+          Icon(
+            selected ? Icons.check_circle_rounded : Icons.circle_outlined,
+            color: selected ? color : ByteSqueezeColors.muted,
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+class OperationsSettingsPage extends StatefulWidget {
+  const OperationsSettingsPage({super.key, required this.controller});
+
+  final AppController controller;
+
+  @override
+  State<OperationsSettingsPage> createState() =>
+      _OperationsSettingsPageState();
+}
+
+class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
+  late int _hardwareSlots;
+  late bool _autoStop;
+  late double _stopPercent;
+  bool _saving = false;
+
+  AppController get controller => widget.controller;
+
+  @override
+  void initState() {
+    super.initState();
+    final operations = controller.operations;
+    final summary = asMap(controller.jobs['summary']);
+    _hardwareSlots = ((operations['hardware_transcode_concurrency'] ??
+                summary['hardware_transcode_concurrency'] ??
+                1) as num)
+            .toInt()
+            .clamp(1, 8)
+            .toInt();
+    _autoStop = operations['auto_stop_large_output_enabled'] == true;
+    _stopPercent =
+        ((operations['auto_stop_large_output_percent'] as num?)?.toDouble() ??
+                90)
+            .clamp(50, 150)
+            .toDouble();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final qsv = controller.operations['qsv_device_available'] == true;
+    final supported = controller.serverSupportsOperationsSettings;
+    return _DetailScaffold(
+      title: 'Encoding capacity & safety',
+      child: ListView(
+        padding: const EdgeInsets.all(16),
+        children: [
+          if (!supported) ...[
+            SurfaceCard(
+              borderColor: ByteSqueezeColors.amber.withValues(alpha: .48),
+              child: const Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(Icons.system_update_alt_rounded,
+                      color: ByteSqueezeColors.amber),
+                  SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Server update required',
+                            style: TextStyle(fontWeight: FontWeight.w800)),
+                        SizedBox(height: 4),
+                        Text(
+                          'The rest of ByteSqueeze remains connected. Update the TSD server to version 3.15 or newer to change these encoder controls from the app.',
+                          style: TextStyle(
+                              color: ByteSqueezeColors.softInk, fontSize: 12.5),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 12),
+          ],
+          SurfaceCard(
+            gradient: const LinearGradient(
+              begin: Alignment.topLeft,
+              end: Alignment.bottomRight,
+              colors: [Color(0xFF0E4B5C), Color(0xFF091822)],
+            ),
+            borderColor: ByteSqueezeColors.cyan.withValues(alpha: .38),
+            child: Row(
+              children: [
+                const Icon(Icons.developer_board_rounded,
+                    color: ByteSqueezeColors.cyan, size: 34),
+                const SizedBox(width: 13),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text('$_hardwareSlots simultaneous GPU job${_hardwareSlots == 1 ? '' : 's'}',
+                          style: Theme.of(context).textTheme.titleLarge),
+                      const SizedBox(height: 3),
+                      const Text('CPU/software encoding always stays at one',
+                          style: TextStyle(color: ByteSqueezeColors.softInk)),
+                    ],
+                  ),
+                ),
+                StatusPill(
+                  label: !supported
+                      ? 'LEGACY SERVER'
+                      : (qsv ? 'QSV READY' : 'GPU STATUS UNKNOWN'),
+                  color: supported && qsv
+                      ? ByteSqueezeColors.mint
+                      : ByteSqueezeColors.amber,
+                ),
+              ],
+            ),
+          ),
+          const SectionHeader(
+            title: 'Hardware concurrency',
+            subtitle:
+                'Raise this only for Intel QSV or another supported hardware encoder',
+          ),
+          SurfaceCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                Row(
+                  children: [
+                    const Expanded(
+                      child: Text('Simultaneous hardware transcodes',
+                          style: TextStyle(fontWeight: FontWeight.w700)),
+                    ),
+                    Container(
+                      width: 48,
+                      height: 42,
+                      alignment: Alignment.center,
+                      decoration: BoxDecoration(
+                        color: ByteSqueezeColors.cyan.withValues(alpha: .12),
+                        borderRadius: BorderRadius.circular(12),
+                      ),
+                      child: Text('$_hardwareSlots',
+                          style: const TextStyle(
+                              color: ByteSqueezeColors.cyan,
+                              fontSize: 20,
+                              fontWeight: FontWeight.w800)),
+                    ),
+                  ],
+                ),
+                Slider(
+                  value: _hardwareSlots.toDouble(),
+                  min: 1,
+                  max: 8,
+                  divisions: 7,
+                  label: '$_hardwareSlots',
+                  onChanged: controller.canControl && supported
+                      ? (value) =>
+                          setState(() => _hardwareSlots = value.round())
+                      : null,
+                ),
+                const Text(
+                  'ByteSqueeze fills available GPU slots. A software encode remains exclusive and will never run beside another transcode.',
+                  style: TextStyle(
+                      color: ByteSqueezeColors.muted, fontSize: 12),
+                ),
+              ],
+            ),
+          ),
+          const SectionHeader(
+            title: 'Output-size protection',
+            subtitle: 'Stop an encode whose projected output is not useful',
+          ),
+          SurfaceCard(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
+                SwitchListTile.adaptive(
+                  value: _autoStop,
+                  contentPadding: EdgeInsets.zero,
+                  title: const Text('Stop unexpectedly large outputs'),
+                  subtitle: const Text(
+                    'Uses encode checkpoints; the original source remains safe.',
+                    style: TextStyle(color: ByteSqueezeColors.muted),
+                  ),
+                  onChanged: controller.canControl && supported
+                      ? (value) => setState(() => _autoStop = value)
+                      : null,
+                ),
+                if (_autoStop) ...[
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Expanded(
+                        child: Text('Stop at projected source size'),
+                      ),
+                      Text('${_stopPercent.round()}%',
+                          style: const TextStyle(
+                              color: ByteSqueezeColors.amber,
+                              fontWeight: FontWeight.w800)),
+                    ],
+                  ),
+                  Slider(
+                    value: _stopPercent,
+                    min: 50,
+                    max: 150,
+                    divisions: 20,
+                    label: '${_stopPercent.round()}%',
+                    onChanged: controller.canControl && supported
+                        ? (value) => setState(() => _stopPercent = value)
+                        : null,
+                  ),
+                ],
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+          FilledButton.icon(
+            onPressed: controller.canControl && supported && !_saving
+                ? _save
+                : null,
+            icon: _saving
+                ? const SizedBox(
+                    width: 18,
+                    height: 18,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Icon(Icons.save_rounded),
+            label: const Text('Save encoder settings'),
+          ),
+          const SizedBox(height: 10),
+          Text(
+            supported
+                ? 'These are server settings and apply to the web interface, Autopilot, linked workers, and every paired ByteSqueeze device.'
+                : 'No connection was lost. This page is read-only until the server is updated.',
+            textAlign: TextAlign.center,
+            style: const TextStyle(
+                color: ByteSqueezeColors.muted, fontSize: 11.5),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Future<void> _save() async {
+    setState(() => _saving = true);
+    try {
+      await controller.saveOperationsSettings({
+        'hardware_transcode_concurrency': _hardwareSlots,
+        'auto_stop_large_output_enabled': _autoStop,
+        'auto_stop_large_output_percent': _stopPercent.round(),
+      });
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+        content: Text('Encoder capacity and safety settings saved.'),
+      ));
+    } catch (error) {
+      if (mounted) {
+        ScaffoldMessenger.of(context)
+            .showSnackBar(SnackBar(content: Text('$error')));
+      }
+    } finally {
+      if (mounted) setState(() => _saving = false);
+    }
   }
 }
 

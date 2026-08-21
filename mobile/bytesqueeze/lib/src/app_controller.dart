@@ -16,8 +16,11 @@ class AppController extends ChangeNotifier {
   bool busy = false;
   bool demoMode = false;
   String? error;
+  bool serverSupportsOperationsSettings = true;
   int selectedTab = 0;
   ServerSession? session;
+  String interfaceVersion = 'v3';
+  String interfaceDensity = 'comfortable';
 
   Map<String, dynamic> dashboard = {};
   Map<String, dynamic> jobs = {};
@@ -29,15 +32,20 @@ class AppController extends ChangeNotifier {
   Map<String, dynamic> events = {};
   Map<String, dynamic> smartPresets = {};
   Map<String, dynamic> autopilotReview = {};
+  Map<String, dynamic> operations = {};
 
   bool get connected => demoMode || session != null;
   bool get canControl => demoMode || session?.canControl == true;
+  bool get useV3 => interfaceVersion == 'v3';
+  bool get compactInterface => interfaceDensity == 'compact';
   String get serverLabel =>
       demoMode ? 'Demo server' : (api.activeBaseUrl.isEmpty ? 'Not connected' : api.activeBaseUrl);
 
   Future<void> bootstrap() async {
     booting = true;
     notifyListeners();
+    interfaceVersion = await store.loadInterfaceVersion();
+    interfaceDensity = await store.loadInterfaceDensity();
     session = await store.load();
     api.session = session;
     if (session != null) {
@@ -88,6 +96,8 @@ class AppController extends ChangeNotifier {
     events = DemoData.events;
     smartPresets = DemoData.smart;
     autopilotReview = {};
+    operations = DemoData.operations;
+    serverSupportsOperationsSettings = true;
     error = null;
     notifyListeners();
   }
@@ -107,11 +117,31 @@ class AppController extends ChangeNotifier {
     events = {};
     smartPresets = {};
     autopilotReview = {};
+    operations = {};
+    serverSupportsOperationsSettings = true;
     notifyListeners();
   }
 
   void selectTab(int value) {
-    selectedTab = value;
+    selectedTab = value.clamp(0, 4).toInt();
+    notifyListeners();
+  }
+
+  Future<void> setInterfaceVersion(String value) async {
+    interfaceVersion = value == 'v2' ? 'v2' : 'v3';
+    await store.saveInterfacePreferences(
+      version: interfaceVersion,
+      density: interfaceDensity,
+    );
+    notifyListeners();
+  }
+
+  Future<void> setInterfaceDensity(String value) async {
+    interfaceDensity = value == 'compact' ? 'compact' : 'comfortable';
+    await store.saveInterfacePreferences(
+      version: interfaceVersion,
+      density: interfaceDensity,
+    );
     notifyListeners();
   }
 
@@ -137,9 +167,20 @@ class AppController extends ChangeNotifier {
       _load('/storage?limit=100', (value) => storage = value, failures),
       _load('/events?limit=100', (value) => events = value, failures),
       _load('/smart_presets', (value) => smartPresets = value, failures),
+      _loadOperations(failures),
       _load('/autopilot/review',
           (value) => autopilotReview = _map(value['review']), failures),
     ]);
+    if (!serverSupportsOperationsSettings) {
+      final summary = _map(jobs['summary']);
+      operations = {
+        'hardware_transcode_concurrency':
+            summary['hardware_transcode_concurrency'] ?? 1,
+        'qsv_device_available': summary['qsv_device_available'] == true,
+        'auto_stop_large_output_enabled': false,
+        'auto_stop_large_output_percent': 90,
+      };
+    }
     if (failures.isNotEmpty) error = failures.first;
     busy = false;
     notifyListeners();
@@ -152,6 +193,25 @@ class AppController extends ChangeNotifier {
   ) async {
     try {
       apply(await api.get(path));
+    } catch (failure) {
+      failures.add(_message(failure));
+    }
+  }
+
+  Future<void> _loadOperations(List<String> failures) async {
+    try {
+      final value = await api.get('/operations');
+      operations = _map(value['settings']);
+      serverSupportsOperationsSettings = true;
+    } on ApiFailure catch (failure) {
+      if (_unsupportedOperationsEndpoint(failure)) {
+        // V3 mobile can still control older TSD servers. Only the encoder
+        // capacity editor needs the newer endpoint, so a missing route must
+        // not make the entire connected app look offline.
+        serverSupportsOperationsSettings = false;
+        return;
+      }
+      failures.add(_message(failure));
     } catch (failure) {
       failures.add(_message(failure));
     }
@@ -376,6 +436,43 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> saveOperationsSettings(Map<String, dynamic> updates) async {
+    _requireControl();
+    if (demoMode) {
+      operations.addAll(updates);
+      final summary = _map(jobs['summary']);
+      final dashboardSummary = _map(_map(dashboard['queue'])['summary']);
+      if (updates['hardware_transcode_concurrency'] != null) {
+        summary['hardware_transcode_concurrency'] =
+            updates['hardware_transcode_concurrency'];
+        dashboardSummary['hardware_transcode_concurrency'] =
+            updates['hardware_transcode_concurrency'];
+      }
+      notifyListeners();
+      return;
+    }
+    if (!serverSupportsOperationsSettings) {
+      throw const ApiFailure(
+        'Update the TSD server to version 3.15 or newer before changing encoder settings from ByteSqueeze.',
+      );
+    }
+    try {
+      final value = await api.post('/operations', updates);
+      operations = _map(value['settings']);
+      await refreshJobsAndDashboard();
+      notifyListeners();
+    } on ApiFailure catch (failure) {
+      if (_unsupportedOperationsEndpoint(failure)) {
+        serverSupportsOperationsSettings = false;
+        notifyListeners();
+        throw const ApiFailure(
+          'Update the TSD server to version 3.15 or newer before changing encoder settings from ByteSqueeze.',
+        );
+      }
+      rethrow;
+    }
+  }
+
   Future<void> startAutopilotReview({bool next = false}) async {
     _requireControl();
     if (demoMode) return;
@@ -466,6 +563,9 @@ class AppController extends ChangeNotifier {
 
   String _message(Object failure) =>
       failure is ApiFailure ? failure.message : '$failure';
+
+  static bool _unsupportedOperationsEndpoint(ApiFailure failure) =>
+      failure.statusCode == 404 || failure.statusCode == 405;
 
   static Map<String, dynamic> _map(dynamic value) {
     return value is Map<String, dynamic> ? value : <String, dynamic>{};
