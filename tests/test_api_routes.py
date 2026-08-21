@@ -79,7 +79,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.15.0-beta.1")
+        self.assertEqual(status.get_json()["release"], "3.15.0-beta.2")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -281,6 +281,41 @@ class ApiRouteSmokeTests(unittest.TestCase):
             self.assertIn(b"Simultaneous hardware transcodes", settings_page.data)
             self.assertIn(b"Save GPU capacity", settings_page.data)
             self.assertIn(b"CPU/software jobs always run alone", settings_page.data)
+        finally:
+            app_node_linking.delete_node(node_id)
+
+    def test_main_node_proxies_authenticated_worker_logs(self):
+        node_id = "worker-log-proxy"
+        app_node_linking.save_node(
+            {
+                "id": node_id,
+                "name": "Log worker",
+                "url": "http://worker:8080",
+                "token": "worker-token",
+                "role": "worker",
+            }
+        )
+        try:
+            with patch(
+                "webui.app.routes.signed_json_request",
+                return_value={
+                    "ok": True,
+                    "job_id": "remote-job",
+                    "log": "HandBrake output\nERROR: encoder unavailable\n",
+                    "truncated": False,
+                },
+            ) as signed_request:
+                response = self.client.get(
+                    f"/api/nodes/{node_id}/jobs/remote-job/log"
+                )
+
+            self.assertEqual(response.status_code, 200)
+            self.assertIn(b"ERROR: encoder unavailable", response.data)
+            self.assertIn("attachment", response.headers["Content-Disposition"])
+            self.assertEqual(
+                signed_request.call_args.args[1],
+                "/api/node/jobs/remote-job/log",
+            )
         finally:
             app_node_linking.delete_node(node_id)
 
@@ -1138,7 +1173,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.15.0-beta.1")
+        self.assertEqual(dashboard_payload["release"], "3.15.0-beta.2")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

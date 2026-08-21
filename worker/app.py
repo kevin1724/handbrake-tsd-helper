@@ -7,18 +7,22 @@ to the controller. No media-library mount or browser UI is exposed.
 
 from __future__ import annotations
 
+import argparse
 import os
 import shutil
 import time
+from urllib.parse import urlparse
 
 from flask import Flask, jsonify, request
 
 from webui.app.events import log_event
 from webui.app.jobs import (
     create_remote_transfer_job,
+    get_job,
     get_job_summary,
     initialize_jobs_system,
     list_jobs_for_api,
+    read_job_log,
 )
 from webui.app.node_linking import (
     NODE_PROTOCOL_VERSION,
@@ -39,7 +43,7 @@ from webui.app.presets import guess_preset_from_filename, load_preset_config
 from webui.app.settings import load_settings, save_settings
 
 
-WORKER_RELEASE = "2.3.0"
+WORKER_RELEASE = "2.4.0"
 
 
 def _public_encoding_policy() -> dict:
@@ -106,18 +110,64 @@ def _print_pairing_banner(pairing: dict) -> None:
     print("", flush=True)
 
 
+def _print_startup_diagnostics(work_dir: str) -> None:
+    usage = shutil.disk_usage(work_dir)
+    print(
+        f"[WORKER] release={WORKER_RELEASE} name={os.environ.get('TSD_WORKER_NAME') or 'ByteSqueeze Worker'}",
+        flush=True,
+    )
+    print(
+        f"[WORKER] work_dir={work_dir} free_bytes={int(usage.free)} total_bytes={int(usage.total)}",
+        flush=True,
+    )
+    print(
+        f"[WORKER] HandBrakeCLI={shutil.which('HandBrakeCLI') or 'NOT FOUND'} "
+        f"ffprobe={shutil.which('ffprobe') or 'NOT FOUND'}",
+        flush=True,
+    )
+    print(
+        "[WORKER] Create a fresh pairing code at any time with: "
+        "python -m worker.app pairing-code",
+        flush=True,
+    )
+
+
 def _request_scheme() -> str:
     value = str(request.headers.get("X-Forwarded-Proto") or request.scheme or "http").split(",")[0].strip().lower()
     return value if value in {"http", "https"} else "http"
 
 
-def _infer_controller_url() -> str:
+def _remote_request_host() -> str:
     host = str(request.headers.get("X-Forwarded-For") or request.remote_addr or "").split(",")[0].strip()
+    return host.strip("[]")
+
+
+def _infer_controller_url(advertised_url: str = "") -> str:
+    host = _remote_request_host()
     if not host:
         return ""
-    # Only the host can be inferred reliably. Controller pairing from the main
-    # UI always sends window.location.origin, including its actual port.
-    return f"{_request_scheme()}://{host}"
+    advertised = urlparse("")
+    try:
+        advertised = urlparse(str(advertised_url or "").strip())
+        scheme = advertised.scheme if advertised.scheme in {"http", "https"} else _request_scheme()
+        port = advertised.port
+    except Exception:
+        scheme = _request_scheme()
+        port = None
+    if host in {"127.0.0.1", "::1", "localhost", "0.0.0.0"}:
+        return ""
+    if (
+        scheme == "https"
+        and advertised.hostname
+        and advertised.hostname.strip("[]").lower() != host.lower()
+    ):
+        # Replacing a TLS hostname with an observed IP would normally fail
+        # certificate validation. Keep the advertised HTTPS endpoint instead.
+        return ""
+    host_text = f"[{host}]" if ":" in host else host
+    default_port = 443 if scheme == "https" else 80
+    port_text = f":{port}" if port and port != default_port else ""
+    return f"{scheme}://{host_text}{port_text}"
 
 
 def _authenticated_controller():
@@ -138,8 +188,12 @@ def _authenticated_controller():
         signature=signature,
     ):
         return None
-    update_trusted_controller(node_id, {"last_seen": time.time()})
-    return controller
+    updates = {"last_seen": time.time()}
+    observed_url = _infer_controller_url(controller.get("url") or "")
+    if observed_url:
+        updates["observed_url"] = observed_url
+    update_trusted_controller(node_id, updates)
+    return {**controller, **updates}
 
 
 def create_worker_app(*, announce_pairing: bool = True) -> Flask:
@@ -155,6 +209,7 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
     initialize_jobs_system()
 
     if announce_pairing:
+        _print_startup_diagnostics(work_dir)
         pairing = create_pairing_code(ttl_seconds=_pairing_ttl())
         _print_pairing_banner(pairing)
 
@@ -169,7 +224,10 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             node_name=local.get("name"),
             paired=bool(local.get("paired_controller_count")),
             encoding_policy=_public_encoding_policy(),
-            message="Headless worker only. Pairing code is printed in docker logs.",
+            message=(
+                "Headless worker only. Pairing codes are printed in docker logs; "
+                "run 'python -m worker.app pairing-code' in the container for a fresh code."
+            ),
         )
 
     @app.get("/api/health")
@@ -193,7 +251,14 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
     @app.post("/api/node/pair/accept")
     def worker_pair_accept():
         data = request.get_json(silent=True) or {}
-        if not str(data.get("controller_url") or "").strip():
+        advertised_url = str(data.get("controller_url") or "").strip().rstrip("/")
+        observed_url = _infer_controller_url(advertised_url)
+        if advertised_url:
+            data["advertised_controller_url"] = advertised_url
+        if observed_url:
+            data["observed_controller_url"] = observed_url
+            data["controller_url"] = observed_url
+        elif not advertised_url:
             data["controller_url"] = _infer_controller_url()
         try:
             accepted = accept_pairing(data.get("code") or "", data)
@@ -211,7 +276,14 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
     @app.post("/api/node/pair/recover")
     def worker_pair_recover():
         data = request.get_json(silent=True) or {}
-        if not str(data.get("controller_url") or "").strip():
+        advertised_url = str(data.get("controller_url") or "").strip().rstrip("/")
+        observed_url = _infer_controller_url(advertised_url)
+        if advertised_url:
+            data["advertised_controller_url"] = advertised_url
+        if observed_url:
+            data["observed_controller_url"] = observed_url
+            data["controller_url"] = observed_url
+        elif not advertised_url:
             data["controller_url"] = _infer_controller_url()
         try:
             recovered = recover_pairing(data)
@@ -254,7 +326,7 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             remote_transfer_temp_dir=work_dir,
             work_free_bytes=int(usage.free),
             summary=get_job_summary(),
-            jobs=list_jobs_for_api(),
+            jobs=list_jobs_for_api(include_log_tail=True),
             encoding_policy=_public_encoding_policy(),
             prediction_profile={},
         )
@@ -341,6 +413,27 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             encoding_policy=applied_policy,
         )
 
+    @app.get("/api/node/jobs/<job_id>/log")
+    def worker_job_log(job_id):
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        job = get_job(job_id)
+        if not job:
+            return jsonify(error="job not found"), 404
+        try:
+            contents, truncated = read_job_log(job_id)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        return jsonify(
+            ok=True,
+            job_id=job_id,
+            status=job.get("status"),
+            error_message=job.get("error_message") or "",
+            log=contents,
+            truncated=truncated,
+        )
+
     @app.post("/api/node/rotate_secret")
     def worker_rotate_secret():
         controller = _authenticated_controller()
@@ -364,3 +457,29 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
         return jsonify(ok=True)
 
     return app
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description="ByteSqueeze headless worker tools")
+    subcommands = parser.add_subparsers(dest="command", required=True)
+    pairing_parser = subcommands.add_parser(
+        "pairing-code",
+        help="generate and print a new one-time controller pairing code",
+    )
+    pairing_parser.add_argument(
+        "--ttl-seconds",
+        type=int,
+        default=None,
+        help="code lifetime (300-3600 seconds; defaults to worker configuration)",
+    )
+    args = parser.parse_args(argv)
+    if args.command == "pairing-code":
+        ttl = _pairing_ttl() if args.ttl_seconds is None else max(300, min(3600, args.ttl_seconds))
+        pairing = create_pairing_code(ttl_seconds=ttl)
+        _print_pairing_banner(pairing)
+        return 0
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

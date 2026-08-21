@@ -12,8 +12,14 @@ fi
 
 if [ ! -f "$SRC" ]; then
   echo "ERROR: File not found inside container: $SRC"
-  echo "Make sure the path starts with /mnt/nas/PLEX_MEDIA, /mnt/media, or /mnt/media1"
+  echo "For headless jobs, confirm the controller download completed under /work/jobs."
+  echo "For mounted-media jobs, confirm the controller-to-worker path mapping."
   exit 1
+fi
+
+if ! command -v HandBrakeCLI >/dev/null 2>&1; then
+  echo "ERROR: HandBrakeCLI is not installed or is not on PATH."
+  exit 127
 fi
 
 # Default suffix for transcoded files
@@ -43,6 +49,7 @@ echo "Target : $OUT"
 echo "Suffix : -$SUFFIX"
 echo "Preset file : $PRESET_FILE"
 echo "Preset name : $PRESET_NAME"
+echo "HandBrake : $(HandBrakeCLI --version 2>&1 | sed -n '1p')"
 echo "=================================="
 
 # Safety: don't overwrite an existing output file

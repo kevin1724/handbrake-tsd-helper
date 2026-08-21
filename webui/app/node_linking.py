@@ -39,6 +39,9 @@ NODE_CAPABILITIES = [
     "gpu-multi-encode",
     "cpu-software-exclusive",
     "output-size-guard",
+    "remote-job-logs",
+    "observed-controller-route",
+    "resilient-transfer-download",
 ]
 STATE_LOCK = threading.RLock()
 TRANSFER_LOCK = threading.RLock()
@@ -256,6 +259,12 @@ def accept_pairing(code: str, controller: dict) -> dict:
         raise ValueError("controller identity is required")
     controller_name = str(controller.get("controller_name") or controller.get("name") or "Controller").strip()[:80]
     controller_url = str(controller.get("controller_url") or controller.get("url") or "").strip().rstrip("/")[:300]
+    advertised_controller_url = str(
+        controller.get("advertised_controller_url") or controller_url
+    ).strip().rstrip("/")[:300]
+    observed_controller_url = str(
+        controller.get("observed_controller_url") or ""
+    ).strip().rstrip("/")[:300]
     allowed_ips = controller.get("allowed_ips")
     if not isinstance(allowed_ips, list):
         allowed_ips = []
@@ -293,6 +302,8 @@ def accept_pairing(code: str, controller: dict) -> dict:
             "token": token,
             "recovery_token_hash": _hash_secret(recovery_token),
             "url": controller_url,
+            "advertised_url": advertised_controller_url,
+            "observed_url": observed_controller_url,
             "paired_at": paired_at,
             "last_seen": 0,
             "allowed_ips": [str(ip).strip() for ip in allowed_ips if str(ip).strip()][:20],
@@ -312,6 +323,8 @@ def accept_pairing(code: str, controller: dict) -> dict:
             "token": token,
             "recovery_token": recovery_token,
             "controller_url": controller_url,
+            "advertised_controller_url": advertised_controller_url,
+            "observed_controller_url": observed_controller_url,
             "paired_at": paired_at,
             "protocol_version": NODE_PROTOCOL_VERSION,
             "capabilities": NODE_CAPABILITIES,
@@ -345,10 +358,22 @@ def recover_pairing(controller: dict) -> dict:
         new_recovery = supplied_recovery if recovery_ok else secrets.token_urlsafe(40)
         now = _now()
         controller_url = str(controller.get("controller_url") or row.get("url") or "").strip().rstrip("/")[:300]
+        advertised_controller_url = str(
+            controller.get("advertised_controller_url")
+            or row.get("advertised_url")
+            or controller_url
+        ).strip().rstrip("/")[:300]
+        observed_controller_url = str(
+            controller.get("observed_controller_url")
+            or row.get("observed_url")
+            or ""
+        ).strip().rstrip("/")[:300]
         row.update({
             "token": new_token,
             "recovery_token_hash": _hash_secret(new_recovery),
             "url": controller_url,
+            "advertised_url": advertised_controller_url,
+            "observed_url": observed_controller_url,
             "last_seen": now,
             "recovered_at": now,
             "protocol_version": min(NODE_PROTOCOL_VERSION, max(1, _safe_int(controller.get("protocol_version"), row.get("protocol_version") or 1))),
@@ -360,6 +385,8 @@ def recover_pairing(controller: dict) -> dict:
             "token": new_token,
             "recovery_token": new_recovery,
             "controller_url": controller_url,
+            "advertised_controller_url": advertised_controller_url,
+            "observed_controller_url": observed_controller_url,
             "recovered_at": now,
             "protocol_version": NODE_PROTOCOL_VERSION,
             "capabilities": list(NODE_CAPABILITIES),
@@ -420,6 +447,7 @@ def public_node(row: dict) -> dict:
         "summary": row.get("summary") if isinstance(row.get("summary"), dict) else {},
         "last_heartbeat": last_heartbeat,
         "last_error": row.get("last_error") or "",
+        "last_job_error": row.get("last_job_error") or "",
         "path_mappings": row.get("path_mappings") if isinstance(row.get("path_mappings"), list) else [],
         "transfer_mode": normalize_transfer_mode(row.get("transfer_mode")),
         "controller_url": row.get("controller_url") or "",
@@ -455,6 +483,8 @@ def public_trusted_controller(row: dict) -> dict:
         "id": row.get("id") or "",
         "name": row.get("name") or "Controller",
         "url": row.get("url") or "",
+        "advertised_url": row.get("advertised_url") or "",
+        "observed_url": row.get("observed_url") or "",
         "role": "controller",
         "online": online,
         "status": "online" if online else "paired",
@@ -978,7 +1008,10 @@ def verify_hmac(method: str, path: str, body_bytes: bytes, *, node_id: str, toke
 
 
 def signed_json_request(node: dict, api_path: str, *, method: str = "GET", body: dict | None = None, timeout: int = 8) -> dict:
-    url = str(node.get("url") or "").rstrip("/") + api_path
+    # Worker-side trusted controller rows retain both the address advertised
+    # by the browser and the source route observed on authenticated requests.
+    # The observed route is the one known to be reachable from this worker.
+    url = str(node.get("observed_url") or node.get("url") or "").rstrip("/") + api_path
     body_bytes = json.dumps(body).encode("utf-8") if body is not None else b""
     headers = hmac_headers(
         method,

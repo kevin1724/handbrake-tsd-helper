@@ -664,6 +664,31 @@ td button {
   white-space: nowrap;
 }
 
+.worker-log-details {
+  min-width: 0;
+  margin-top: 4px;
+}
+
+.worker-log-details summary,
+.worker-log-link {
+  color: var(--accent);
+  cursor: pointer;
+}
+
+.worker-log-tail {
+  max-height: 260px;
+  margin: 8px 0 0;
+  overflow: auto;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: var(--radius-sm);
+  background: rgba(0, 0, 0, 0.35);
+  padding: 10px;
+  color: #d8e2e8;
+  font: 0.76rem/1.45 ui-monospace, SFMono-Regular, Consolas, monospace;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .job-actions-cell {
   min-width: 170px;
 }

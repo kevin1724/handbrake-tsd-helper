@@ -79,6 +79,119 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertTrue(response.get_json()["token"])
         self.assertEqual(self.client.get("/api/node/status").status_code, 401)
 
+    def test_pairing_prefers_controller_route_observed_by_worker(self):
+        pairing = node_linking.create_pairing_code()
+        response = self.client.post(
+            "/api/node/pair/accept",
+            json={
+                "code": pairing["code"],
+                "controller_id": "controller-route",
+                "controller_name": "Main controller",
+                "controller_url": "http://100.111.94.118:8081",
+                "protocol_version": 2,
+            },
+            environ_base={"REMOTE_ADDR": "192.168.12.108"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(response.get_json()["controller_url"], "http://192.168.12.108:8081")
+        controller = node_linking.trusted_controller("controller-route")
+        self.assertEqual(controller["advertised_url"], "http://100.111.94.118:8081")
+        self.assertEqual(controller["observed_url"], "http://192.168.12.108:8081")
+
+        transfer = jobs._apply_observed_controller_route(
+            {
+                "controller_id": "controller-route",
+                "controller_url": "http://100.111.94.118:8081",
+                "source_url": "http://100.111.94.118:8081/api/node/transfers/abc/source",
+                "upload_url": "http://100.111.94.118:8081/api/node/transfers/abc/output",
+            }
+        )
+        self.assertEqual(
+            transfer["source_url"],
+            "http://192.168.12.108:8081/api/node/transfers/abc/source",
+        )
+        self.assertEqual(
+            transfer["upload_url"],
+            "http://192.168.12.108:8081/api/node/transfers/abc/output",
+        )
+
+    def test_worker_job_api_includes_persisted_error_log_diagnostics(self):
+        original_jobs = jobs.jobs
+        original_log_dir = jobs.LOG_DIR
+        jobs.jobs = {
+            "job-error": {
+                "status": "error",
+                "phase": "download_error",
+                "src": "/media/example.mkv",
+                "preset": "1080",
+                "mode": "remote_transfer",
+                "transfer": {"last_error": "controller timed out"},
+                "error_message": "Remote source download failed: controller timed out",
+                "log": "Downloading source...\nERROR: controller timed out\n",
+            }
+        }
+        jobs.LOG_DIR = os.path.join(self.tempdir.name, "logs")
+        try:
+            jobs._append_job_log("job-error", "Retry attempts exhausted")
+            item = jobs.list_jobs_for_api(include_log_tail=True)[0]
+            self.assertTrue(item["has_log"])
+            self.assertEqual(item["phase"], "download_error")
+            self.assertIn("controller timed out", item["error_message"])
+            self.assertIn("Retry attempts exhausted", item["log_tail"])
+            with open(jobs._job_log_path("job-error"), "ab") as handle:
+                handle.write(b"invalid-byte:\xff\n")
+            contents, truncated = jobs.read_job_log("job-error")
+            self.assertFalse(truncated)
+            self.assertIn("Retry attempts exhausted", contents)
+            self.assertIn("invalid-byte:\ufffd", contents)
+        finally:
+            jobs.jobs = original_jobs
+            jobs.LOG_DIR = original_log_dir
+
+    def test_remote_source_download_retries_transient_timeout(self):
+        class FakeResponse:
+            headers = {"Content-Length": "4"}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _size=-1):
+                if getattr(self, "used", False):
+                    return b""
+                self.used = True
+                return b"test"
+
+        destination = os.path.join(self.tempdir.name, "download", "source.mkv")
+        attempts = []
+        with mock.patch.dict(
+            os.environ,
+            {
+                "TSD_WORKER_TRANSFER_ATTEMPTS": "2",
+                "TSD_WORKER_TRANSFER_TIMEOUT_SECONDS": "30",
+            },
+        ), mock.patch.object(
+            jobs,
+            "urlopen",
+            side_effect=[jobs.URLError("timed out"), FakeResponse()],
+        ), mock.patch.object(jobs.time, "sleep"):
+            size = jobs._download_transfer_source(
+                "http://controller:8081/source",
+                "download-token",
+                "worker-id",
+                destination,
+                expected_size=4,
+                attempt_callback=attempts.append,
+            )
+
+        self.assertEqual(size, 4)
+        with open(destination, "rb") as handle:
+            self.assertEqual(handle.read(), b"test")
+        self.assertTrue(any("attempt 2/2" in line.lower() for line in attempts))
+
     def test_controller_encoding_policy_keeps_large_output_auto_stop(self):
         job = {
             "mode": "remote_transfer",
@@ -158,7 +271,7 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertEqual(jobs._hardware_transcode_limit(job=stale_job), 3)
 
         health = self.client.get("/api/health").get_json()
-        self.assertEqual(health["release"], "2.3.0")
+        self.assertEqual(health["release"], "2.4.0")
         self.assertEqual(health["encoding_policy"]["hardware_transcode_concurrency"], 3)
 
     def test_hardware_preset_and_concurrency_limit_are_detected_safely(self):

@@ -29,6 +29,7 @@ import threading
 import subprocess
 import http.client
 import shutil
+import traceback
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -85,6 +86,8 @@ PRESET_WORK_DIR = os.path.join(DATA_DIR, "node_job_presets")
 OUTPUT_ESTIMATE_CHECKPOINTS = (2, 10, 25, 60, 90)
 TRANSFER_RETRY_MIN_SECONDS = 15
 TRANSFER_RETRY_MAX_SECONDS = 30 * 60
+JOB_LOG_TAIL_CHARS = 12_000
+JOB_LOG_API_MAX_BYTES = 2 * 1024 * 1024
 HARDWARE_ENCODER_FAMILIES = frozenset({
     "qsv",
     "nvenc",
@@ -97,6 +100,137 @@ HARDWARE_ENCODER_FAMILIES = frozenset({
 
 def _now_ts() -> float:
     return float(time.time())
+
+
+def _bounded_env_int(name: str, default: int, minimum: int, maximum: int) -> int:
+    try:
+        value = int(os.environ.get(name) or default)
+    except (TypeError, ValueError):
+        value = default
+    return max(minimum, min(maximum, value))
+
+
+def _transfer_download_timeout() -> int:
+    return _bounded_env_int(
+        "TSD_WORKER_TRANSFER_TIMEOUT_SECONDS",
+        300,
+        30,
+        1800,
+    )
+
+
+def _transfer_download_attempts() -> int:
+    return _bounded_env_int("TSD_WORKER_TRANSFER_ATTEMPTS", 3, 1, 8)
+
+
+def _job_log_path(job_id: str) -> str:
+    safe_id = str(job_id or "").strip()
+    if not re.fullmatch(r"[A-Za-z0-9-]{1,80}", safe_id):
+        raise ValueError("invalid job id")
+    return os.path.join(LOG_DIR, f"{safe_id}.log")
+
+
+def _append_job_log(job_id: str, message: str) -> None:
+    """Persist a UTF-8 diagnostic and keep the same tail in job state."""
+    text = str(message or "")
+    if not text:
+        return
+    if not text.endswith("\n"):
+        text += "\n"
+    os.makedirs(LOG_DIR, exist_ok=True)
+    try:
+        with open(
+            _job_log_path(job_id),
+            "a",
+            encoding="utf-8",
+            errors="replace",
+        ) as handle:
+            handle.write(text)
+            handle.flush()
+    except OSError as exc:
+        print(f"[JOB {job_id}] could not persist log: {exc}", flush=True)
+    job = jobs.get(job_id)
+    if isinstance(job, dict):
+        job["log"] = (str(job.get("log") or "") + text)[-JOB_LOG_TAIL_CHARS:]
+
+
+def read_job_log(job_id: str, *, max_bytes: int = JOB_LOG_API_MAX_BYTES) -> tuple[str, bool]:
+    """Return a decoded tail of a job log and whether earlier bytes were omitted."""
+    path = _job_log_path(job_id)
+    limit = max(1024, min(16 * 1024 * 1024, int(max_bytes or JOB_LOG_API_MAX_BYTES)))
+    try:
+        size = int(os.path.getsize(path))
+        with open(path, "rb") as handle:
+            truncated = size > limit
+            if truncated:
+                handle.seek(max(0, size - limit))
+            payload = handle.read(limit)
+    except FileNotFoundError:
+        job = jobs.get(str(job_id or "")) or {}
+        return str(job.get("log") or ""), False
+    return payload.decode("utf-8", errors="replace"), truncated
+
+
+def _job_error_excerpt(job: dict, fallback: str = "") -> str:
+    lines = [line.strip() for line in str(job.get("log") or "").splitlines() if line.strip()]
+    preferred = [
+        line
+        for line in lines
+        if "error" in line.lower() or "failed" in line.lower() or "invalid" in line.lower()
+    ]
+    value = (preferred or lines or [str(fallback or "encode failed")])[-1]
+    return value[:500]
+
+
+def _valid_http_base_url(value: str) -> str:
+    candidate = str(value or "").strip().rstrip("/")
+    try:
+        parsed = urlparse(candidate)
+    except Exception:
+        return ""
+    return candidate if parsed.scheme in {"http", "https"} and parsed.netloc else ""
+
+
+def _rebase_transfer_url(value: str, base_url: str) -> str:
+    original = str(value or "").strip()
+    if not original:
+        return ""
+    base = _valid_http_base_url(base_url)
+    if not base:
+        return original
+    parsed_value = urlparse(original)
+    if not parsed_value.path:
+        return original
+    parsed_base = urlparse(base)
+    return parsed_value._replace(
+        scheme=parsed_base.scheme,
+        netloc=parsed_base.netloc,
+    ).geturl()
+
+
+def _apply_observed_controller_route(transfer: dict) -> dict:
+    """Prefer the controller address observed by the worker over a browser-only URL."""
+    clean = transfer.copy() if isinstance(transfer, dict) else {}
+    try:
+        from .node_linking import trusted_controller, trusted_controller_by_url
+
+        controller_id = str(clean.get("controller_id") or "").strip()
+        controller = trusted_controller(controller_id) if controller_id else None
+        if not controller:
+            controller = trusted_controller_by_url(clean.get("controller_url") or "")
+    except Exception:
+        controller = None
+    if not isinstance(controller, dict):
+        return clean
+    route = _valid_http_base_url(
+        controller.get("observed_url") or controller.get("url") or ""
+    )
+    if not route:
+        return clean
+    clean["controller_url"] = route
+    clean["source_url"] = _rebase_transfer_url(clean.get("source_url") or "", route)
+    clean["upload_url"] = _rebase_transfer_url(clean.get("upload_url") or "", route)
+    return clean
 
 
 def _remote_transfer_temp_root(transfer: dict | None = None) -> str:
@@ -301,6 +435,8 @@ def _encoded_output_is_valid(path: str) -> tuple[bool, str]:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             timeout=20,
             check=False,
         )
@@ -512,54 +648,97 @@ def _estimated_output_stop_guard(job: dict) -> dict | None:
     }
 
 
-def _download_transfer_source(url: str, token: str, worker_node_id: str, destination: str, expected_size: int = 0, progress_callback=None) -> int:
+def _download_transfer_source(
+    url: str,
+    token: str,
+    worker_node_id: str,
+    destination: str,
+    expected_size: int = 0,
+    progress_callback=None,
+    attempt_callback=None,
+) -> int:
     if not url or not token:
         raise RuntimeError("transfer download is missing URL or token")
     os.makedirs(os.path.dirname(destination), exist_ok=True)
     part_path = destination + ".part"
-    req = Request(
-        url,
-        method="GET",
-        headers={
-            "X-Transfer-Token": token,
-            "X-Worker-Node-Id": str(worker_node_id or ""),
-        },
-    )
-    try:
-        with urlopen(req, timeout=60) as res, open(part_path, "wb") as f:
-            transferred = 0
-            header_size = 0
-            try:
-                header_size = int(res.headers.get("Content-Length") or 0)
-            except Exception:
-                header_size = 0
-            total = int(expected_size or header_size or 0)
-            if progress_callback:
-                progress_callback("downloading", 0, total, force=True)
-            while True:
-                chunk = res.read(1024 * 1024)
-                if not chunk:
-                    break
-                f.write(chunk)
-                transferred += len(chunk)
-                if progress_callback:
-                    progress_callback("downloading", transferred, total)
-    except HTTPError as e:
+    attempts = _transfer_download_attempts()
+    timeout = _transfer_download_timeout()
+    last_error = ""
+
+    for attempt in range(1, attempts + 1):
+        req = Request(
+            url,
+            method="GET",
+            headers={
+                "X-Transfer-Token": token,
+                "X-Worker-Node-Id": str(worker_node_id or ""),
+            },
+        )
+        if attempt_callback:
+            attempt_callback(
+                f"Source download attempt {attempt}/{attempts} "
+                f"(socket timeout {timeout}s)."
+            )
         try:
-            detail = e.read().decode("utf-8", errors="replace")
-        except Exception:
-            detail = str(e)
-        raise RuntimeError(detail[:240] or str(e))
-    except (URLError, TimeoutError, OSError) as e:
-        raise RuntimeError(str(e))
+            with urlopen(req, timeout=timeout) as res, open(part_path, "wb") as f:
+                transferred = 0
+                header_size = 0
+                try:
+                    header_size = int(res.headers.get("Content-Length") or 0)
+                except Exception:
+                    header_size = 0
+                total = int(expected_size or header_size or 0)
+                if progress_callback:
+                    progress_callback("downloading", 0, total, force=True)
+                while True:
+                    chunk = res.read(1024 * 1024)
+                    if not chunk:
+                        break
+                    f.write(chunk)
+                    transferred += len(chunk)
+                    if progress_callback:
+                        progress_callback("downloading", transferred, total)
+            downloaded_size = int(os.path.getsize(part_path))
+            if expected_size and downloaded_size != int(expected_size):
+                last_error = (
+                    "downloaded source size mismatch "
+                    f"({downloaded_size} != {expected_size})"
+                )
+                try:
+                    os.remove(part_path)
+                except FileNotFoundError:
+                    pass
+                if attempt >= attempts:
+                    raise RuntimeError(
+                        f"source download failed after {attempts} attempts: {last_error}"
+                    )
+                if attempt_callback:
+                    attempt_callback(f"Download interrupted: {last_error}. Retrying...")
+                time.sleep(min(5, attempt))
+                continue
+            break
+        except HTTPError as exc:
+            try:
+                detail = exc.read().decode("utf-8", errors="replace")
+            except Exception:
+                detail = str(exc)
+            last_error = detail[:500] or str(exc)
+            # Authentication and validation failures will not improve with a
+            # socket retry. Surface them immediately with their response text.
+            if int(getattr(exc, "code", 500) or 500) < 500:
+                raise RuntimeError(last_error)
+        except (URLError, TimeoutError, OSError) as exc:
+            last_error = str(getattr(exc, "reason", exc) or exc)
+
+        if attempt >= attempts:
+            raise RuntimeError(
+                f"source download failed after {attempts} attempts: {last_error}"
+            )
+        if attempt_callback:
+            attempt_callback(f"Download interrupted: {last_error}. Retrying...")
+        time.sleep(min(5, attempt))
 
     size = int(os.path.getsize(part_path))
-    if expected_size and size != int(expected_size):
-        try:
-            os.remove(part_path)
-        except FileNotFoundError:
-            pass
-        raise RuntimeError(f"downloaded source size mismatch ({size} != {expected_size})")
     if progress_callback:
         progress_callback("downloaded", size, int(expected_size or size), force=True)
     os.replace(part_path, destination)
@@ -716,8 +895,20 @@ def _mark_transfer_waiting(job_id: str, job: dict, error: Exception | str) -> No
         },
     })
     job["status"] = "waiting_to_upload"
+    job["phase"] = "waiting_to_upload"
+    job["error_message"] = f"Upload waiting: {message}"[:500]
     job["transfer"] = transfer
-    job["log"] = (str(job.get("log") or "") + f"\nController unavailable; completed output is safe locally. Retrying upload in {delay}s.\n")[-4000:]
+    _append_job_log(
+        job_id,
+        (
+            "[ByteSqueeze] Controller unavailable; completed output is safe "
+            f"locally. Retrying upload in {delay}s. Error: {message}"
+        ),
+    )
+    print(
+        f"[JOB {job_id}] upload deferred for {delay}s: {message}",
+        flush=True,
+    )
     save_jobs()
     log_event(
         "node_transfer_waiting",
@@ -737,6 +928,8 @@ def _apply_remote_upload_success(job_id: str, job: dict, result: dict, out_path:
     controller_saved = int(result.get("saved_bytes") or job.get("saved_bytes") or 0)
     job.update({
         "status": "done",
+        "phase": "done",
+        "error_message": "",
         "progress": 100.0,
         "out_path": controller_out,
         "out_bytes": controller_out_bytes,
@@ -1356,6 +1549,7 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
     The visible src remains the original controller path, but HandBrake runs
     against a temporary local copy created when the job starts.
     """
+    transfer = _apply_observed_controller_route(transfer)
     display_src = str(src or transfer.get("original_path") or transfer.get("source_basename") or "").strip()
     existing_id = _find_existing_active_job_for_src(display_src)
     if existing_id is not None:
@@ -1417,6 +1611,8 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "started_at": None,
         "finished_at": None,
         "duration_seconds": None,
+        "phase": "queued",
+        "error_message": "",
     }
     job_queue.append(job_id)
     save_jobs()
@@ -1441,7 +1637,7 @@ def get_job(job_id: str) -> dict | None:
     return jobs.get(job_id)
 
 
-def list_jobs_for_api() -> list[dict]:
+def list_jobs_for_api(*, include_log_tail: bool = False) -> list[dict]:
     """
     Build a list of job dictionaries suitable for JSON responses.
 
@@ -1486,6 +1682,19 @@ def list_jobs_for_api() -> list[dict]:
                 "progress": float(j.get("progress") or 0.0),
                 "eta_seconds": eta_val,
                 "has_log": has_log,
+                "phase": j.get("phase") or j.get("status") or "",
+                "error_message": j.get("error_message")
+                or (
+                    (j.get("transfer") or {}).get("last_error")
+                    if isinstance(j.get("transfer"), dict)
+                    else ""
+                )
+                or (
+                    (j.get("transfer") or {}).get("error")
+                    if isinstance(j.get("transfer"), dict)
+                    else ""
+                ),
+                "log_tail": "",
                 "estimated_out_bytes": j.get("estimated_out_bytes"),
                 "estimated_out_gb": round((int(j.get("estimated_out_bytes") or 0) / (1024**3)), 3)
                 if j.get("estimated_out_bytes") is not None
@@ -1524,6 +1733,15 @@ def list_jobs_for_api() -> list[dict]:
 
     # Keep the visible queue aligned with the real queue order.
     job_items.sort(key=_sort_key)
+    if include_log_tail:
+        included = 0
+        for item in job_items:
+            status = str(item.get("status") or "").lower()
+            if status not in {"running", "error", "waiting_to_upload"} or included >= 8:
+                continue
+            source = jobs.get(str(item.get("id") or "")) or {}
+            item["log_tail"] = str(source.get("log") or "")[-JOB_LOG_TAIL_CHARS:]
+            included += 1
     return job_items
 
 
@@ -1675,8 +1893,11 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     remote_transfer = job.get("mode") == "remote_transfer" and bool(transfer)
     transfer_work_dir = ""
     preset_work_dir = ""
+    log_path = _job_log_path(job_id)
 
     job["status"] = "running"
+    job["phase"] = "preparing"
+    job["error_message"] = ""
     job["progress"] = 0.0
     job["started_at"] = _now_ts()
     job["finished_at"] = None
@@ -1699,6 +1920,20 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job["estimated_out_checked_progress"] = None
     job["estimated_out_updated_at"] = None
     job["estimate_checkpoints_seen"] = []
+    _append_job_log(
+        job_id,
+        (
+            f"[ByteSqueeze] Job {job_id} starting\n"
+            f"[ByteSqueeze] Mode: {'remote transfer' if remote_transfer else 'local'}\n"
+            f"[ByteSqueeze] Source: {display_src_path}\n"
+            f"[ByteSqueeze] Preset: {preset_key}"
+        ),
+    )
+    print(
+        f"[JOB {job_id}] starting {os.path.basename(display_src_path)} "
+        f"({preset_key}, {'remote' if remote_transfer else 'local'})",
+        flush=True,
+    )
 
     transfer_progress_state = {"phase": "", "started_at": _now_ts(), "last_save": 0.0}
 
@@ -1722,12 +1957,17 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             transfer_progress_state["last_save"] = now
             save_jobs()
 
+    def log_download_attempt(message: str) -> None:
+        _append_job_log(job_id, f"[ByteSqueeze] {message}")
+        print(f"[JOB {job_id}] {message}", flush=True)
+
     if remote_transfer:
         try:
             transfer_work_dir = os.path.join(_remote_transfer_temp_root(transfer), job_id)
             basename = _safe_transfer_filename(transfer.get("source_basename") or os.path.basename(display_src_path))
             encode_src_path = os.path.join(transfer_work_dir, basename)
-            job["log"] = "Downloading source from controller...\n"
+            job["phase"] = "downloading"
+            _append_job_log(job_id, "[ByteSqueeze] Downloading source from controller...")
             transfer["status"] = "downloading"
             transfer["work_dir"] = transfer_work_dir
             transfer["local_src"] = encode_src_path
@@ -1740,16 +1980,24 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                 encode_src_path,
                 int(transfer.get("source_size") or 0),
                 progress_callback=update_transfer_progress,
+                attempt_callback=log_download_attempt,
             )
             job["src_bytes"] = downloaded_size
+            _append_job_log(
+                job_id,
+                f"[ByteSqueeze] Source download complete ({downloaded_size} bytes).",
+            )
             transfer["status"] = "downloaded"
             update_transfer_progress("downloaded", downloaded_size, int(transfer.get("source_size") or downloaded_size), force=True)
             job["transfer"] = transfer
             save_jobs()
         except Exception as e:
             job["status"] = "error"
+            job["phase"] = "download_error"
             job["returncode"] = None
-            job["log"] = (job.get("log") or "") + f"Remote source download failed: {e}\n"
+            job["error_message"] = f"Remote source download failed: {e}"[:500]
+            _append_job_log(job_id, f"[ByteSqueeze] ERROR: {job['error_message']}")
+            print(f"[JOB {job_id}] {job['error_message']}", flush=True)
             transfer["status"] = "error"
             transfer["error"] = str(e)[:240]
             job["transfer"] = transfer
@@ -1839,16 +2087,25 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     # Optional: additional HandBrakeCLI args (Size Wizard, etc.)
     env["HB_EXTRA_ARGS"] = job.get("extra_args", "")
 
-    # Log file location for this job
-    log_path = os.path.join(LOG_DIR, f"{job_id}.log")
-
     # Spawn worker shell script
+    job["phase"] = "encoding"
+    _append_job_log(
+        job_id,
+        (
+            f"[ByteSqueeze] Encoder launch: /worker/encode-one.sh\n"
+            f"[ByteSqueeze] Preset file: {preset_file}\n"
+            f"[ByteSqueeze] Preset name: {preset_name}\n"
+            f"[ByteSqueeze] HandBrakeCLI: {shutil.which('HandBrakeCLI') or 'NOT FOUND'}"
+        ),
+    )
     proc = subprocess.Popen(
         ["/bin/sh", "/worker/encode-one.sh"],
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
         env=env,
         text=True,
+        encoding="utf-8",
+        errors="replace",
         bufsize=1,
         start_new_session=True,
     )
@@ -1856,22 +2113,20 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job["pid"] = proc.pid
     save_jobs()
 
-    log_lines: list[str] = []
-
     # ------------------------------------------------------------
     # STREAM OUTPUT:
     # - Write full log to file
     # - Keep in-memory tail for quick viewing in web UI
     # - Update progress and ETA based on HandBrake output
     # ------------------------------------------------------------
-    with open(log_path, "w") as lf:
+    with open(log_path, "a", encoding="utf-8", errors="replace") as lf:
         for line in proc.stdout:
             lf.write(line)
             lf.flush()
 
-            log_lines.append(line)
-            # Keep just the last ~4000 characters as an in-memory tail
-            job["log"] = "".join(log_lines)[-4000:]
+            # Keep a bounded in-memory tail for status APIs. The full output
+            # remains in the UTF-8 log file for controller-side download.
+            job["log"] = (str(job.get("log") or "") + line)[-JOB_LOG_TAIL_CHARS:]
 
             # Parse progress from this line, if present
             m = PROGRESS_RE.search(line)
@@ -1932,6 +2187,14 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
         job["status"] = "done" if ret == 0 else "error"
         if ret == 0:
             job["progress"] = 100.0
+            job["phase"] = "validating"
+        else:
+            job["phase"] = "encode_error"
+            job["error_message"] = (
+                f"HandBrake exited with code {ret}: {_job_error_excerpt(job)}"
+            )[:500]
+            _append_job_log(job_id, f"[ByteSqueeze] ERROR: {job['error_message']}")
+            print(f"[JOB {job_id}] {job['error_message']}", flush=True)
 
     output_validation_error = ""
 
@@ -1965,6 +2228,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                     job["local_out_path"] = out_path
                     job["duration_seconds"] = duration_seconds_for_stats
                     transfer["status"] = "uploading"
+                    job["phase"] = "uploading"
                     job["transfer"] = transfer
                     save_jobs()
                     try:
@@ -2036,6 +2300,12 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             else:
                 output_validation_error = output_reason or "output validation failed"
                 job["status"] = "error"
+                job["phase"] = "validation_error"
+                job["error_message"] = output_validation_error[:500]
+                _append_job_log(
+                    job_id,
+                    f"[ByteSqueeze] ERROR: Output validation failed: {output_validation_error}",
+                )
                 log_event(
                     "job_error",
                     f"Output validation failed for {os.path.basename(display_src_path)}: {output_validation_error}",
@@ -2048,7 +2318,10 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
                 )
         except Exception as e:
             job["status"] = "error"
+            job["phase"] = "validation_error"
             output_validation_error = str(e)
+            job["error_message"] = f"Output finalization failed: {e}"[:500]
+            _append_job_log(job_id, f"[ByteSqueeze] ERROR: {job['error_message']}")
             log_event(
                 "stats_error",
                 f"Failed to record storage savings: {e}",
@@ -2108,6 +2381,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             )
 
     if job.get("status") == "canceled":
+        job["phase"] = "canceled"
         log_event(
             "job_canceled",
             f"Canceled: {os.path.basename(display_src_path)}",
@@ -2126,6 +2400,10 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             job["duration_seconds"] = None
 
     job["pid"] = None
+    if job.get("status") == "done":
+        job["phase"] = "done"
+        job["error_message"] = ""
+        _append_job_log(job_id, "[ByteSqueeze] Job completed successfully.")
     if remote_transfer:
         transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else transfer
         if job.get("status") != "waiting_to_upload":
@@ -2170,9 +2448,12 @@ def _run_dispatched_job(job_id: str) -> None:
         run_encode(job_id, job["src"], job["preset"])
         print(f"[DISPATCHER] finished job {job_id}", flush=True)
     except Exception as exc:
+        details = traceback.format_exc()
         if job.get("status") != "canceled":
             job["status"] = "error"
+            job["phase"] = "dispatcher_error"
             job["returncode"] = -1
+            job["pid"] = None
             job["eta_seconds"] = None
             job["finished_at"] = _now_ts()
             if job.get("started_at") is not None:
@@ -2180,7 +2461,24 @@ def _run_dispatched_job(job_id: str) -> None:
                     job["duration_seconds"] = max(0.0, float(job["finished_at"]) - float(job["started_at"]))
                 except Exception:
                     job["duration_seconds"] = None
-            job["log"] = (str(job.get("log") or "") + f"\nDispatcher error: {exc}\n")[-4000:]
+            job["error_message"] = f"Dispatcher error: {exc}"[:500]
+            _append_job_log(
+                job_id,
+                f"[ByteSqueeze] ERROR: Dispatcher failed: {exc}\n{details}",
+            )
+            transfer = job.get("transfer") if isinstance(job.get("transfer"), dict) else {}
+            failed_work_dir = str(transfer.get("work_dir") or "")
+            if job.get("mode") == "remote_transfer" and failed_work_dir:
+                _cleanup_transfer_work_dir(failed_work_dir, transfer)
+                for key in ("download_token", "upload_token", "local_src", "local_out", "work_dir"):
+                    transfer.pop(key, None)
+                transfer["status"] = "error"
+                transfer["error"] = str(exc)[:300]
+                job["transfer"] = transfer
+        print(
+            f"[DISPATCHER] job {job_id} failed: {exc}\n{details}",
+            flush=True,
+        )
         log_event(
             "job_error",
             f"Dispatcher failed: {os.path.basename(job.get('src') or job_id)} ({exc})",

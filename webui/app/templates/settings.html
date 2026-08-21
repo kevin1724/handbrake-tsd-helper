@@ -3227,6 +3227,12 @@
           error.textContent = node.last_error;
           main.appendChild(error);
         }
+        if (node.last_job_error) {
+          const error = document.createElement("div");
+          error.className = "node-error";
+          error.textContent = `Latest worker job: ${node.last_job_error}`;
+          main.appendChild(error);
+        }
 
         const modeRow = document.createElement("div");
         modeRow.className = "node-mode-row";

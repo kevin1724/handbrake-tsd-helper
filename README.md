@@ -302,7 +302,7 @@ encodes at the controller-managed limit; CPU/software work always runs alone.
 
 - The main container owns the media library and queue
 - Workers only expose authenticated node/health APIs
-- The pairing code is printed in `docker logs`
+- The pairing code is printed in `docker logs` and can be regenerated without a restart
 - `/work` is the worker's only required mount
 - Remote transfer is selected automatically; path mappings are unnecessary
 - Pairing is idempotently recoverable for the same controller when a network response is lost
@@ -337,6 +337,13 @@ The log contains a banner like:
 ```text
 ByteSqueeze headless worker is ready
 Pairing code:  ABCDE-FGHJK
+```
+
+Generate a new one-time code without restarting the worker or interrupting an
+active encode:
+
+```bash
+docker exec bytesqueeze-worker python -m worker.app pairing-code
 ```
 
 On the main server, open **Settings → Linked Workers**, enter the worker URL
@@ -453,7 +460,7 @@ The encoding-only worker has its own public Docker Hub image:
 [kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
 
 `latest` follows the main branch. Versioned releases also publish tags such as
-`2.3.0` and `2.3`:
+`2.4.0` and `2.4`:
 
 ```bash
 docker pull kevina1724/handbrake-tsd-worker:latest
@@ -558,8 +565,8 @@ Confirm `/dev/dri` exists in the container and that the host iGPU is enabled.
 
 Run `docker logs bytesqueeze-worker`, use the newest code, and confirm the URL
 is reachable from the controller. Pairing codes are one-use and expire after an
-hour. Restarting the worker prints a fresh code without deleting an existing
-trusted controller.
+hour. Run `docker exec bytesqueeze-worker python -m worker.app pairing-code` to
+print a fresh code without restarting or deleting an existing pairing.
 
 ### Worker cannot access a media path
 

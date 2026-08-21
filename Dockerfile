@@ -221,6 +221,10 @@ ENV FLASK_ENV=production
 ENV FLASK_DEBUG=0
 ENV PYTHONUNBUFFERED=1
 ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUTF8=1
+ENV PYTHONIOENCODING=utf-8
+ENV LANG=C.UTF-8
+ENV LC_ALL=C.UTF-8
 
 # -------------------------------
 # Expose port & start app
@@ -259,7 +263,7 @@ COPY presets /presets
 RUN chmod 0755 /worker/encode-one.sh
 VOLUME ["/work"]
 
-CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=4", "--timeout=300", "--graceful-timeout=30", "--error-logfile=-", "worker.app:create_worker_app()"]
+CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=4", "--timeout=300", "--graceful-timeout=30", "--error-logfile=-", "--access-logfile=-", "--capture-output", "--log-level=info", "worker.app:create_worker_app()"]
 
 # -------------------------------
 # Full controller + web UI
@@ -276,4 +280,4 @@ RUN chmod 0755 /worker/encode-one.sh
 
 # One process owns the durable queue and background schedulers. Gunicorn's
 # threads provide concurrent HTTP handling without starting duplicate workers.
-CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=4", "--timeout=300", "--graceful-timeout=30", "--error-logfile=-", "webui.app:create_app()"]
+CMD ["gunicorn", "--bind=0.0.0.0:8080", "--workers=1", "--threads=4", "--timeout=300", "--graceful-timeout=30", "--error-logfile=-", "--access-logfile=-", "--capture-output", "--log-level=info", "webui.app:create_app()"]

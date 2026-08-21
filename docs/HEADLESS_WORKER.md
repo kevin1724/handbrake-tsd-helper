@@ -131,7 +131,14 @@ docker logs bytesqueeze-worker
 ```
 
 The banner contains a code such as `ABCDE-FGHJK`. It expires after one hour.
-Restart the worker to print a new code when needed.
+Generate a fresh code without restarting or interrupting active encodes:
+
+```bash
+docker exec bytesqueeze-worker python -m worker.app pairing-code
+```
+
+The newest code replaces any older unused code. To choose a shorter lifetime,
+pass `--ttl-seconds 900` (accepted range: 300–3600 seconds).
 
 On the main node:
 
@@ -191,6 +198,33 @@ curl http://WORKER-IP:8082/api/node/discovery
 Confirm the main node can reach the worker address and port, use the newest
 unexpired code, and make sure a reverse proxy is not removing node-signature
 headers.
+
+Create a replacement pairing code without restarting the worker:
+
+```bash
+docker exec bytesqueeze-worker python -m worker.app pairing-code
+```
+
+### A remote job fails before encoding starts
+
+Open **Jobs → Linked Nodes** on the main node. Failed worker rows now show the
+specific transfer or HandBrake error, a recent log tail, and a full worker-log
+download. The same diagnostics remain available with:
+
+```bash
+docker logs --tail 300 bytesqueeze-worker
+```
+
+The worker learns the controller address from the authenticated connection it
+actually receives. This avoids sending large source downloads to a browser-only
+VPN, loopback, or reverse-proxy address. Interrupted downloads are retried three
+times with a five-minute socket timeout by default. Slow storage can override
+those defaults in the Compose `.env` file:
+
+```dotenv
+TSD_WORKER_TRANSFER_TIMEOUT_SECONDS=600
+TSD_WORKER_TRANSFER_ATTEMPTS=5
+```
 
 ### GPU jobs still run one at a time
 
