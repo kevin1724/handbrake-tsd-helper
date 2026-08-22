@@ -99,11 +99,11 @@ HARDWARE_ENCODER_FAMILIES = frozenset({
 QSV_ENCODERS = frozenset({"qsv_h264", "qsv_h265", "qsv_h265_10bit", "qsv_av1", "qsv_av1_10bit"})
 QSV_DECODE_SOURCE_CODECS = frozenset({"h264", "avc", "avc1", "hevc", "h265"})
 QSV_DECODE_POSITIVE_RE = re.compile(
-    r'(?:"(?:HWDecode|HardwareDecode)"\s*:\s*[1-9]\d*|"Decode"\s*:\s*true|using full QSV|(?:h264|hevc)_qsv-decoder)',
+    r'(?:"(?:HWDecode|HardwareDecode)"\s*:\s*(?!0\b)-?\d+|"Decode"\s*:\s*true|using full QSV|decoder:\s*(?:h264|hevc)_qsv|(?:h264|hevc)_qsv-decoder)',
     re.IGNORECASE,
 )
 QSV_DECODE_FALLBACK_RE = re.compile(
-    r'(?:"(?:HWDecode|HardwareDecode)"\s*:\s*0|"Decode"\s*:\s*false|encode-only via system memory path|Hardware decode:\s*software fallback)',
+    r'(?:"Decode"\s*:\s*false|(?:qsv[_ -])?decoder[^\n]*(?:failed|error)|Hardware decode:\s*software fallback)',
     re.IGNORECASE,
 )
 
@@ -1187,6 +1187,62 @@ def _selected_video_encoder(job: dict, preset_file: str, preset_name: str) -> st
         return _preset_video_encoder(job).strip().lower()
 
 
+def _set_preset_hardware_decode(data, preset_name: str, enabled: bool) -> bool:
+    """Set decode policy only on a preset object with a video encoder."""
+    candidates = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            if str(value.get("VideoEncoder") or "").strip():
+                candidates.append(value)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(data)
+    if not candidates:
+        return False
+    expected = str(preset_name or "").strip().casefold()
+    selected = next(
+        (
+            item for item in candidates
+            if str(item.get("PresetName") or item.get("Name") or "").strip().casefold() == expected
+        ),
+        candidates[0],
+    )
+    # HandBrake 1.x represents QSV with bit 0x02. Using 1 here means
+    # software decode support and HandBrake normalizes it back to zero for a
+    # QSV source, even when VideoQSVDecode is true.
+    selected["VideoHWDecode"] = 2 if enabled else 0
+    selected["VideoQSVDecode"] = bool(enabled)
+    return True
+
+
+def _materialize_decode_policy_preset(
+    job_id: str,
+    preset_file: str,
+    preset_name: str,
+    enabled: bool,
+    work_dir: str = "",
+) -> tuple[str, str] | None:
+    """Create a job-scoped preset whose video section enforces decode policy."""
+    try:
+        with open(preset_file, "r", encoding="utf-8") as stream:
+            data = json.load(stream)
+        if not _set_preset_hardware_decode(data, preset_name, enabled):
+            return None
+        target_dir = work_dir or os.path.join(PRESET_WORK_DIR, str(job_id))
+        os.makedirs(target_dir, exist_ok=True)
+        target = os.path.join(target_dir, "decode-policy-preset.json")
+        with open(target, "w", encoding="utf-8") as stream:
+            json.dump(data, stream, ensure_ascii=False, indent=2)
+        return target, target_dir
+    except Exception:
+        return None
+
+
 def _scaled_to_fit(width: int, height: int, max_width: int, max_height: int) -> tuple[int, int]:
     """Fit inside a resolution ceiling without ever enlarging the source."""
     width = max(0, int(width or 0))
@@ -1271,10 +1327,10 @@ def _hardware_decode_plan(encoder: str, source: dict, mode: str | None = None) -
 def _qsv_decode_log_evidence(line: str) -> str:
     """Classify HandBrake output as an active QSV path or software fallback."""
     text = str(line or "")
-    if QSV_DECODE_POSITIVE_RE.search(text):
-        return "active"
     if QSV_DECODE_FALLBACK_RE.search(text):
         return "fallback"
+    if QSV_DECODE_POSITIVE_RE.search(text):
+        return "active"
     return ""
 
 
@@ -1878,6 +1934,7 @@ def list_jobs_for_api(*, include_log_tail: bool = False) -> list[dict]:
                 "hardware_decode_requested": j.get("hardware_decode_requested") or "",
                 "hardware_decode_active": j.get("hardware_decode_active"),
                 "hardware_decode_reason": j.get("hardware_decode_reason") or "",
+                "hardware_decode_preset_applied": bool(j.get("hardware_decode_preset_applied")),
                 "error_message": j.get("error_message")
                 or (
                     (j.get("transfer") or {}).get("last_error")
@@ -2284,6 +2341,16 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
         job.get("extra_args") or "",
     )
     hardware_decode = _hardware_decode_plan(selected_encoder, source_video)
+    controlled_preset = _materialize_decode_policy_preset(
+        job_id,
+        preset_file,
+        preset_name,
+        hardware_decode["enabled"],
+        preset_work_dir,
+    )
+    if controlled_preset:
+        preset_file, preset_work_dir = controlled_preset
+        env["HB_PRESET_FILE"] = preset_file
     source_width = int(source_video.get("width") or 0)
     source_height = int(source_video.get("height") or 0)
     target_width = int(resolution_plan.get("target_width") or 0)
@@ -2318,6 +2385,14 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     job["hardware_decode_requested"] = hardware_decode["decoder"]
     job["hardware_decode_active"] = None if hardware_decode["enabled"] else False
     job["hardware_decode_reason"] = hardware_decode["reason"]
+    job["hardware_decode_preset_applied"] = bool(controlled_preset)
+
+    if controlled_preset and hardware_decode["enabled"]:
+        preset_decode_policy = "VideoHWDecode=2, VideoQSVDecode=true"
+    elif controlled_preset:
+        preset_decode_policy = "VideoHWDecode=0, VideoQSVDecode=false"
+    else:
+        preset_decode_policy = "not materialized; using CLI decode option"
 
     # Controlled arguments are placed after user/Smart Preset arguments by
     # encode-one.sh so a logical 1080/4K choice remains a hard no-upscale cap.
@@ -2340,6 +2415,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             f"[ByteSqueeze] Source resolution: {source_resolution_label}\n"
             f"[ByteSqueeze] Target resolution: {target_resolution_label}\n"
             f"[ByteSqueeze] Selected preset: {preset_name}\n"
+            f"[ByteSqueeze] Preset decode policy: {preset_decode_policy}\n"
             f"[ByteSqueeze] Encoder launch: /worker/encode-one.sh\n"
             f"[ByteSqueeze] Preset file: {preset_file}\n"
             f"[ByteSqueeze] Preset name: {preset_name}\n"
@@ -2450,11 +2526,11 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             )
         elif decode_evidence["fallback"]:
             job["hardware_decode_active"] = False
-            job["hardware_decode_reason"] = "HandBrake selected its software/encode-only path"
+            job["hardware_decode_reason"] = "HandBrake reported a QSV decoder failure or software retry"
             _append_job_log(
                 job_id,
                 "[ByteSqueeze] Hardware decode: software fallback "
-                f"(HandBrake selected encode-only path: {decode_evidence['line']})",
+                f"(HandBrake decoder failure: {decode_evidence['line']})",
             )
         else:
             job["hardware_decode_active"] = None

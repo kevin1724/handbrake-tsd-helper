@@ -32,6 +32,8 @@
         }
       ],
       "VideoEncoder": "qsv_h265_10bit",
+      "VideoHWDecode": 2,
+      "VideoQSVDecode": true,
       "VideoProfile": "main10",
       "VideoLevel": "auto",
       "VideoPreset": "quality",

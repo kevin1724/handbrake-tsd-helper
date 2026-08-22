@@ -12,7 +12,7 @@
 # legacy QSV nodes such as UHD 630. The floating python:3.11-slim tag can move
 # to newer Debian releases where those packages are removed.
 ARG PYTHON_IMAGE=python:3.11-slim-bookworm
-ARG HANDBRAKE_VERSION=1.9.2
+ARG HANDBRAKE_VERSION=1.11.2
 
 FROM ${PYTHON_IMAGE} AS handbrake-builder
 

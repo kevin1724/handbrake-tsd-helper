@@ -2880,7 +2880,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.15.2"
+APP_RELEASE = "3.15.3"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -5348,6 +5348,7 @@ def _combined_jobs_for_api() -> list[dict]:
                 "hardware_decode_requested": worker_item.get("hardware_decode_requested") or "",
                 "hardware_decode_active": worker_item.get("hardware_decode_active"),
                 "hardware_decode_reason": worker_item.get("hardware_decode_reason") or "",
+                "hardware_decode_preset_applied": bool(worker_item.get("hardware_decode_preset_applied")),
                 "source_video": worker_item.get("source_video") or {},
                 "target_resolution": worker_item.get("target_resolution") or {},
                 "has_log": bool(worker_item.get("has_log") or worker_item.get("log_tail")),

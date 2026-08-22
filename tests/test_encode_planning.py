@@ -100,25 +100,80 @@ class EncodePlanningTests(unittest.TestCase):
         )
         self.assertEqual(encoder, "qsv_h265_10bit")
 
+    def test_decode_policy_is_written_only_to_the_video_preset(self):
+        payload = {
+            "PresetList": [
+                {
+                    "PresetName": "QSV video",
+                    "VideoEncoder": "qsv_h265_10bit",
+                    "AudioList": [{"PresetEncoder": "copy", "AudioEncoder": "copy"}],
+                }
+            ]
+        }
+        self.assertTrue(jobs._set_preset_hardware_decode(payload, "QSV video", True))
+        selected = payload["PresetList"][0]
+        self.assertEqual(selected["VideoEncoder"], "qsv_h265_10bit")
+        self.assertEqual(selected["VideoHWDecode"], 2)
+        self.assertIs(selected["VideoQSVDecode"], True)
+        self.assertNotIn("VideoHWDecode", selected["AudioList"][0])
+
+    def test_materialized_preset_enforces_qsv_decode_for_handbrake_import(self):
+        source = {
+            "PresetList": [
+                {
+                    "PresetName": "Imported QSV",
+                    "VideoEncoder": "qsv_h265_10bit",
+                    "AudioList": [{"AudioEncoder": "copy"}],
+                }
+            ]
+        }
+        with tempfile.TemporaryDirectory() as tempdir:
+            source_path = os.path.join(tempdir, "source.json")
+            with open(source_path, "w", encoding="utf-8") as stream:
+                json.dump(source, stream)
+            result = jobs._materialize_decode_policy_preset(
+                "job-id",
+                source_path,
+                "Imported QSV",
+                True,
+                tempdir,
+            )
+            self.assertIsNotNone(result)
+            with open(result[0], "r", encoding="utf-8") as stream:
+                materialized = json.load(stream)["PresetList"][0]
+
+        self.assertEqual(materialized["VideoEncoder"], "qsv_h265_10bit")
+        self.assertEqual(materialized["VideoHWDecode"], 2)
+        self.assertIs(materialized["VideoQSVDecode"], True)
+        self.assertEqual(materialized["AudioList"][0]["AudioEncoder"], "copy")
+
     def test_decode_log_evidence_distinguishes_active_qsv_from_encode_only(self):
         positive = (
             '"HWDecode": 1',
             '"HardwareDecode": 4',
             '"QSV": {"Decode": true}',
             'encqsvInit: using full QSV path',
+            'decoder: h264_qsv 8-bit (yuv420p)',
             'hevc_qsv-decoder: opening decoder',
         )
         negative = (
-            '"HWDecode": 0',
-            '"HardwareDecode": 0',
             '"QSV": {"Decode": false}',
-            'encqsvInit: using encode-only via system memory path',
+            'qsv decoder failed to initialize',
+            'h264_qsv-decoder error: invalid stream',
             '[ByteSqueeze] Hardware decode: software fallback (QSV decode attempt exited 1)',
         )
         for line in positive:
             self.assertEqual(jobs._qsv_decode_log_evidence(line), "active")
         for line in negative:
             self.assertEqual(jobs._qsv_decode_log_evidence(line), "fallback")
+        # In HandBrake 1.9 on Linux these generic fields and the encoder's
+        # memory-path message can coexist with a verified h264_qsv decoder.
+        for line in (
+            '"HWDecode": 0',
+            '"HardwareDecode": 0',
+            'encqsvInit: using encode-only via system memory path',
+        ):
+            self.assertEqual(jobs._qsv_decode_log_evidence(line), "")
 
     def test_1080_mapping_repair_replaces_a_4k_preset_and_persists_it(self):
         with tempfile.TemporaryDirectory() as tempdir:
