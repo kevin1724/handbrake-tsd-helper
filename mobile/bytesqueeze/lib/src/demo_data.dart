@@ -1,6 +1,6 @@
 abstract final class DemoData {
   static Map<String, dynamic> get dashboard => {
-        'release': '3.15.1',
+        'release': '3.15.2',
         'queue': {
           'paused': false,
           'summary': {

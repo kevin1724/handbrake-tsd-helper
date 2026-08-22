@@ -58,6 +58,48 @@ class EncodePlanningTests(unittest.TestCase):
         self.assertEqual(unsupported["cli_args"], ["--disable-hw-decoding"])
         self.assertIn("not in the supported", unsupported["reason"])
 
+    def test_audio_encoder_copy_never_overrides_the_qsv_video_encoder(self):
+        preset_file = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "presets",
+            "Plex-HEVC-QSV-1080p-ICQ28-Smaller-AudioCopy-ENG-SPA.json",
+        )
+        actual_args = (
+            "-b 2035 --encoder qsv_h265_10bit --encoder-preset balanced "
+            "--width 1920 --height 1080 --all-audio -E copy "
+            "--audio-copy-mask aac,ac3,eac3,truehd,dts,dtshd"
+        )
+        encoder = jobs._selected_video_encoder(
+            {"extra_args": actual_args},
+            preset_file,
+            "Plex-HEVC-QSV-1080p-ICQ28-Smaller-AudioCopy-ENG-SPA",
+        )
+        decode = jobs._hardware_decode_plan(
+            encoder,
+            {"codec": "h264", "error": ""},
+            "auto",
+        )
+
+        self.assertEqual(jobs._argument_value(["-E", "copy"], "--encoder", "-e"), "")
+        self.assertEqual(encoder, "qsv_h265_10bit")
+        self.assertTrue(decode["enabled"])
+        self.assertEqual(decode["cli_args"], ["--enable-hw-decoding", "qsv"])
+
+    def test_preset_video_encoder_is_used_when_only_audio_encoder_is_overridden(self):
+        preset_file = os.path.join(
+            os.path.dirname(__file__),
+            "..",
+            "presets",
+            "Plex-HEVC-QSV-1080p-ICQ28-Smaller-AudioCopy-ENG-SPA.json",
+        )
+        encoder = jobs._selected_video_encoder(
+            {"extra_args": "--all-audio -E copy"},
+            preset_file,
+            "Plex-HEVC-QSV-1080p-ICQ28-Smaller-AudioCopy-ENG-SPA",
+        )
+        self.assertEqual(encoder, "qsv_h265_10bit")
+
     def test_decode_log_evidence_distinguishes_active_qsv_from_encode_only(self):
         positive = (
             '"HWDecode": 1',

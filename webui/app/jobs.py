@@ -1157,17 +1157,19 @@ def _split_extra_args(extra_args: str) -> list[str]:
 
 
 def _argument_value(args: list[str], *names: str) -> str:
-    lowered = {name.lower() for name in names}
+    # HandBrake short options are case-sensitive: ``-e`` selects the video
+    # encoder while ``-E`` selects the audio encoder. Never normalize option
+    # case here or an audio ``-E copy`` can overwrite the real QSV encoder.
+    expected = {str(name) for name in names}
     value = ""
     for index, arg in enumerate(args):
         text = str(arg or "")
-        lower = text.lower()
-        if lower in lowered and index + 1 < len(args):
+        if text in expected and index + 1 < len(args):
             value = str(args[index + 1])
         else:
-            for name in lowered:
+            for name in expected:
                 prefix = name + "="
-                if lower.startswith(prefix):
+                if text.startswith(prefix):
                     value = text[len(prefix):]
     return value
 
