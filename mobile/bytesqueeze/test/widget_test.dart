@@ -207,9 +207,10 @@ void main() {
           matching: find.byType(Scrollable),
         )
         .first;
-    await tester.scrollUntilVisible(find.text('Preview real Smart encode'), 220,
+    await tester.scrollUntilVisible(
+        find.text('Preview first episode’s Smart encode'), 220,
         scrollable: detailsScroll);
-    expect(find.text('Preview real Smart encode'), findsOneWidget);
+    expect(find.text('Preview first episode’s Smart encode'), findsOneWidget);
     await tester.scrollUntilVisible(find.text('Smart Queue Full Show'), 220,
         scrollable: detailsScroll);
     expect(find.text('Smart Queue Full Show'), findsOneWidget);
