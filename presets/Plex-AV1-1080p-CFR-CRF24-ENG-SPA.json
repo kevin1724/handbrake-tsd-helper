@@ -1,0 +1,63 @@
+{
+  "PresetList": [
+    {
+      "PresetName": "Plex-AV1-1080p-CFR-CRF24-ENG-SPA",
+      "PresetDescription": "AV1 (SVT-AV1 10-bit) 1080p preset for Plex. Caps output at 1920x1080 without upscaling, uses constant frame rate, and preserves compatible audio, subtitles, metadata, and chapters.",
+      "Type": 1,
+      "Default": false,
+      "FileFormat": "av_mkv",
+      "Optimize": false,
+      "ChapterMarkers": true,
+      "MetadataPassthru": true,
+      "AudioCopyMask": [
+        "copy:aac",
+        "copy:ac3",
+        "copy:eac3",
+        "copy:truehd",
+        "copy:dts",
+        "copy:dtshd",
+        "copy:mp2",
+        "copy:mp3",
+        "copy:flac"
+      ],
+      "AudioEncoderFallback": "av_aac",
+      "AudioTrackSelectionBehavior": "all",
+      "AudioLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "AudioList": [
+        {
+          "AudioEncoder": "copy"
+        }
+      ],
+      "VideoEncoder": "svt_av1_10bit",
+      "VideoProfile": "main",
+      "VideoLevel": "auto",
+      "VideoPreset": "6",
+      "VideoTune": "ssim",
+      "VideoQualityType": 2,
+      "VideoQualitySlider": 24,
+      "VideoMultiPass": true,
+      "VideoFramerateMode": "cfr",
+      "VideoFramerate": "auto",
+      "VideoGrayScale": false,
+      "PictureWidth": 1920,
+      "PictureHeight": 1080,
+      "PictureKeepRatio": true,
+      "PictureUseMaximumSize": true,
+      "PictureAllowUpscaling": false,
+      "SubtitleTrackSelectionBehavior": "selected",
+      "PresetDisabled": false,
+      "SubtitleLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "SubtitleAddCC": false,
+      "SubtitleAddForeignAudioSearch": false
+    }
+  ],
+  "VersionMajor": 59,
+  "VersionMinor": 0,
+  "VersionMicro": 0
+}

@@ -2880,7 +2880,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.15.0"
+APP_RELEASE = "3.15.1"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -5295,6 +5295,154 @@ def _latest_worker_job_error(worker_jobs: list) -> dict:
     }
 
 
+def _linked_worker_jobs_for_api() -> list[dict]:
+    """Normalize cached worker jobs into the main Jobs API shape."""
+    combined = []
+    for node in list_nodes_public():
+        node_id = str(node.get("id") or "").strip()
+        node_name = str(node.get("name") or "Worker").strip()
+        for source in node.get("jobs") if isinstance(node.get("jobs"), list) else []:
+            if not isinstance(source, dict):
+                continue
+            worker_job_id = str(source.get("id") or "").strip()
+            if not worker_job_id:
+                continue
+            item = source.copy()
+            item.update({
+                "id": f"worker:{node_id}:{worker_job_id}",
+                "worker_job_id": worker_job_id,
+                "controller_history_id": f"remote-{worker_job_id}",
+                "node_id": node_id,
+                "node_name": node_name,
+                "mode": "linked_worker",
+                "is_worker_job": True,
+                "queue_position": source.get("queue_position"),
+                "log_url": (
+                    f"/api/nodes/{node_id}/jobs/{worker_job_id}/log"
+                    if node_id and (source.get("has_log") or source.get("log_tail"))
+                    else ""
+                ),
+            })
+            combined.append(item)
+    return combined
+
+
+def _combined_jobs_for_api() -> list[dict]:
+    """Return local/controller history plus live and failed worker jobs."""
+    items = list_job_history_for_api()
+    by_id = {str(item.get("id") or ""): item for item in items}
+    for worker_item in _linked_worker_jobs_for_api():
+        status = str(worker_item.get("status") or "").lower()
+        history_item = by_id.get(str(worker_item.get("controller_history_id") or ""))
+        if history_item and status == "done":
+            # The transfer ledger owns durable size/savings data. Enrich that
+            # row with the worker's exact preset/log identity instead of
+            # displaying the same completed encode twice.
+            history_item.update({
+                "worker_job_id": worker_item.get("worker_job_id"),
+                "node_id": worker_item.get("node_id") or history_item.get("node_id"),
+                "node_name": worker_item.get("node_name") or history_item.get("node_name"),
+                "is_worker_job": True,
+                "preset_name": worker_item.get("preset_name") or history_item.get("preset_name") or "",
+                "hardware_decode_mode": worker_item.get("hardware_decode_mode") or "",
+                "hardware_decode_requested": worker_item.get("hardware_decode_requested") or "",
+                "hardware_decode_active": worker_item.get("hardware_decode_active"),
+                "hardware_decode_reason": worker_item.get("hardware_decode_reason") or "",
+                "source_video": worker_item.get("source_video") or {},
+                "target_resolution": worker_item.get("target_resolution") or {},
+                "has_log": bool(worker_item.get("has_log") or worker_item.get("log_tail")),
+                "log_url": worker_item.get("log_url") or "",
+            })
+            continue
+        items.append(worker_item)
+
+    active_order = {"running": 0, "waiting_to_upload": 1, "queued": 2}
+
+    def sort_key(item: dict):
+        status = str(item.get("status") or "").lower()
+        if status in active_order:
+            try:
+                queue_position = int(item.get("queue_position") or 999999)
+            except (TypeError, ValueError):
+                queue_position = 999999
+            return (active_order[status], queue_position, 0.0, str(item.get("id") or ""))
+        try:
+            timestamp = float(item.get("finished_at") or item.get("created_at") or 0.0)
+        except (TypeError, ValueError):
+            timestamp = 0.0
+        return (3, 0, -timestamp, str(item.get("id") or ""))
+
+    items.sort(key=sort_key)
+    return items
+
+
+def _combined_job_summary() -> dict:
+    """Add worker active/error state to controller-owned lifetime totals."""
+    summary = get_job_summary()
+    counts = dict(summary.get("counts") or {})
+    worker_jobs = _linked_worker_jobs_for_api()
+    active_states = {"queued", "running", "waiting_to_upload"}
+    for state in active_states:
+        counts[state] = int(counts.get(state) or 0) + sum(
+            1 for item in worker_jobs if str(item.get("status") or "").lower() == state
+        )
+    worker_errors = sum(
+        1 for item in worker_jobs if str(item.get("status") or "").lower() == "error"
+    )
+    counts["error"] = int(counts.get("error") or 0) + worker_errors
+    summary["counts"] = counts
+    summary["queued_count"] = int(summary.get("queued_count") or 0) + sum(
+        1 for item in worker_jobs if str(item.get("status") or "").lower() == "queued"
+    )
+    running_ids = list(summary.get("running_job_ids") or [])
+    running_ids.extend(
+        str(item.get("id") or "")
+        for item in worker_jobs
+        if str(item.get("status") or "").lower() == "running"
+    )
+    summary["running_job_ids"] = running_ids
+    summary["running_job_id"] = running_ids[0] if running_ids else None
+    summary["active_error_count"] = int(summary.get("active_error_count") or 0) + worker_errors
+    summary["worker_job_count"] = len(worker_jobs)
+    return summary
+
+
+def _clear_linked_worker_jobs(target: str = "finished") -> dict:
+    """Clear terminal worker rows through the authenticated node channel."""
+    removed = 0
+    results = []
+    for row in list_nodes_private():
+        node_id = str(row.get("id") or "")
+        node_name = str(row.get("name") or node_id or "Worker")
+        try:
+            result = signed_json_request(
+                row,
+                "/api/node/jobs/clear",
+                method="POST",
+                body={"target": target},
+                timeout=20,
+            )
+            count = max(0, int(result.get("removed") or 0))
+            removed += count
+            if isinstance(result.get("jobs"), list):
+                row["jobs"] = result["jobs"]
+            if isinstance(result.get("summary"), dict):
+                row["summary"] = result["summary"]
+                row["status"] = _node_summary_status(result["summary"])
+            row["last_error"] = ""
+            save_node(row)
+            results.append({"node_id": node_id, "node_name": node_name, "removed": count, "ok": True})
+        except Exception as exc:
+            results.append({
+                "node_id": node_id,
+                "node_name": node_name,
+                "removed": 0,
+                "ok": False,
+                "error": str(exc)[:240],
+            })
+    return {"removed": removed, "workers": results}
+
+
 def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
     row = row.copy()
     try:
@@ -7423,6 +7571,23 @@ def register_routes(app):
             truncated=truncated,
         )
 
+    @app.route("/api/node/jobs/clear", methods=["POST"])
+    def node_worker_jobs_clear_api():
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        data = request.get_json(silent=True) or {}
+        target = str(data.get("target") or "finished").strip().lower()
+        if target != "finished":
+            return jsonify(error="only finished worker jobs can be cleared remotely"), 400
+        removed = clear_finished_jobs_core()
+        return jsonify(
+            ok=True,
+            removed=removed,
+            jobs=list_jobs_for_api(include_log_tail=True),
+            summary=get_job_summary(),
+        )
+
     @app.route("/api/node/rotate_secret", methods=["POST"])
     def node_rotate_secret_api():
         controller = _authenticated_controller()
@@ -8884,17 +9049,17 @@ def register_routes(app):
     @app.route("/api/jobs")
     def jobs_list():
         """Return one coherent queue, summary, and durable-history snapshot."""
-        items = list_job_history_for_api()
+        items = _combined_jobs_for_api()
         return jsonify(
             jobs=items,
-            summary=get_job_summary(),
+            summary=_combined_job_summary(),
             paused=get_queue_state(),
         )
 
     @app.route("/jobs/summary")
     def jobs_summary():
         """Return dashboard metrics for the jobs page."""
-        return jsonify(summary=get_job_summary())
+        return jsonify(summary=_combined_job_summary())
 
     @app.route("/jobs/clear_error_status", methods=["POST"])
     def jobs_clear_error_status():
@@ -9047,8 +9212,14 @@ def register_routes(app):
     @app.route("/clear_finished_jobs", methods=["POST"])
     def clear_finished_jobs_route():
         """Delete all finished jobs (done/error) from history and remove their logs."""
-        removed = clear_finished_jobs_core()
-        return jsonify(removed=removed)
+        local_removed = clear_finished_jobs_core()
+        worker_clear = _clear_linked_worker_jobs(target="finished")
+        return jsonify(
+            removed=local_removed + int(worker_clear.get("removed") or 0),
+            local_removed=local_removed,
+            worker_removed=int(worker_clear.get("removed") or 0),
+            workers=worker_clear.get("workers") or [],
+        )
 
     # ------------- Clear queued jobs -------------
 

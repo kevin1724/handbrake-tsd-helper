@@ -13,6 +13,9 @@ services:
       # worker retries interrupted downloads before marking a job failed.
       TSD_WORKER_TRANSFER_TIMEOUT_SECONDS: ${TSD_WORKER_TRANSFER_TIMEOUT_SECONDS:-300}
       TSD_WORKER_TRANSFER_ATTEMPTS: ${TSD_WORKER_TRANSFER_ATTEMPTS:-3}
+      # auto: use QSV decode with Intel QSV encoders; qsv: prefer QSV decode
+      # for supported H.264/HEVC sources; off: force software decoding.
+      TSD_HW_DECODE: ${TSD_HW_DECODE:-auto}
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       # Map a fast, durable host drive to /work. This preserves pairing state

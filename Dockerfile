@@ -211,6 +211,7 @@ RUN set -eux; \
 # -------------------------------
 ENV HB_DATA_DIR=/app/data
 ENV HB_PRESET_DIR=/presets
+ENV TSD_HW_DECODE=auto
 
 # Force Intel iHD driver. This is the normal VAAPI/QSV driver for modern Intel.
 ENV LIBVA_DRIVER_NAME=iHD

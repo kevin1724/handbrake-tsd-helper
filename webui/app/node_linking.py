@@ -42,6 +42,8 @@ NODE_CAPABILITIES = [
     "remote-job-logs",
     "observed-controller-route",
     "resilient-transfer-download",
+    "qsv-hardware-decode",
+    "remote-job-history-control",
 ]
 STATE_LOCK = threading.RLock()
 TRANSFER_LOCK = threading.RLock()

@@ -41,7 +41,7 @@ from .config import (
     VIDEO_EXTS,
     ALLOWED_PREFIXES,
 )
-from .presets import resolve_preset_file_and_name
+from .presets import load_preset_definition, resolve_preset_file_and_name
 from .settings import load_settings  # pull in global settings (hb_threads, etc.)
 from .events import log_event
 from .storage_stats import get_summary as get_storage_summary, list_encodes, record_encode
@@ -96,6 +96,16 @@ HARDWARE_ENCODER_FAMILIES = frozenset({
     "videotoolbox",
     "vaapi",
 })
+QSV_ENCODERS = frozenset({"qsv_h264", "qsv_h265", "qsv_h265_10bit", "qsv_av1", "qsv_av1_10bit"})
+QSV_DECODE_SOURCE_CODECS = frozenset({"h264", "avc", "avc1", "hevc", "h265"})
+QSV_DECODE_POSITIVE_RE = re.compile(
+    r'(?:"(?:HWDecode|HardwareDecode)"\s*:\s*[1-9]\d*|"Decode"\s*:\s*true|using full QSV|(?:h264|hevc)_qsv-decoder)',
+    re.IGNORECASE,
+)
+QSV_DECODE_FALLBACK_RE = re.compile(
+    r'(?:"(?:HWDecode|HardwareDecode)"\s*:\s*0|"Decode"\s*:\s*false|encode-only via system memory path|Hardware decode:\s*software fallback)',
+    re.IGNORECASE,
+)
 
 
 def _now_ts() -> float:
@@ -1090,6 +1100,182 @@ def _preset_video_encoder(job: dict | None) -> str:
     return str(candidates[0].get("VideoEncoder") or "").strip() if candidates else ""
 
 
+def _source_video_probe(src_path: str) -> dict:
+    """Read the first source video stream for decode and resolution planning."""
+    command = [
+        "ffprobe",
+        "-v",
+        "error",
+        "-select_streams",
+        "v:0",
+        "-show_entries",
+        "stream=codec_name,profile,pix_fmt,width,height",
+        "-of",
+        "json",
+        src_path,
+    ]
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=30,
+            check=False,
+        )
+    except FileNotFoundError:
+        return {"error": "ffprobe is not installed"}
+    except subprocess.TimeoutExpired:
+        return {"error": "ffprobe timed out"}
+    except Exception as exc:
+        return {"error": f"ffprobe failed: {exc}"}
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "ffprobe returned an error").strip()
+        return {"error": detail[:300]}
+    try:
+        payload = json.loads(result.stdout or "{}")
+        streams = payload.get("streams") if isinstance(payload, dict) else []
+        stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
+        return {
+            "codec": str(stream.get("codec_name") or "").strip().lower(),
+            "profile": str(stream.get("profile") or "").strip(),
+            "pix_fmt": str(stream.get("pix_fmt") or "").strip().lower(),
+            "width": max(0, int(stream.get("width") or 0)),
+            "height": max(0, int(stream.get("height") or 0)),
+            "error": "",
+        }
+    except Exception as exc:
+        return {"error": f"invalid ffprobe response: {exc}"}
+
+
+def _split_extra_args(extra_args: str) -> list[str]:
+    try:
+        return shlex.split(str(extra_args or ""))
+    except ValueError:
+        return str(extra_args or "").split()
+
+
+def _argument_value(args: list[str], *names: str) -> str:
+    lowered = {name.lower() for name in names}
+    value = ""
+    for index, arg in enumerate(args):
+        text = str(arg or "")
+        lower = text.lower()
+        if lower in lowered and index + 1 < len(args):
+            value = str(args[index + 1])
+        else:
+            for name in lowered:
+                prefix = name + "="
+                if lower.startswith(prefix):
+                    value = text[len(prefix):]
+    return value
+
+
+def _selected_video_encoder(job: dict, preset_file: str, preset_name: str) -> str:
+    """Resolve the encoder after applying any command-line override."""
+    args = _split_extra_args(job.get("extra_args") or "")
+    override = _argument_value(args, "--encoder", "-e")
+    if override:
+        return override.strip().lower()
+    try:
+        selected = load_preset_definition(preset_file, preset_name)
+        return str(selected.get("VideoEncoder") or "").strip().lower()
+    except Exception:
+        return _preset_video_encoder(job).strip().lower()
+
+
+def _scaled_to_fit(width: int, height: int, max_width: int, max_height: int) -> tuple[int, int]:
+    """Fit inside a resolution ceiling without ever enlarging the source."""
+    width = max(0, int(width or 0))
+    height = max(0, int(height or 0))
+    if width <= 0 or height <= 0:
+        return 0, 0
+    scale = min(1.0, max_width / width, max_height / height)
+    out_width = max(2, int(width * scale) // 2 * 2)
+    out_height = max(2, int(height * scale) // 2 * 2)
+    return min(width, out_width), min(height, out_height)
+
+
+def _resolution_plan(preset_key: str, source: dict, extra_args: str = "") -> dict:
+    """Build a no-upscale 1080p/4K ceiling and its expected dimensions."""
+    key = str(preset_key or "1080").strip().lower()
+    max_width, max_height = (3840, 2160) if key == "4k" else (1920, 1080)
+    args = _split_extra_args(extra_args)
+    try:
+        requested_width = int(_argument_value(args, "--width", "-w") or 0)
+    except (TypeError, ValueError):
+        requested_width = 0
+    try:
+        requested_height = int(_argument_value(args, "--height", "-l") or 0)
+    except (TypeError, ValueError):
+        requested_height = 0
+    source_width = max(0, int(source.get("width") or 0))
+    source_height = max(0, int(source.get("height") or 0))
+    if requested_width and not requested_height and source_width and source_height:
+        requested_height = max(2, round(requested_width * source_height / source_width))
+    elif requested_height and not requested_width and source_width and source_height:
+        requested_width = max(2, round(requested_height * source_width / source_height))
+    basis_width = requested_width or source_width
+    basis_height = requested_height or source_height
+    target_width, target_height = _scaled_to_fit(
+        basis_width,
+        basis_height,
+        max_width,
+        max_height,
+    )
+    return {
+        "key": key if key in {"1080", "4k"} else "1080",
+        "max_width": max_width,
+        "max_height": max_height,
+        "target_width": target_width,
+        "target_height": target_height,
+        "cli_args": ["--maxWidth", str(max_width), "--maxHeight", str(max_height)],
+    }
+
+
+def _hardware_decode_plan(encoder: str, source: dict, mode: str | None = None) -> dict:
+    """Choose QSV decode only where policy, encoder, and source allow it."""
+    requested_mode = str(mode if mode is not None else os.environ.get("TSD_HW_DECODE") or "auto").strip().lower()
+    if requested_mode not in {"auto", "qsv", "off"}:
+        requested_mode = "auto"
+    encoder_name = str(encoder or "").strip().lower()
+    codec = str(source.get("codec") or "").strip().lower()
+    source_error = str(source.get("error") or "").strip()
+
+    reason = ""
+    enabled = False
+    if requested_mode == "off":
+        reason = "disabled by TSD_HW_DECODE=off"
+    elif source_error:
+        reason = f"source probe unavailable: {source_error}"
+    elif codec not in QSV_DECODE_SOURCE_CODECS:
+        reason = f"source codec {codec or 'unknown'} is not in the supported H.264/HEVC set"
+    elif requested_mode == "auto" and encoder_name not in QSV_ENCODERS and not encoder_name.startswith("qsv_"):
+        reason = f"video encoder {encoder_name or 'unknown'} is not Intel QSV"
+    else:
+        enabled = True
+
+    return {
+        "mode": requested_mode,
+        "enabled": enabled,
+        "decoder": "qsv" if enabled else "software",
+        "reason": reason,
+        "cli_args": ["--enable-hw-decoding", "qsv"] if enabled else ["--disable-hw-decoding"],
+        "label": "QSV" if enabled else f"software fallback ({reason or 'QSV decode not selected'})",
+    }
+
+
+def _qsv_decode_log_evidence(line: str) -> str:
+    """Classify HandBrake output as an active QSV path or software fallback."""
+    text = str(line or "")
+    if QSV_DECODE_POSITIVE_RE.search(text):
+        return "active"
+    if QSV_DECODE_FALLBACK_RE.search(text):
+        return "fallback"
+    return ""
+
+
 def _job_uses_hardware_encoder(job: dict | None) -> bool:
     """Return True only when a job is known to use a GPU encoder."""
     job = job if isinstance(job, dict) else {}
@@ -1669,6 +1855,7 @@ def list_jobs_for_api(*, include_log_tail: bool = False) -> list[dict]:
                 "id": jid,
                 "src": j.get("src"),
                 "preset": j.get("preset"),
+                "preset_name": j.get("preset_name") or "",
                 "encode_method": j.get("encode_method") or method.get("encode_method"),
                 "encoder": j.get("encoder") or method.get("encoder"),
                 "video_codec": j.get("video_codec") or method.get("video_codec"),
@@ -1683,6 +1870,12 @@ def list_jobs_for_api(*, include_log_tail: bool = False) -> list[dict]:
                 "eta_seconds": eta_val,
                 "has_log": has_log,
                 "phase": j.get("phase") or j.get("status") or "",
+                "source_video": j.get("source_video") if isinstance(j.get("source_video"), dict) else {},
+                "target_resolution": j.get("target_resolution") if isinstance(j.get("target_resolution"), dict) else {},
+                "hardware_decode_mode": j.get("hardware_decode_mode") or "",
+                "hardware_decode_requested": j.get("hardware_decode_requested") or "",
+                "hardware_decode_active": j.get("hardware_decode_active"),
+                "hardware_decode_reason": j.get("hardware_decode_reason") or "",
                 "error_message": j.get("error_message")
                 or (
                     (j.get("transfer") or {}).get("last_error")
@@ -2081,17 +2274,70 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     env["HB_PRESET_FILE"] = preset_file
     env["HB_PRESET_NAME"] = preset_name
 
-    # Optional extra HandBrakeCLI args (used by Size Wizard, etc.)
-    env["HB_EXTRA_ARGS"] = job.get("extra_args", "")
+    source_video = _source_video_probe(encode_src_path)
+    selected_encoder = _selected_video_encoder(job, preset_file, preset_name)
+    resolution_plan = _resolution_plan(
+        preset_key,
+        source_video,
+        job.get("extra_args") or "",
+    )
+    hardware_decode = _hardware_decode_plan(selected_encoder, source_video)
+    source_width = int(source_video.get("width") or 0)
+    source_height = int(source_video.get("height") or 0)
+    target_width = int(resolution_plan.get("target_width") or 0)
+    target_height = int(resolution_plan.get("target_height") or 0)
+    source_resolution_label = (
+        f"{source_width}x{source_height}"
+        if source_width and source_height
+        else f"unknown ({source_video.get('error') or 'no video stream'})"
+    )
+    target_resolution_label = (
+        f"{target_width}x{target_height}"
+        if target_width and target_height
+        else f"maximum {resolution_plan['max_width']}x{resolution_plan['max_height']}"
+    )
 
-    # Optional: additional HandBrakeCLI args (Size Wizard, etc.)
+    job["preset_name"] = preset_name
+    job["encoder"] = selected_encoder or job.get("encoder") or ""
+    if selected_encoder:
+        actual_method = _encoder_method_from_encoder(selected_encoder, preset_key)
+        job["encode_method"] = actual_method.get("encode_method")
+        job["video_codec"] = actual_method.get("video_codec")
+        job["encoder_family"] = actual_method.get("encoder_family")
+        job["bit_depth"] = actual_method.get("bit_depth")
+    job["source_video"] = source_video
+    job["target_resolution"] = {
+        "width": target_width,
+        "height": target_height,
+        "max_width": resolution_plan["max_width"],
+        "max_height": resolution_plan["max_height"],
+    }
+    job["hardware_decode_mode"] = hardware_decode["mode"]
+    job["hardware_decode_requested"] = hardware_decode["decoder"]
+    job["hardware_decode_active"] = None if hardware_decode["enabled"] else False
+    job["hardware_decode_reason"] = hardware_decode["reason"]
+
+    # Controlled arguments are placed after user/Smart Preset arguments by
+    # encode-one.sh so a logical 1080/4K choice remains a hard no-upscale cap.
     env["HB_EXTRA_ARGS"] = job.get("extra_args", "")
+    env["HB_DIMENSION_OPTS"] = shlex.join(resolution_plan["cli_args"])
+    env["HB_HW_DECODE_OPTS"] = shlex.join(hardware_decode["cli_args"])
+    env["HB_HW_DECODE_LABEL"] = hardware_decode["label"]
+    env["HB_VIDEO_ENCODER"] = selected_encoder or "unknown"
+    env["HB_SOURCE_RESOLUTION"] = source_resolution_label
+    env["HB_TARGET_RESOLUTION"] = target_resolution_label
 
     # Spawn worker shell script
     job["phase"] = "encoding"
     _append_job_log(
         job_id,
         (
+            f"[ByteSqueeze] Hardware decode: {hardware_decode['label']}\n"
+            f"[ByteSqueeze] Video encoder: {selected_encoder or 'unknown'}\n"
+            f"[ByteSqueeze] Source codec: {source_video.get('codec') or 'unknown'}\n"
+            f"[ByteSqueeze] Source resolution: {source_resolution_label}\n"
+            f"[ByteSqueeze] Target resolution: {target_resolution_label}\n"
+            f"[ByteSqueeze] Selected preset: {preset_name}\n"
             f"[ByteSqueeze] Encoder launch: /worker/encode-one.sh\n"
             f"[ByteSqueeze] Preset file: {preset_file}\n"
             f"[ByteSqueeze] Preset name: {preset_name}\n"
@@ -2119,6 +2365,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     # - Keep in-memory tail for quick viewing in web UI
     # - Update progress and ETA based on HandBrake output
     # ------------------------------------------------------------
+    decode_evidence = {"active": False, "fallback": False, "line": ""}
     with open(log_path, "a", encoding="utf-8", errors="replace") as lf:
         for line in proc.stdout:
             lf.write(line)
@@ -2127,6 +2374,15 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             # Keep a bounded in-memory tail for status APIs. The full output
             # remains in the UTF-8 log file for controller-side download.
             job["log"] = (str(job.get("log") or "") + line)[-JOB_LOG_TAIL_CHARS:]
+
+            evidence = _qsv_decode_log_evidence(line) if hardware_decode["enabled"] else ""
+            if evidence == "active":
+                decode_evidence.update({"active": True, "fallback": False, "line": line.strip()[:300]})
+            elif evidence == "fallback":
+                # The shell wrapper can retry an otherwise valid QSV encode
+                # with software decoding. The last observed path is the path
+                # that produced the retained output.
+                decode_evidence.update({"active": False, "fallback": True, "line": line.strip()[:300]})
 
             # Parse progress from this line, if present
             m = PROGRESS_RE.search(line)
@@ -2181,6 +2437,31 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     # Wait for process to exit
     ret = proc.wait()
     job["returncode"] = ret
+
+    if hardware_decode["enabled"]:
+        if decode_evidence["active"]:
+            job["hardware_decode_active"] = True
+            job["hardware_decode_reason"] = "verified in HandBrake job log"
+            _append_job_log(
+                job_id,
+                f"[ByteSqueeze] Hardware decode verification: active QSV decode path ({decode_evidence['line']})",
+            )
+        elif decode_evidence["fallback"]:
+            job["hardware_decode_active"] = False
+            job["hardware_decode_reason"] = "HandBrake selected its software/encode-only path"
+            _append_job_log(
+                job_id,
+                "[ByteSqueeze] Hardware decode: software fallback "
+                f"(HandBrake selected encode-only path: {decode_evidence['line']})",
+            )
+        else:
+            job["hardware_decode_active"] = None
+            job["hardware_decode_reason"] = "HandBrake emitted no decode-path verification marker"
+            _append_job_log(
+                job_id,
+                "[ByteSqueeze] Hardware decode verification: QSV requested, "
+                "but HandBrake emitted no recognized active/fallback marker.",
+            )
 
     # If job was not canceled, finalize with done/error
     if job.get("status") != "canceled":

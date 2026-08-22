@@ -271,7 +271,7 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertEqual(jobs._hardware_transcode_limit(job=stale_job), 3)
 
         health = self.client.get("/api/health").get_json()
-        self.assertEqual(health["release"], "2.4.0")
+        self.assertEqual(health["release"], "2.5.0")
         self.assertEqual(health["encoding_policy"]["hardware_transcode_concurrency"], 3)
 
     def test_hardware_preset_and_concurrency_limit_are_detected_safely(self):
@@ -297,6 +297,46 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertEqual(jobs._hardware_transcode_limit({"hardware_transcode_concurrency": 0}), 1)
         self.assertEqual(jobs._hardware_transcode_limit({"hardware_transcode_concurrency": 4}), 4)
         self.assertEqual(jobs._hardware_transcode_limit({"hardware_transcode_concurrency": 99}), 8)
+
+    def test_controller_can_clear_finished_worker_history_without_touching_active_jobs(self):
+        pairing = node_linking.create_pairing_code()
+        paired = self.client.post(
+            "/api/node/pair/accept",
+            json={
+                "code": pairing["code"],
+                "controller_id": "controller-clear-history",
+                "controller_name": "Main node",
+                "controller_url": "http://controller:8080",
+                "protocol_version": 2,
+            },
+        ).get_json()
+        body = json.dumps({"target": "finished"}).encode("utf-8")
+        headers = node_linking.hmac_headers(
+            "POST",
+            "/api/node/jobs/clear",
+            body,
+            node_id="controller-clear-history",
+            token=paired["token"],
+        )
+        remaining = [{"id": "still-running", "status": "running"}]
+        with mock.patch("worker.app.clear_finished_jobs", return_value=2) as clear, mock.patch(
+            "worker.app.list_jobs_for_api",
+            return_value=remaining,
+        ), mock.patch(
+            "worker.app.get_job_summary",
+            return_value={"counts": {"running": 1}},
+        ):
+            response = self.client.post(
+                "/api/node/jobs/clear",
+                data=body,
+                content_type="application/json",
+                headers=headers,
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(response.get_json()["removed"], 2)
+        self.assertEqual(response.get_json()["jobs"], remaining)
+        clear.assert_called_once_with()
 
 
 if __name__ == "__main__":

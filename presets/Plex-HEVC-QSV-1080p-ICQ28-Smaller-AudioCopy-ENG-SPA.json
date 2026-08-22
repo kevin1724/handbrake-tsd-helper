@@ -1,0 +1,58 @@
+{
+  "PresetList": [
+    {
+      "PresetName": "Plex-HEVC-QSV-1080p-ICQ28-Smaller-AudioCopy-ENG-SPA",
+      "PresetDescription": "Intel Quick Sync H.265/HEVC 10-bit 1080p preset for Plex. Caps output at 1920x1080 without upscaling, uses QSV Quality with ICQ 28, preserves HDR metadata, and passes through compatible ENG/SPA audio and subtitles.",
+      "Type": 1,
+      "Default": false,
+      "FileFormat": "av_mkv",
+      "Optimize": false,
+      "ChapterMarkers": true,
+      "MetadataPassthru": true,
+      "AudioCopyMask": [
+        "copy:aac",
+        "copy:ac3",
+        "copy:eac3",
+        "copy:truehd",
+        "copy:dts",
+        "copy:dtshd",
+        "copy:mp2",
+        "copy:mp3",
+        "copy:flac"
+      ],
+      "AudioEncoderFallback": "av_aac",
+      "AudioTrackSelectionBehavior": "all",
+      "AudioLanguageList": [
+        "eng",
+        "spa"
+      ],
+      "AudioList": [
+        {
+          "AudioEncoder": "copy"
+        }
+      ],
+      "VideoEncoder": "qsv_h265_10bit",
+      "VideoProfile": "main10",
+      "VideoLevel": "auto",
+      "VideoPreset": "quality",
+      "VideoQualityType": 2,
+      "VideoQualitySlider": 28,
+      "VideoMultiPass": false,
+      "VideoFramerateMode": "vfr",
+      "VideoFramerate": "auto",
+      "PictureWidth": 1920,
+      "PictureHeight": 1080,
+      "PictureUseMaximumSize": true,
+      "PictureKeepRatio": true,
+      "PictureAllowUpscaling": false,
+      "SubtitleTrackSelectionBehavior": "selected",
+      "SubtitleLanguageList": [
+        "eng",
+        "spa"
+      ]
+    }
+  ],
+  "VersionMajor": 59,
+  "VersionMinor": 0,
+  "VersionMicro": 0
+}

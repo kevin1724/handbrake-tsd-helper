@@ -42,6 +42,8 @@ OUT="${DIR}/${NAME}-${SUFFIX}.${EXT}"
 # Preset info comes from env (set by jobs.py based on preset key)
 PRESET_FILE="${HB_PRESET_FILE:-/presets/my-presets.json}"
 PRESET_NAME="${HB_PRESET_NAME:-MyPresetName}"
+DIMENSION_OPTS="${HB_DIMENSION_OPTS:-}"
+HW_DECODE_OPTS="${HB_HW_DECODE_OPTS:---disable-hw-decoding}"
 
 echo "=== HandBrake one-shot encode ==="
 echo "Source : $SRC"
@@ -50,6 +52,11 @@ echo "Suffix : -$SUFFIX"
 echo "Preset file : $PRESET_FILE"
 echo "Preset name : $PRESET_NAME"
 echo "HandBrake : $(HandBrakeCLI --version 2>&1 | sed -n '1p')"
+echo "[ByteSqueeze] Hardware decode: ${HB_HW_DECODE_LABEL:-software fallback (not configured)}"
+echo "[ByteSqueeze] Video encoder: ${HB_VIDEO_ENCODER:-unknown}"
+echo "[ByteSqueeze] Source resolution: ${HB_SOURCE_RESOLUTION:-unknown}"
+echo "[ByteSqueeze] Target resolution: ${HB_TARGET_RESOLUTION:-unknown}"
+echo "[ByteSqueeze] Selected preset: $PRESET_NAME"
 echo "=================================="
 
 # Safety: don't overwrite an existing output file
@@ -93,18 +100,44 @@ if [ -f "$PRESET_FILE" ]; then
   echo "Using preset file + preset name..."
 EXTRA_ARGS="${HB_EXTRA_ARGS:-}"
 
+set +e
 HandBrakeCLI \
   --preset-import-file "$PRESET_FILE" \
   -Z "$PRESET_NAME" \
   ${HB_THREAD_OPTS} \
   ${EXTRA_ARGS} \
+  ${DIMENSION_OPTS} \
+  ${HW_DECODE_OPTS} \
   -i "$SRC" \
   -o "$OUT"
+ENCODE_STATUS=$?
+set -e
+
+# Some H.264/HEVC streams advertise a profile the host QSV implementation
+# cannot decode. Keep the QSV encoder, discard only this new partial output,
+# and retry once with software decoding instead of failing the whole job.
+if [ "$ENCODE_STATUS" -ne 0 ] && [ "$HW_DECODE_OPTS" = "--enable-hw-decoding qsv" ]; then
+  echo "[ByteSqueeze] Hardware decode: software fallback (QSV decode attempt exited $ENCODE_STATUS)"
+  rm -f -- "$OUT"
+  HandBrakeCLI \
+    --preset-import-file "$PRESET_FILE" \
+    -Z "$PRESET_NAME" \
+    ${HB_THREAD_OPTS} \
+    ${EXTRA_ARGS} \
+    ${DIMENSION_OPTS} \
+    --disable-hw-decoding \
+    -i "$SRC" \
+    -o "$OUT"
+elif [ "$ENCODE_STATUS" -ne 0 ]; then
+  exit "$ENCODE_STATUS"
+fi
 
 else
   echo "WARNING: Preset file not found, using basic fallback settings..."
   HandBrakeCLI \
     ${HB_THREAD_OPTS} \
+    ${DIMENSION_OPTS} \
+    ${HW_DECODE_OPTS} \
     -i "$SRC" \
     -o "$OUT" \
     -e x264 -q 20 -B 160

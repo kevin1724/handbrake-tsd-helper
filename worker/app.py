@@ -17,6 +17,7 @@ from flask import Flask, jsonify, request
 
 from webui.app.events import log_event
 from webui.app.jobs import (
+    clear_finished_jobs,
     create_remote_transfer_job,
     get_job,
     get_job_summary,
@@ -43,7 +44,7 @@ from webui.app.presets import guess_preset_from_filename, load_preset_config
 from webui.app.settings import load_settings, save_settings
 
 
-WORKER_RELEASE = "2.4.0"
+WORKER_RELEASE = "2.5.0"
 
 
 def _public_encoding_policy() -> dict:
@@ -432,6 +433,28 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             error_message=job.get("error_message") or "",
             log=contents,
             truncated=truncated,
+        )
+
+    @app.post("/api/node/jobs/clear")
+    def worker_jobs_clear():
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        data = request.get_json(silent=True) or {}
+        target = str(data.get("target") or "finished").strip().lower()
+        if target != "finished":
+            return jsonify(error="only finished worker jobs can be cleared remotely"), 400
+        removed = clear_finished_jobs()
+        log_event(
+            "worker_jobs_cleared",
+            f"{controller.get('name') or 'Controller'} cleared {removed} finished worker job(s).",
+            level="info",
+        )
+        return jsonify(
+            ok=True,
+            removed=removed,
+            jobs=list_jobs_for_api(include_log_tail=True),
+            summary=get_job_summary(),
         )
 
     @app.post("/api/node/rotate_secret")

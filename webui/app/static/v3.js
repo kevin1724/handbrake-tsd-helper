@@ -31,7 +31,7 @@
 
   const currentPath = window.location.pathname;
   const currentRoute = routes.find(route => route.match(currentPath)) || routes[0];
-  const release = body.dataset.release || "3.15.0";
+  const release = body.dataset.release || "3.15.1";
 
   function escapeHtml(value) {
     return String(value).replace(/[&<>"']/g, character => ({

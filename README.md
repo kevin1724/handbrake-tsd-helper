@@ -300,6 +300,7 @@ encodes at the controller-managed limit; CPU/software work always runs alone.
 - Protocol discovery negotiates capabilities while remaining compatible with older workers
 - Paired nodes use trusted tokens for commands
 - Workers report heartbeat, status, progress, completed jobs, and errors
+- Worker jobs appear in the main Jobs queue, where completed and failed worker history can be cleared with the local history
 - Nodes can reconnect after normal offline periods
 - Prediction history is tracked per worker
 - Per-worker GPU capacity is configured only on the main node website
@@ -377,6 +378,23 @@ that advanced mode is no longer required for the normal setup.
 ## Intel QSV / Quick Sync
 
 The Docker image builds HandBrakeCLI with QSV support and installs Intel media runtime packages where available.
+QSV encoders automatically request QSV hardware decoding for supported H.264
+and HEVC sources. The setting applies to both controller and headless-worker
+encodes:
+
+```dotenv
+TSD_HW_DECODE=auto
+```
+
+- `auto` uses QSV decode when the selected video encoder is Intel QSV.
+- `qsv` prefers QSV decode for supported H.264/HEVC sources.
+- `off` disables hardware decoding.
+
+Unsupported streams stay on software decode. If an attempted QSV decode fails,
+ByteSqueeze removes only that attempt's partial output and retries once with
+software decoding while keeping the selected encoder. Encode logs show the
+source and target resolution, actual preset and encoder, requested decode path,
+and whether HandBrake verified the active QSV path.
 
 Rebuild after QSV-related Dockerfile changes:
 
@@ -443,14 +461,14 @@ docker run -d \
 ```
 
 The `latest` and `main` images are published automatically from `main`. Stable
-controller releases also publish `3.15.0` and `3.15` tags.
+controller releases also publish `3.15.1` and `3.15` tags.
 
 The encoding-only worker has its own public Docker Hub image:
 
 [kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
 
 `latest` and `main` follow the main branch. Stable worker releases also publish
-`2.4.0` and `2.4` tags:
+`2.5.0` and `2.5` tags:
 
 ```bash
 docker pull kevina1724/handbrake-tsd-worker:latest

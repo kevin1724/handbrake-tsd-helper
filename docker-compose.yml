@@ -16,6 +16,7 @@ services:
       - HB_DATA_DIR=/app/data         # job history + logs inside container
       - HB_PRESET_DIR=/presets        # preset folder inside container
       - LIBVA_DRIVER_NAME=iHD
+      - TSD_HW_DECODE=${TSD_HW_DECODE:-auto}
     volumes:
       # ✅ Media mount points
 

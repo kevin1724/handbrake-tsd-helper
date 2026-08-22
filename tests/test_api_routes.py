@@ -79,7 +79,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.15.0")
+        self.assertEqual(status.get_json()["release"], "3.15.1")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -115,6 +115,62 @@ class ApiRouteSmokeTests(unittest.TestCase):
             )
         finally:
             app_jobs.jobs.pop(job_id, None)
+
+    def test_main_jobs_api_combines_worker_rows_and_clear_proxies_to_workers(self):
+        worker_jobs = [
+            {
+                "id": "worker-job-running",
+                "status": "running",
+                "src": "/work/jobs/Movie.mkv",
+                "preset": "1080",
+                "preset_name": "Correct 1080p",
+                "has_log": True,
+            },
+            {
+                "id": "worker-job-error",
+                "status": "error",
+                "src": "/work/jobs/Failed.mkv",
+                "preset": "4k",
+            },
+        ]
+        public_node = {
+            "id": "worker-one",
+            "name": "Garage worker",
+            "jobs": worker_jobs,
+        }
+        private_node = {**public_node, "token": "secret", "url": "http://worker:8080"}
+        with patch("webui.app.routes.list_nodes_public", return_value=[public_node]):
+            response = self.client.get("/api/jobs")
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.get_json()
+        indexed = {item["id"]: item for item in payload["jobs"]}
+        running_id = "worker:worker-one:worker-job-running"
+        self.assertIn(running_id, indexed)
+        self.assertTrue(indexed[running_id]["is_worker_job"])
+        self.assertEqual(indexed[running_id]["node_name"], "Garage worker")
+        self.assertEqual(
+            indexed[running_id]["log_url"],
+            "/api/nodes/worker-one/jobs/worker-job-running/log",
+        )
+        self.assertGreaterEqual(payload["summary"]["counts"]["running"], 1)
+        self.assertGreaterEqual(payload["summary"]["counts"]["error"], 1)
+
+        with patch("webui.app.routes.clear_finished_jobs_core", return_value=3), patch(
+            "webui.app.routes.list_nodes_private",
+            return_value=[private_node],
+        ), patch(
+            "webui.app.routes.signed_json_request",
+            return_value={"ok": True, "removed": 2, "jobs": [worker_jobs[0]], "summary": {"counts": {"running": 1}}},
+        ) as signed_request, patch("webui.app.routes.save_node"):
+            cleared = self.client.post("/clear_finished_jobs")
+
+        self.assertEqual(cleared.status_code, 200)
+        self.assertEqual(cleared.get_json()["removed"], 5)
+        self.assertEqual(cleared.get_json()["local_removed"], 3)
+        self.assertEqual(cleared.get_json()["worker_removed"], 2)
+        self.assertEqual(signed_request.call_args.args[1], "/api/node/jobs/clear")
+        self.assertEqual(signed_request.call_args.kwargs["body"], {"target": "finished"})
 
     def test_v3_interface_can_fall_back_to_v2_without_touching_app_behavior(self):
         original = self.client.get("/api/settings").get_json()["settings"]
@@ -1174,7 +1230,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.15.0")
+        self.assertEqual(dashboard_payload["release"], "3.15.1")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

@@ -1116,12 +1116,15 @@ function renderV3RunningJobs(jobs, summary) {
     footer.className = 'v3-running-card-foot';
     const eta = document.createElement('span');
     eta.textContent = job.eta_seconds ? `${formatEta(job.eta_seconds)} remaining` : 'Calculating finish time';
-    const cancel = document.createElement('button');
-    cancel.type = 'button';
-    cancel.className = 'v3-inline-danger';
-    cancel.textContent = 'Cancel';
-    cancel.onclick = () => cancelJobById(job.id);
-    footer.append(eta, cancel);
+    footer.appendChild(eta);
+    if (!job.is_worker_job) {
+      const cancel = document.createElement('button');
+      cancel.type = 'button';
+      cancel.className = 'v3-inline-danger';
+      cancel.textContent = 'Cancel';
+      cancel.onclick = () => cancelJobById(job.id);
+      footer.appendChild(cancel);
+    }
 
     card.append(head, track, footer);
     panel.appendChild(card);
@@ -1215,14 +1218,14 @@ function refreshJobs() {
 
           const metaDiv = document.createElement('div');
           metaDiv.className = 'job-file-meta small';
-          metaDiv.textContent = formatDateTime(job.created_at);
+          metaDiv.textContent = [job.node_name || 'Main controller', formatDateTime(job.created_at)].filter(Boolean).join(' · ');
 
           tdSrc.appendChild(nameDiv);
           tdSrc.appendChild(metaDiv);
           tr.appendChild(tdSrc);
 
           const tdPreset = document.createElement('td');
-          tdPreset.appendChild(createBadge(job.preset || '', 'badge-preset'));
+          tdPreset.appendChild(createBadge(job.preset_name || job.preset || '', 'badge-preset'));
           tr.appendChild(tdPreset);
 
           const tdStatus = document.createElement('td');
@@ -1269,7 +1272,7 @@ function refreshJobs() {
           const tdLog = document.createElement('td');
           if (job.has_log) {
             const a = document.createElement('a');
-            a.href = '/job_log/' + encodeURIComponent(job.id);
+            a.href = job.log_url || ('/job_log/' + encodeURIComponent(job.id));
             a.textContent = 'Download';
             a.target = '_blank';
             tdLog.appendChild(a);
@@ -1345,12 +1348,19 @@ function refreshJobs() {
             tdActions.appendChild(removeBtn);
           }
 
-          if (job.status === 'running') {
+          if (job.status === 'running' && !job.is_worker_job) {
             const cancelBtn = document.createElement('button');
             cancelBtn.textContent = 'Cancel';
             cancelBtn.className = 'danger-outline';
             cancelBtn.onclick = () => cancelJobById(job.id);
             tdActions.appendChild(cancelBtn);
+          }
+
+          if (job.is_worker_job) {
+            const workerNote = document.createElement('div');
+            workerNote.className = 'queue-meta small';
+            workerNote.textContent = job.node_name ? `Worker: ${job.node_name}` : 'Linked worker';
+            tdActions.appendChild(workerNote);
           }
 
           tr.appendChild(tdActions);
@@ -1604,7 +1614,7 @@ function clearFinishedJobs() {
         return;
       }
       refreshJobs();
-      if (window.appToast) appToast('Finished queue rows cleared. Lifetime totals were kept.', 'success');
+      if (window.appToast) appToast(`Cleared ${Number(data.removed || 0)} finished controller and worker row(s). Lifetime totals were kept.`, 'success');
     })
     .catch(err => {
       console.error(err);

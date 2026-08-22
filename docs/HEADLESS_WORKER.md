@@ -57,6 +57,7 @@ across reboots:
 TSD_WORKER_WORK_DIR=/mnt/fast-ssd/bytesqueeze-worker
 TSD_WORKER_NAME=Garage QSV Worker
 TSD_WORKER_PORT=8082
+TSD_HW_DECODE=auto
 TZ=America/Los_Angeles
 ```
 
@@ -170,11 +171,20 @@ Use a hardware Smart Preset or a preset whose HandBrake `VideoEncoder` is QSV,
 NVENC, AMD/AMF, VideoToolbox, or VAAPI. Software encoders such as x264, x265,
 and SVT-AV1 intentionally remain single-job.
 
+For Intel QSV jobs, `TSD_HW_DECODE=auto` (the default) enables QSV decoding for
+supported H.264 and HEVC sources. Use `qsv` to prefer QSV decode independently
+of the selected encoder, or `off` to force software decode. Unsupported streams
+fall back to software automatically, and a failed QSV decode attempt is retried
+once with software decoding while preserving the selected QSV encoder.
+
 ## 5. Send work
 
 From Library or Queue on the main node, choose **Best worker** or select the
 named worker. No controller media folder needs to be mounted on a headless
 worker—the secure remote-transfer flow handles source and result movement.
+Worker rows are included in the main **Jobs** screen. **Clear finished** clears
+completed and failed history on both the controller and linked workers without
+touching queued, running, or waiting-to-upload work.
 
 ## Updating
 
@@ -237,6 +247,18 @@ TSD_WORKER_TRANSFER_ATTEMPTS=5
    ```bash
    docker exec -it bytesqueeze-worker check-qsv
    ```
+
+### QSV encoding works but decoding stays on the CPU
+
+Open the job log from the main Jobs screen. A supported active decode path
+contains ByteSqueeze's `Hardware decode: QSV` request plus HandBrake markers
+such as a nonzero `HardwareDecode`, `QSV Decode: true`, or `using full QSV`.
+The worker records `software fallback (<reason>)` when the source is unsupported
+or HandBrake cannot activate QSV decoding.
+
+Confirm `TSD_HW_DECODE` is `auto` or `qsv`, the preset's actual encoder is a QSV
+encoder, and `/dev/dri` is mapped. Then run `check-qsv` to inspect the render
+device, Intel runtime packages, and HandBrake QSV encoders.
 
 ### Work drive fills up
 
