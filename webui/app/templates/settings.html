@@ -3302,6 +3302,7 @@
         actions.className = "node-actions";
         const actionRows = [
           ["Save GPU capacity", () => saveWorkerCapacity(node.id, capacitySelect.value)],
+          ["Rename", () => renameLinkedNode(node)],
           ["Refresh", () => refreshNode(node.id)],
           ["Rotate secret", () => rotateNodeSecret(node.id)],
           ["Unlink", () => unlinkNode(node.id)],
@@ -3426,6 +3427,30 @@
         await loadNodes();
       } catch (err) {
         setNodeStatus(err.message || "Refresh failed", true);
+      }
+    }
+
+    async function renameLinkedNode(node) {
+      const currentName = node?.name || node?.worker_reported_name || "Worker";
+      const requestedName = prompt("Enter a unique name for this linked worker:", currentName);
+      if (requestedName === null) return;
+      const name = requestedName.trim();
+      if (!name) {
+        if (window.appToast) appToast("Worker name cannot be empty.", "error");
+        return;
+      }
+      try {
+        const res = await fetch(`/api/nodes/${encodeURIComponent(node.id)}/name`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || "Failed to rename worker");
+        if (window.appToast) appToast(`Worker renamed to ${data.node?.name || name}.`, "success");
+        await loadNodes();
+      } catch (err) {
+        if (window.appToast) appToast(err.message || "Failed to rename worker.", "error");
       }
     }
 

@@ -163,6 +163,7 @@ from .node_linking import (
     public_node,
     recover_pairing,
     recover_worker_session,
+    rename_node,
     renew_transfer_upload_grant,
     save_node,
     get_transfer,
@@ -2900,7 +2901,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.15.6"
+APP_RELEASE = "3.15.7"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -5512,7 +5513,10 @@ def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
         except (TypeError, ValueError):
             protocol_version = 1
         row.update({
-            "name": data.get("name") or row.get("name") or "Worker",
+            # Keep the controller alias stable. The worker's own configured
+            # name remains visible separately for diagnostics.
+            "name": row.get("name") or data.get("name") or "Worker",
+            "worker_reported_name": data.get("name") or row.get("worker_reported_name") or "",
             "last_heartbeat": time.time(),
             "heartbeat_misses": 0,
             "last_failed_at": 0,
@@ -8410,6 +8414,25 @@ def register_routes(app):
             node["prediction_profile"] = controller_profile
         node["controller_prediction_profile"] = controller_profile
         return jsonify(ok=True, node=node)
+
+    @app.route("/api/nodes/<node_id>/name", methods=["POST"])
+    def nodes_name_api(node_id):
+        data = request.get_json(silent=True) or {}
+        previous = get_node_private(node_id)
+        if not previous:
+            return jsonify(error="node not found"), 404
+        try:
+            row = rename_node(node_id, data.get("name") or "")
+        except LookupError:
+            return jsonify(error="node not found"), 404
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        log_event(
+            "node_renamed",
+            f"Renamed linked worker {previous.get('name') or node_id} to {row.get('name')}.",
+            level="info",
+        )
+        return jsonify(ok=True, node=public_node(row))
 
     @app.route("/api/nodes/refresh", methods=["POST"])
     def nodes_refresh_all_api():

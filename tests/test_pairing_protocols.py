@@ -221,7 +221,30 @@ class NodePairingProtocolTests(unittest.TestCase):
             repaired = node_linking.pair_worker("http://garage-worker:8080", "ABCDE-FGHJK")
 
         self.assertEqual(repaired["name"], "Garage Arc GPU")
+        self.assertEqual(repaired["worker_reported_name"], "ByteSqueeze Worker")
         self.assertEqual(node_linking.get_node_private("same-worker")["paired_at"], 123.0)
+
+    def test_controller_alias_is_persistent_and_unique(self):
+        node_linking.save_node({
+            "id": "worker-one",
+            "name": "ByteSqueeze Worker",
+            "worker_reported_name": "ByteSqueeze Worker",
+        })
+        node_linking.save_node({
+            "id": "worker-two",
+            "name": "ByteSqueeze Worker",
+            "worker_reported_name": "ByteSqueeze Worker",
+        })
+
+        renamed = node_linking.rename_node("worker-one", "  Garage   Arc GPU  ")
+
+        self.assertEqual(renamed["name"], "Garage Arc GPU")
+        self.assertEqual(renamed["worker_reported_name"], "ByteSqueeze Worker")
+        self.assertEqual(renamed["name_source"], "controller")
+        with self.assertRaisesRegex(ValueError, "already uses"):
+            node_linking.rename_node("worker-two", "garage arc gpu")
+        with self.assertRaisesRegex(ValueError, "required"):
+            node_linking.rename_node("worker-two", "   ")
 
     def test_headless_discovery_requires_remote_transfer(self):
         with mock.patch.dict(os.environ, {"TSD_WORKER_MODE": "1"}):

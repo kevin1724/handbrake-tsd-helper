@@ -80,7 +80,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.15.6")
+        self.assertEqual(status.get_json()["release"], "3.15.7")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -379,6 +379,60 @@ class ApiRouteSmokeTests(unittest.TestCase):
             )
         finally:
             app_node_linking.delete_node(node_id)
+
+    def test_linked_worker_alias_can_be_renamed_and_survives_heartbeat(self):
+        first_id = "rename-worker-one"
+        second_id = "rename-worker-two"
+        for node_id, url in (
+            (first_id, "http://worker-one:8080"),
+            (second_id, "http://worker-two:8080"),
+        ):
+            app_node_linking.save_node({
+                "id": node_id,
+                "name": "ByteSqueeze Worker",
+                "url": url,
+                "token": "test-token",
+                "recovery_token": "test-recovery-token",
+            })
+        try:
+            renamed = self.client.post(
+                f"/api/nodes/{first_id}/name",
+                json={"name": "Garage Arc GPU"},
+            )
+            self.assertEqual(renamed.status_code, 200, renamed.get_data(as_text=True))
+            self.assertEqual(renamed.get_json()["node"]["name"], "Garage Arc GPU")
+
+            duplicate = self.client.post(
+                f"/api/nodes/{second_id}/name",
+                json={"name": "garage arc gpu"},
+            )
+            self.assertEqual(duplicate.status_code, 400)
+
+            with patch(
+                "webui.app.routes.signed_json_request",
+                return_value={
+                    "name": "ByteSqueeze Worker",
+                    "summary": {"counts": {"queued": 0, "running": 0, "error": 0}},
+                    "jobs": [],
+                    "paired_controllers": [],
+                    "protocol_version": 2,
+                },
+            ):
+                refreshed = self.client.post(f"/api/nodes/{first_id}/refresh")
+
+            self.assertEqual(refreshed.status_code, 200, refreshed.get_data(as_text=True))
+            refreshed_node = refreshed.get_json()["node"]
+            self.assertEqual(refreshed_node["name"], "Garage Arc GPU")
+            self.assertEqual(refreshed_node["worker_reported_name"], "ByteSqueeze Worker")
+            self.assertEqual(app_node_linking.get_node_private(first_id)["name"], "Garage Arc GPU")
+
+            jobs_page = self.client.get("/jobs")
+            settings_page = self.client.get("/settings")
+            self.assertIn(b"Rename worker", jobs_page.data)
+            self.assertIn(b'["Rename", () => renameLinkedNode(node)]', settings_page.data)
+        finally:
+            app_node_linking.delete_node(first_id)
+            app_node_linking.delete_node(second_id)
 
     def test_worker_dispatch_carries_the_selected_workers_capacity(self):
         node_id = "four-slot-worker"
@@ -1531,7 +1585,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.15.6")
+        self.assertEqual(dashboard_payload["release"], "3.15.7")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

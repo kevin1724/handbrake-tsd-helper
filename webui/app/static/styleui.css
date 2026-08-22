@@ -619,6 +619,18 @@ td button {
   border-color: rgba(22, 199, 214, 0.22);
 }
 
+.node-card-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+button.node-compact-button {
+  min-height: 32px;
+  padding: 5px 9px;
+  font-size: 12px;
+}
+
 .linked-node-job-list {
   display: grid;
   gap: 8px;

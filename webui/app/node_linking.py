@@ -598,6 +598,8 @@ def public_node(row: dict) -> dict:
     return {
         "id": row.get("id"),
         "name": row.get("name") or "Worker",
+        "worker_reported_name": row.get("worker_reported_name") or "",
+        "name_source": row.get("name_source") or "controller",
         "url": row.get("url") or "",
         "role": row.get("role") or "worker",
         "online": online,
@@ -726,6 +728,41 @@ def save_node(row: dict) -> dict:
         merged = {**existing, **row, "id": node_id}
         nodes[node_id] = merged
         return merged
+
+    return _mutate_state(apply)
+
+
+def rename_node(node_id: str, name: str) -> dict:
+    """Set the controller-side alias for a linked worker."""
+    node_id = str(node_id or "").strip()
+    value = re.sub(r"\s+", " ", str(name or "")).strip()
+    if not value:
+        raise ValueError("worker name is required")
+    if len(value) > 80:
+        raise ValueError("worker name must be 80 characters or fewer")
+
+    def apply(data):
+        nodes = data.setdefault("nodes", {})
+        row = nodes.get(node_id)
+        if not isinstance(row, dict):
+            raise LookupError("node not found")
+        duplicate = next(
+            (
+                candidate
+                for candidate_id, candidate in nodes.items()
+                if str(candidate_id) != node_id
+                and isinstance(candidate, dict)
+                and str(candidate.get("name") or "").strip().casefold() == value.casefold()
+            ),
+            None,
+        )
+        if duplicate:
+            raise ValueError("another linked worker already uses that name")
+        row["name"] = value
+        row["name_source"] = "controller"
+        row["renamed_at"] = _now()
+        nodes[node_id] = row
+        return row
 
     return _mutate_state(apply)
 
@@ -963,6 +1000,8 @@ def pair_worker(
     row = {
         "id": worker_id,
         "name": display_name,
+        "worker_reported_name": response_name,
+        "name_source": "controller",
         "url": url,
         "role": "worker",
         "token": token,

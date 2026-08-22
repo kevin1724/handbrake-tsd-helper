@@ -44,7 +44,7 @@ from webui.app.presets import guess_preset_from_filename, load_preset_config
 from webui.app.settings import load_settings, save_settings
 
 
-WORKER_RELEASE = "2.5.6"
+WORKER_RELEASE = "2.5.7"
 
 
 def _public_encoding_policy() -> dict:
