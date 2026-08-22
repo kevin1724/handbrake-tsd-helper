@@ -30,6 +30,7 @@ import subprocess
 import http.client
 import shutil
 import traceback
+from copy import deepcopy
 from urllib.parse import urlparse
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -535,6 +536,26 @@ def _normalize_preset_bundle(bundle) -> dict | None:
         "contents": contents,
         "source": "controller",
     }
+
+
+def snapshot_preset_bundle(preset_key: str) -> dict | None:
+    """Capture the exact configured preset so queued work cannot drift later."""
+    key = str(preset_key or "1080").strip().lower()
+    if key not in {"1080", "4k"}:
+        key = "1080"
+    try:
+        file_path, preset_name = resolve_preset_file_and_name(key)
+        with open(file_path, "r", encoding="utf-8") as handle:
+            contents = handle.read()
+        return _normalize_preset_bundle({
+            "key": key,
+            "file_name": os.path.basename(file_path),
+            "name": preset_name,
+            "contents": contents,
+        })
+    except Exception as exc:
+        print(f"[WARN] Could not snapshot queued preset {key}: {exc}", flush=True)
+        return None
 
 
 def _materialize_job_preset(job_id: str, bundle) -> tuple[str, str, str] | None:
@@ -1450,8 +1471,22 @@ def save_jobs():
                 "preset": j.get("preset"),
                 "extra_args": j.get("extra_args", ""),
                 "mode": j.get("mode", "local"),
+                "dispatch_mode": j.get("dispatch_mode") or "local",
+                "dispatch_plan": j.get("dispatch_plan") if isinstance(j.get("dispatch_plan"), dict) else None,
+                "dispatch_node_id": j.get("dispatch_node_id") or "",
+                "dispatch_node_name": j.get("dispatch_node_name") or "",
+                "dispatch_error": j.get("dispatch_error") or "",
+                "dispatch_attempts": int(j.get("dispatch_attempts") or 0),
+                "dispatch_retry_at": float(j.get("dispatch_retry_at") or 0.0),
                 "transfer": j.get("transfer") if isinstance(j.get("transfer"), dict) else None,
                 "preset_bundle": _normalize_preset_bundle(j.get("preset_bundle")),
+                "preset_selection": j.get("preset_selection") or j.get("preset") or "1080",
+                "preset_adaptive": bool(j.get("preset_adaptive", False)),
+                "preset_preferences": j.get("preset_preferences") if isinstance(j.get("preset_preferences"), dict) else {},
+                "preset_snapshot_locked": bool(j.get("preset_snapshot_locked", bool(j.get("preset_bundle")))),
+                "preset_revision": max(1, int(j.get("preset_revision") or 1)),
+                "queued_preset_name": j.get("queued_preset_name") or "",
+                "preset_adaptation": j.get("preset_adaptation") if isinstance(j.get("preset_adaptation"), dict) else None,
                 "encoding_policy": _normalize_encoding_policy(j.get("encoding_policy")),
                 "encode_method": j.get("encode_method"),
                 "encoder": j.get("encoder"),
@@ -1483,6 +1518,8 @@ def save_jobs():
                 "started_at": j.get("started_at"),
                 "finished_at": j.get("finished_at"),
                 "duration_seconds": j.get("duration_seconds"),
+                "phase": j.get("phase") or j.get("status") or "",
+                "error_message": j.get("error_message") or "",
             }
 
         state = {
@@ -1550,9 +1587,26 @@ def load_jobs():
 
             status = j.get("status", "unknown")
             # If the container died while it was running, treat it as queued again.
-            if status == "running":
+            if status in {"running", "dispatching"}:
                 status = "queued"
             method = _encode_metadata_from_extra_args(j.get("extra_args", ""), j.get("preset"), j)
+            loaded_bundle = _normalize_preset_bundle(j.get("preset_bundle")) or snapshot_preset_bundle(j.get("preset") or "1080")
+            loaded_preset_name = str(j.get("queued_preset_name") or (loaded_bundle or {}).get("name") or j.get("preset") or "")
+            loaded_dispatch_plan = deepcopy(j.get("dispatch_plan")) if isinstance(j.get("dispatch_plan"), dict) else None
+            if j.get("mode") == "auto_node":
+                loaded_dispatch_plan = loaded_dispatch_plan or {}
+                loaded_dispatch_plan.setdefault("preset", j.get("preset"))
+                loaded_dispatch_plan.setdefault("preset_bundle", loaded_bundle)
+                loaded_dispatch_plan.setdefault("extra_args", j.get("extra_args", ""))
+                loaded_dispatch_plan.setdefault("encode_metadata", {})
+                loaded_dispatch_plan.setdefault("preset_selection", j.get("preset_selection") or j.get("preset") or "1080")
+                loaded_dispatch_plan.setdefault("preset_adaptive", bool(j.get("preset_adaptive", False)))
+                loaded_dispatch_plan.setdefault(
+                    "preset_preferences",
+                    j.get("preset_preferences") if isinstance(j.get("preset_preferences"), dict) else {},
+                )
+                loaded_dispatch_plan.setdefault("queued_preset_name", loaded_preset_name)
+                loaded_dispatch_plan.setdefault("preset_revision", max(1, int(j.get("preset_revision") or 1)))
 
             jobs[jid] = {
                 "status": status,
@@ -1560,8 +1614,22 @@ def load_jobs():
                 "preset": j.get("preset"),
                 "extra_args": j.get("extra_args", ""),
                 "mode": j.get("mode", "local"),
+                "dispatch_mode": j.get("dispatch_mode") or "local",
+                "dispatch_plan": loaded_dispatch_plan,
+                "dispatch_node_id": j.get("dispatch_node_id") or "",
+                "dispatch_node_name": j.get("dispatch_node_name") or "",
+                "dispatch_error": j.get("dispatch_error") or "",
+                "dispatch_attempts": int(j.get("dispatch_attempts") or 0),
+                "dispatch_retry_at": float(j.get("dispatch_retry_at") or 0.0),
                 "transfer": j.get("transfer") if isinstance(j.get("transfer"), dict) else None,
-                "preset_bundle": _normalize_preset_bundle(j.get("preset_bundle")),
+                "preset_bundle": loaded_bundle,
+                "preset_selection": j.get("preset_selection") or j.get("preset") or "1080",
+                "preset_adaptive": bool(j.get("preset_adaptive", False)),
+                "preset_preferences": j.get("preset_preferences") if isinstance(j.get("preset_preferences"), dict) else {},
+                "preset_snapshot_locked": True,
+                "preset_revision": max(1, int(j.get("preset_revision") or 1)),
+                "queued_preset_name": loaded_preset_name,
+                "preset_adaptation": j.get("preset_adaptation") if isinstance(j.get("preset_adaptation"), dict) else None,
                 "encoding_policy": _normalize_encoding_policy(j.get("encoding_policy")),
                 "encode_method": method.get("encode_method"),
                 "encoder": method.get("encoder"),
@@ -1593,6 +1661,12 @@ def load_jobs():
                 "started_at": j.get("started_at"),
                 "finished_at": j.get("finished_at"),
                 "duration_seconds": j.get("duration_seconds"),
+                "phase": (
+                    "waiting_for_node"
+                    if status == "queued" and j.get("mode") == "auto_node"
+                    else (j.get("phase") or status)
+                ),
+                "error_message": j.get("error_message") or "",
             }
 
         # rebuild queue, keeping only jobs that still exist and are queued
@@ -1633,7 +1707,7 @@ def _find_existing_active_job_for_src(src: str) -> str | None:
         job_id (str) if found, otherwise None.
     """
     for jid, j in jobs.items():
-        if j.get("src") == src and j.get("status") in ("queued", "running", "waiting_to_upload"):
+        if j.get("src") == src and j.get("status") in ("queued", "dispatching", "running", "waiting_to_upload"):
             return jid
     return None
 
@@ -1642,7 +1716,18 @@ def _find_existing_active_job_for_src(src: str) -> str | None:
 # Core job creation / lookup helpers (used by routes)
 # -------------------------------------------------------------------
 
-def create_job(src: str, preset: str, extra_args: str = "", preset_bundle: dict | None = None, encode_metadata: dict | None = None) -> str:
+def create_job(
+    src: str,
+    preset: str,
+    extra_args: str = "",
+    preset_bundle: dict | None = None,
+    encode_metadata: dict | None = None,
+    *,
+    dispatch_mode: str = "local",
+    preset_selection: str = "",
+    preset_adaptive: bool = False,
+    preset_preferences: dict | None = None,
+) -> str:
     """
     Create a single job and append it to the queue.
 
@@ -1668,15 +1753,56 @@ def create_job(src: str, preset: str, extra_args: str = "", preset_bundle: dict 
         return existing_id
 
     job_id = str(uuid.uuid4())
+    normalized_dispatch_mode = str(dispatch_mode or "local").strip().lower()
+    automatic_dispatch = normalized_dispatch_mode in {"auto", "available", "next_available"}
+    metadata_source = encode_metadata if isinstance(encode_metadata, dict) else {}
+    normalized_selection = str(preset_selection or metadata_source.get("preset_selection") or preset or "1080").strip().lower()
+    adaptive_encoder = bool(preset_adaptive or metadata_source.get("preset_adaptive") or normalized_selection == "smart")
+    preferences = preset_preferences if isinstance(preset_preferences, dict) else (
+        metadata_source.get("preset_preferences") if isinstance(metadata_source.get("preset_preferences"), dict) else {}
+    )
     method = _encode_metadata_from_extra_args(extra_args, preset, encode_metadata)
+    normalized_bundle = _normalize_preset_bundle(preset_bundle) or snapshot_preset_bundle(preset)
+    queued_preset_name = str((normalized_bundle or {}).get("name") or preset)
+    dispatch_plan = None
+    if automatic_dispatch:
+        dispatch_plan = {
+            "preset": preset,
+            "preset_bundle": normalized_bundle,
+            "extra_args": extra_args or "",
+            "encode_metadata": encode_metadata if isinstance(encode_metadata, dict) else {},
+            "preset_selection": normalized_selection,
+            "preset_adaptive": adaptive_encoder,
+            "preset_preferences": preferences,
+            "queued_preset_name": queued_preset_name,
+            "preset_revision": 1,
+        }
     jobs[job_id] = {
         "status": "queued",
         "src": src,
         "preset": preset,
         "extra_args": extra_args or "",
-        "mode": "local",
+        "mode": "auto_node" if automatic_dispatch else "local",
+        "dispatch_mode": "auto" if automatic_dispatch else "local",
+        "dispatch_plan": dispatch_plan,
+        "dispatch_node_id": "",
+        "dispatch_node_name": "Next available node" if automatic_dispatch else "Main controller",
+        "dispatch_error": "",
+        "dispatch_attempts": 0,
+        "dispatch_retry_at": 0.0,
         "transfer": None,
-        "preset_bundle": _normalize_preset_bundle(preset_bundle),
+        "preset_bundle": normalized_bundle,
+        "preset_selection": normalized_selection,
+        "preset_adaptive": adaptive_encoder,
+        "preset_preferences": preferences,
+        "preset_snapshot_locked": True,
+        "preset_revision": 1,
+        "queued_preset_name": queued_preset_name,
+        "preset_adaptation": (
+            metadata_source.get("preset_adaptation")
+            if isinstance(metadata_source.get("preset_adaptation"), dict)
+            else None
+        ),
         "encode_method": method.get("encode_method"),
         "encoder": method.get("encoder"),
         "video_codec": method.get("video_codec"),
@@ -1703,17 +1829,213 @@ def create_job(src: str, preset: str, extra_args: str = "", preset_bundle: dict 
         "started_at": None,
         "finished_at": None,
         "duration_seconds": None,
+        "phase": "waiting_for_node" if automatic_dispatch else "queued",
+        "error_message": "",
     }
     job_queue.append(job_id)
     save_jobs()
     log_event(
         "job_queued",
-        f"Queued: {os.path.basename(src)} ({preset}, {method.get('encode_method') or 'preset'})",
+        (
+            f"Queued for next available node: {os.path.basename(src)} "
+            f"({preset}, {method.get('encode_method') or 'preset'})"
+            if automatic_dispatch
+            else f"Queued: {os.path.basename(src)} ({preset}, {method.get('encode_method') or 'preset'})"
+        ),
         job_id=job_id,
         src=src,
     )
     ensure_dispatcher()
     return job_id
+
+
+def get_next_auto_dispatch_job() -> tuple[str, dict] | None:
+    """Return the oldest queueable automatic job without bypassing FIFO."""
+    now = _now_ts()
+    with DISPATCH_LOCK:
+        for job_id in list(job_queue):
+            job = jobs.get(job_id)
+            if not job:
+                continue
+            if job.get("status") != "queued":
+                continue
+            if job.get("mode") != "auto_node":
+                return None
+            if float(job.get("dispatch_retry_at") or 0.0) > now:
+                return None
+            return job_id, dict(job)
+    return None
+
+
+def _apply_planned_preset(job: dict, plan: dict, *, user_edit: bool = False) -> None:
+    """Apply one fully snapshotted plan without re-resolving it at run time."""
+    metadata = plan.get("encode_metadata") if isinstance(plan.get("encode_metadata"), dict) else {}
+    preset = str(plan.get("preset") or job.get("preset") or "1080")
+    bundle = _normalize_preset_bundle(plan.get("preset_bundle")) or snapshot_preset_bundle(preset)
+    method = _encode_metadata_from_extra_args(str(plan.get("extra_args") or ""), preset, metadata)
+    job.update({
+        "preset": preset,
+        "extra_args": str(plan.get("extra_args") or ""),
+        "preset_bundle": bundle,
+        "encode_method": method.get("encode_method"),
+        "encoder": method.get("encoder"),
+        "video_codec": method.get("video_codec"),
+        "encoder_family": method.get("encoder_family"),
+        "bit_depth": method.get("bit_depth"),
+        **_job_learning_metadata(metadata),
+    })
+    if isinstance(plan.get("preset_adaptation"), dict):
+        job["preset_adaptation"] = plan["preset_adaptation"]
+    if user_edit:
+        selection = str(plan.get("preset_selection") or preset).strip().lower()
+        job.update({
+            "preset_selection": selection,
+            "preset_adaptive": bool(plan.get("preset_adaptive") or selection == "smart"),
+            "preset_preferences": plan.get("preset_preferences") if isinstance(plan.get("preset_preferences"), dict) else {},
+            "preset_snapshot_locked": True,
+            "preset_revision": max(1, int(job.get("preset_revision") or 1)) + 1,
+            "queued_preset_name": str((bundle or {}).get("name") or preset),
+            "preset_adaptation": None,
+            "preset_last_edited_at": _now_ts(),
+        })
+
+
+def replace_queued_job_preset(job_id: str, plan: dict) -> tuple[bool, str | None]:
+    """Replace a queued job's immutable preset only after an explicit edit."""
+    with DISPATCH_LOCK:
+        job = jobs.get(job_id)
+        if not job:
+            return False, "job not found"
+        if job.get("status") != "queued":
+            return False, "only queued jobs can have their preset edited"
+        if not isinstance(plan, dict):
+            return False, "invalid preset plan"
+        _apply_planned_preset(job, plan, user_edit=True)
+        if job.get("mode") == "auto_node":
+            job["dispatch_plan"] = {
+                "preset": job.get("preset"),
+                "preset_bundle": job.get("preset_bundle"),
+                "extra_args": job.get("extra_args") or "",
+                "encode_metadata": plan.get("encode_metadata") if isinstance(plan.get("encode_metadata"), dict) else {},
+                "preset_selection": job.get("preset_selection"),
+                "preset_adaptive": bool(job.get("preset_adaptive")),
+                "preset_preferences": job.get("preset_preferences") if isinstance(job.get("preset_preferences"), dict) else {},
+                "queued_preset_name": job.get("queued_preset_name") or "",
+                "preset_revision": max(1, int(job.get("preset_revision") or 1)),
+            }
+        job["dispatch_error"] = ""
+        job["error_message"] = ""
+        job["dispatch_retry_at"] = 0.0
+    save_jobs()
+    DISPATCH_WAKE_EVENT.set()
+    return True, None
+
+
+def auto_dispatch_local_available(job_id: str) -> bool:
+    """Return whether the main controller can start this automatic job now."""
+    with DISPATCH_LOCK:
+        next_job = get_next_auto_dispatch_job()
+        if not next_job or next_job[0] != job_id:
+            return False
+        job = jobs.get(job_id)
+        if not job:
+            return False
+        running_jobs = [
+            jobs[running_id]
+            for running_id, thread in RUNNING_JOB_THREADS.items()
+            if running_id in jobs and thread.is_alive()
+        ]
+        return _can_dispatch_job(
+            job,
+            running_jobs,
+            _hardware_transcode_limit(job=job),
+        )
+
+
+def claim_auto_dispatch_job(job_id: str, node_id: str, node_name: str) -> dict | None:
+    """Atomically claim an automatic job before a remote queue request."""
+    with DISPATCH_LOCK:
+        next_job = get_next_auto_dispatch_job()
+        if not next_job or next_job[0] != job_id:
+            return None
+        job = jobs.get(job_id)
+        if not job:
+            return None
+        job["status"] = "dispatching"
+        job["phase"] = "dispatching_to_node"
+        job["dispatch_node_id"] = str(node_id or "")
+        job["dispatch_node_name"] = str(node_name or "Worker")
+        job["dispatch_error"] = ""
+        job["error_message"] = ""
+        job["dispatch_attempts"] = int(job.get("dispatch_attempts") or 0) + 1
+        snapshot = dict(job)
+    save_jobs()
+    return snapshot
+
+
+def release_auto_dispatch_job(job_id: str, error: str, retry_seconds: float = 3.0) -> bool:
+    """Put a failed remote claim back into the automatic queue."""
+    with DISPATCH_LOCK:
+        job = jobs.get(job_id)
+        if not job or job.get("mode") != "auto_node" or job.get("status") != "dispatching":
+            return False
+        message = str(error or "worker dispatch failed")[:300]
+        job["status"] = "queued"
+        job["phase"] = "waiting_for_node"
+        job["dispatch_node_id"] = ""
+        job["dispatch_node_name"] = "Next available node"
+        job["dispatch_error"] = message
+        job["error_message"] = message
+        job["dispatch_retry_at"] = _now_ts() + max(0.5, float(retry_seconds or 0.5))
+    save_jobs()
+    DISPATCH_WAKE_EVENT.set()
+    return True
+
+
+def complete_auto_dispatch_job(job_id: str) -> bool:
+    """Remove the controller placeholder after a worker accepted the job."""
+    with DISPATCH_LOCK:
+        job = jobs.get(job_id)
+        if not job or job.get("mode") != "auto_node" or job.get("status") != "dispatching":
+            return False
+        try:
+            job_queue.remove(job_id)
+        except ValueError:
+            pass
+        jobs.pop(job_id, None)
+    save_jobs()
+    DISPATCH_WAKE_EVENT.set()
+    return True
+
+
+def activate_auto_dispatch_locally(
+    job_id: str,
+    node_id: str = "",
+    node_name: str = "Main controller",
+    dispatch_plan: dict | None = None,
+) -> bool:
+    """Convert an automatic placeholder into a normal local queued job."""
+    with DISPATCH_LOCK:
+        next_job = get_next_auto_dispatch_job()
+        if not next_job or next_job[0] != job_id:
+            return False
+        job = jobs.get(job_id)
+        if not job:
+            return False
+        if isinstance(dispatch_plan, dict):
+            _apply_planned_preset(job, dispatch_plan)
+            job["dispatch_plan"] = dispatch_plan
+        job["mode"] = "local"
+        job["status"] = "queued"
+        job["phase"] = "queued"
+        job["dispatch_node_id"] = str(node_id or "")
+        job["dispatch_node_name"] = str(node_name or "Main controller")
+        job["dispatch_error"] = ""
+        job["error_message"] = ""
+        job["dispatch_retry_at"] = 0.0
+    save_jobs()
+    DISPATCH_WAKE_EVENT.set()
+    return True
 
 
 
@@ -1737,6 +2059,7 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
     """
     count = 0
     seen_in_batch: set[str] = set()
+    preset_snapshots: dict[str, dict | None] = {}
 
     for src, preset in files_and_presets:
         # Avoid duplicates within the same batch call
@@ -1750,13 +2073,23 @@ def create_jobs_batch(files_and_presets: list[tuple[str, str]]) -> int:
 
         job_id = str(uuid.uuid4())
         method = _encode_metadata_from_extra_args("", preset)
+        if preset not in preset_snapshots:
+            preset_snapshots[preset] = snapshot_preset_bundle(preset)
+        preset_bundle = preset_snapshots[preset]
         jobs[job_id] = {
             "status": "queued",
             "src": src,
             "preset": preset,
             "mode": "local",
             "transfer": None,
-            "preset_bundle": None,
+            "preset_bundle": preset_bundle,
+            "preset_selection": preset,
+            "preset_adaptive": False,
+            "preset_preferences": {},
+            "preset_snapshot_locked": True,
+            "preset_revision": 1,
+            "queued_preset_name": str((preset_bundle or {}).get("name") or preset),
+            "preset_adaptation": None,
             "encode_method": method.get("encode_method"),
             "encoder": method.get("encoder"),
             "video_codec": method.get("video_codec"),
@@ -1834,6 +2167,9 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
     }
     method = _encode_metadata_from_extra_args(extra_args, preset, encode_metadata or transfer.get("encode_metadata"))
     learning_metadata = encode_metadata or transfer.get("encode_metadata")
+    normalized_bundle = _normalize_preset_bundle(preset_bundle) or snapshot_preset_bundle(preset)
+    selection = str((learning_metadata or {}).get("preset_selection") or preset).strip().lower()
+    adaptive = bool((learning_metadata or {}).get("preset_adaptive") or (learning_metadata or {}).get("smart_preset"))
     jobs[job_id] = {
         "status": "queued",
         "src": display_src,
@@ -1841,7 +2177,14 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "extra_args": extra_args or "",
         "mode": "remote_transfer",
         "transfer": clean_transfer,
-        "preset_bundle": _normalize_preset_bundle(preset_bundle),
+        "preset_bundle": normalized_bundle,
+        "preset_selection": selection,
+        "preset_adaptive": adaptive,
+        "preset_preferences": (learning_metadata or {}).get("preset_preferences") if isinstance((learning_metadata or {}).get("preset_preferences"), dict) else {},
+        "preset_snapshot_locked": True,
+        "preset_revision": max(1, int((learning_metadata or {}).get("preset_revision") or 1)),
+        "queued_preset_name": str((learning_metadata or {}).get("queued_preset_name") or (normalized_bundle or {}).get("name") or preset),
+        "preset_adaptation": (learning_metadata or {}).get("preset_adaptation") if isinstance((learning_metadata or {}).get("preset_adaptation"), dict) else None,
         "encoding_policy": _normalize_encoding_policy(encoding_policy),
         "encode_method": method.get("encode_method"),
         "encoder": method.get("encoder"),
@@ -1927,13 +2270,27 @@ def list_jobs_for_api(*, include_log_tail: bool = False) -> list[dict]:
                 "src": j.get("src"),
                 "preset": j.get("preset"),
                 "preset_name": j.get("preset_name") or "",
+                "preset_selection": j.get("preset_selection") or j.get("preset") or "1080",
+                "preset_adaptive": bool(j.get("preset_adaptive", False)),
+                "preset_snapshot_locked": bool(j.get("preset_snapshot_locked", False)),
+                "preset_revision": max(1, int(j.get("preset_revision") or 1)),
+                "queued_preset_name": j.get("queued_preset_name") or str((j.get("preset_bundle") or {}).get("name") or j.get("preset") or ""),
+                "preset_adaptation": j.get("preset_adaptation") if isinstance(j.get("preset_adaptation"), dict) else None,
                 "encode_method": j.get("encode_method") or method.get("encode_method"),
                 "encoder": j.get("encoder") or method.get("encoder"),
                 "video_codec": j.get("video_codec") or method.get("video_codec"),
                 "encoder_family": j.get("encoder_family") or method.get("encoder_family"),
                 "bit_depth": j.get("bit_depth") or method.get("bit_depth"),
+                "uses_hardware_encoder": _job_uses_hardware_encoder(j),
                 **_job_learning_metadata(j),
                 "mode": j.get("mode", "local"),
+                "dispatch_mode": j.get("dispatch_mode") or "local",
+                "dispatch_node_id": j.get("dispatch_node_id") or "",
+                "dispatch_node_name": j.get("dispatch_node_name") or "",
+                "node_id": j.get("dispatch_node_id") or "",
+                "node_name": j.get("dispatch_node_name") or "",
+                "dispatch_error": j.get("dispatch_error") or "",
+                "dispatch_attempts": int(j.get("dispatch_attempts") or 0),
                 "transfer": _remote_transfer_public(j.get("transfer")) if j.get("mode") == "remote_transfer" else None,
                 "status": j.get("status"),
                 "returncode": j.get("returncode"),
@@ -2914,6 +3271,10 @@ def dispatcher_loop():
                         queue_changed = True
                         continue
                     if job.get("status") == "queued":
+                        # Automatic jobs must remain at the head of the queue
+                        # until the node coordinator assigns real capacity.
+                        if job.get("mode") == "auto_node":
+                            break
                         next_id = job_id
                         break
 

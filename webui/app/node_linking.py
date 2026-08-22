@@ -4,8 +4,11 @@ import hashlib
 import hmac
 import json
 import os
+import glob
+import re
 import secrets
 import shutil
+import subprocess
 import threading
 import time
 import uuid
@@ -44,9 +47,18 @@ NODE_CAPABILITIES = [
     "resilient-transfer-download",
     "qsv-hardware-decode",
     "remote-job-history-control",
+    "hardware-profile",
 ]
 STATE_LOCK = threading.RLock()
 TRANSFER_LOCK = threading.RLock()
+HARDWARE_PROFILE_LOCK = threading.RLock()
+HARDWARE_PROFILE_CACHE = {"expires_at": 0.0, "value": None}
+HARDWARE_ENCODERS = {
+    "qsv": ("qsv_h264", "qsv_h265", "qsv_h265_10bit", "qsv_av1", "qsv_av1_10bit"),
+    "nvenc": ("nvenc_h264", "nvenc_h265", "nvenc_h265_10bit", "nvenc_av1", "nvenc_av1_10bit"),
+    "vce": ("vce_h264", "vce_h265", "vce_h265_10bit", "vce_av1", "vce_av1_10bit"),
+    "software": ("x264", "x264_10bit", "x265", "x265_10bit", "x265_12bit", "svt_av1", "svt_av1_10bit"),
+}
 
 
 def _now() -> float:
@@ -58,6 +70,121 @@ def _safe_int(value, default: int = 0) -> int:
         return int(value)
     except (TypeError, ValueError):
         return int(default)
+
+
+def _read_gpu_vendor(path: str) -> str:
+    try:
+        with open(path, "r", encoding="utf-8", errors="replace") as handle:
+            value = handle.read().strip().lower()
+    except OSError:
+        return ""
+    return {
+        "0x8086": "intel",
+        "8086": "intel",
+        "0x1002": "amd",
+        "1002": "amd",
+        "0x10de": "nvidia",
+        "10de": "nvidia",
+    }.get(value, value)
+
+
+def encoder_hardware_profile(*, force: bool = False) -> dict:
+    """Report encoder families that are usable by this node's container."""
+    now = _now()
+    with HARDWARE_PROFILE_LOCK:
+        cached = HARDWARE_PROFILE_CACHE.get("value")
+        if not force and isinstance(cached, dict) and float(HARDWARE_PROFILE_CACHE.get("expires_at") or 0) > now:
+            return deepcopy(cached)
+
+        render_devices = sorted(glob.glob("/dev/dri/renderD*"))
+        vendors = {
+            vendor
+            for vendor in (
+                _read_gpu_vendor(path)
+                for path in glob.glob("/sys/class/drm/renderD*/device/vendor")
+            )
+            if vendor
+        }
+        if render_devices and not vendors:
+            driver = str(os.environ.get("LIBVA_DRIVER_NAME") or "").strip().lower()
+            if driver == "ihd":
+                vendors.add("intel")
+            elif driver in {"radeonsi", "amd"}:
+                vendors.add("amd")
+
+        nvidia_devices = sorted(glob.glob("/dev/nvidia[0-9]*"))
+        if nvidia_devices:
+            vendors.add("nvidia")
+        if shutil.which("nvidia-smi"):
+            try:
+                probe = subprocess.run(
+                    ["nvidia-smi", "-L"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                    check=False,
+                )
+                if probe.returncode == 0 and "GPU" in (probe.stdout or ""):
+                    vendors.add("nvidia")
+            except Exception:
+                pass
+
+        requested = {
+            value.strip().lower()
+            for value in re.split(r"[,;\s]+", str(os.environ.get("TSD_ENCODER_FAMILIES") or ""))
+            if value.strip()
+        }
+        families = set(requested.intersection(HARDWARE_ENCODERS))
+        if "intel" in vendors and render_devices:
+            families.add("qsv")
+        if "nvidia" in vendors:
+            families.add("nvenc")
+        if "amd" in vendors and render_devices:
+            families.add("vce")
+        families.add("software")
+
+        help_text = ""
+        handbrake = shutil.which("HandBrakeCLI")
+        if handbrake:
+            try:
+                help_result = subprocess.run(
+                    [handbrake, "--help"],
+                    capture_output=True,
+                    text=True,
+                    timeout=12,
+                    check=False,
+                )
+                help_text = f"{help_result.stdout}\n{help_result.stderr}".lower()
+            except Exception:
+                help_text = ""
+
+        encoders = []
+        usable_families = set()
+        for family in ("qsv", "nvenc", "vce", "software"):
+            if family not in families:
+                continue
+            supported = [name for name in HARDWARE_ENCODERS[family] if not help_text or name.lower() in help_text]
+            if not supported:
+                if help_text and family != "software":
+                    # A GPU device alone is not enough: the HandBrake build
+                    # must expose that encoder family too.
+                    continue
+                supported = list(HARDWARE_ENCODERS[family][:3])
+            usable_families.add(family)
+            encoders.extend(supported)
+
+        usable_families.add("software")
+        ordered_families = [family for family in ("qsv", "nvenc", "vce", "software") if family in usable_families]
+        value = {
+            "encoder_families": ordered_families,
+            "encoders": list(dict.fromkeys(encoders)),
+            "gpu_vendors": sorted(vendors),
+            "render_devices": render_devices,
+            "nvidia_devices": nvidia_devices,
+            "detected_at": now,
+        }
+        HARDWARE_PROFILE_CACHE.update({"expires_at": now + 60.0, "value": value})
+        return deepcopy(value)
 
 
 def _empty_state() -> dict:
@@ -174,6 +301,7 @@ def node_discovery() -> dict:
         "protocol_version": NODE_PROTOCOL_VERSION,
         "state_schema_version": NODE_STATE_SCHEMA_VERSION,
         "capabilities": capabilities,
+        "hardware": encoder_hardware_profile(),
         "worker_mode": "headless" if headless else "full",
         "requires_remote_transfer": headless,
         "recommended_transfer_mode": "remote" if headless else "auto",
@@ -472,6 +600,7 @@ def public_node(row: dict) -> dict:
         "prediction_profile": row.get("prediction_profile") if isinstance(row.get("prediction_profile"), dict) else {},
         "protocol_version": max(1, _safe_int(row.get("protocol_version"), 1)),
         "capabilities": row.get("capabilities") if isinstance(row.get("capabilities"), list) else [],
+        "hardware": row.get("hardware") if isinstance(row.get("hardware"), dict) else {},
         "last_success_at": row.get("last_success_at") or 0,
         "consecutive_failures": _safe_int(row.get("consecutive_failures"), heartbeat_misses),
     }
@@ -530,6 +659,7 @@ def local_node_overview() -> dict:
         "paired_controller_count": len(controllers),
         "paired_workers": workers,
         "paired_controllers": controllers,
+        "hardware": encoder_hardware_profile(),
     }
 
 
@@ -754,6 +884,9 @@ def pair_worker(
         "capabilities": data.get("capabilities") if isinstance(data.get("capabilities"), list) else (
             discovery.get("capabilities") if isinstance(discovery.get("capabilities"), list) else []
         ),
+        "hardware": data.get("hardware") if isinstance(data.get("hardware"), dict) else (
+            discovery.get("hardware") if isinstance(discovery.get("hardware"), dict) else {}
+        ),
         "pair_request_id": request_id,
         "pair_retry_recovered": bool(data.get("retry_recovered")),
     }
@@ -789,6 +922,7 @@ def recover_worker_session(row: dict, *, controller_url: str = "") -> dict:
         "status": "reconnecting",
         "protocol_version": max(1, _safe_int(data.get("protocol_version"), row.get("protocol_version") or 1)),
         "capabilities": data.get("capabilities") if isinstance(data.get("capabilities"), list) else row.get("capabilities", []),
+        "hardware": data.get("hardware") if isinstance(data.get("hardware"), dict) else row.get("hardware", {}),
     }
     return save_node(updated)
 

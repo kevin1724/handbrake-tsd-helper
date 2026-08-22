@@ -20,6 +20,7 @@ os.environ["HB_MEDIA_BASE"] = TEST_MEDIA
 os.environ["HB_ROOTS_JSON"] = json.dumps([[TEST_MEDIA, "Test media"]])
 os.environ["FLASK_DEBUG"] = "0"
 os.environ["FLASK_ENV"] = "production"
+os.environ["TSD_DISABLE_AUTO_NODE_DISPATCH"] = "1"
 
 from webui.app import create_app  # noqa: E402
 from webui.app import config as app_config  # noqa: E402
@@ -79,7 +80,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.15.4")
+        self.assertEqual(status.get_json()["release"], "3.15.5")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -96,6 +97,9 @@ class ApiRouteSmokeTests(unittest.TestCase):
         jobs_page = self.client.get("/jobs")
         self.assertEqual(jobs_page.status_code, 200)
         self.assertIn(b"Jobs &amp; Queue", jobs_page.data)
+        self.assertIn(b"Next available node", jobs_page.data)
+        self.assertIn(b"Edit preset", jobs_page.data)
+        self.assertIn(b"Next available node", library_page.data)
 
         job_id = "jobs-dashboard-route-regression"
         app_jobs.jobs[job_id] = {
@@ -441,6 +445,303 @@ class ApiRouteSmokeTests(unittest.TestCase):
             )
         finally:
             app_node_linking.delete_node(worker["id"])
+
+    def test_next_available_dispatch_creates_persistent_auto_queue_jobs(self):
+        media_path = os.path.join(TEST_MEDIA, "Automatic.Dispatch.Movie.1080p.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"automatic-dispatch")
+        plan = {
+            "preset": "1080",
+            "preset_bundle": None,
+            "extra_args": "--encoder qsv_h265_10bit",
+            "encode_metadata": {
+                "encoder": "qsv_h265_10bit",
+                "encoder_family": "qsv",
+            },
+        }
+        with (
+            patch("webui.app.routes._node_queue_plan", return_value=plan),
+            patch("webui.app.routes.create_job", return_value="auto-job-id") as create,
+            patch("webui.app.routes._wake_auto_node_dispatch") as wake,
+        ):
+            response = self.client.post(
+                "/api/nodes/dispatch",
+                json={
+                    "mode": "available",
+                    "preset": "1080",
+                    "paths": [media_path],
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        self.assertEqual(response.get_json()["target"], "next available node")
+        self.assertEqual(response.get_json()["job_ids"], ["auto-job-id"])
+        self.assertEqual(create.call_args.kwargs["dispatch_mode"], "auto")
+        self.assertEqual(create.call_args.kwargs["encode_metadata"]["encoder"], "qsv_h265_10bit")
+        wake.assert_called_once_with()
+
+    @staticmethod
+    def _video_preset_bundle(encoder="qsv_h265_10bit", name="Smart HEVC 10-bit"):
+        return {
+            "key": "1080",
+            "file_name": "smart.json",
+            "name": name,
+            "contents": json.dumps({
+                "PresetList": [{
+                    "PresetName": name,
+                    "VideoEncoder": encoder,
+                    "VideoQualitySlider": 24,
+                    "AudioList": [{"AudioEncoder": "copy", "PresetEncoder": "copy"}],
+                    "SubtitleAddForeignAudioSearch": True,
+                }],
+            }),
+        }
+
+    def test_video_encoder_detection_never_reads_audio_copy_encoder(self):
+        plan = {
+            "preset_bundle": self._video_preset_bundle(),
+            "extra_args": "",
+            "encode_metadata": {"encoder_family": "preset"},
+        }
+        encoder, family, codec, depth = app_routes._plan_encoder(plan)
+        self.assertEqual(encoder, "qsv_h265_10bit")
+        self.assertEqual((family, codec, depth), ("qsv", "h265", "10"))
+
+    def test_smart_plan_uses_closest_node_encoder_and_preserves_preferences(self):
+        plan = {
+            "preset": "1080",
+            "preset_bundle": self._video_preset_bundle(),
+            "extra_args": "--encoder qsv_h265_10bit --encoder-preset speed --width 1920 --height 1080 --all-audio --all-subtitles",
+            "preset_selection": "smart",
+            "preset_adaptive": True,
+            "preset_preferences": {"video_codec": "h265", "bit_depth": "10", "audio_mode": "copy"},
+            "encode_metadata": {
+                "smart_preset": True,
+                "encoder": "qsv_h265_10bit",
+                "encoder_family": "qsv",
+                "video_codec": "h265",
+                "bit_depth": "10",
+            },
+        }
+        node = {
+            "id": "nvidia-worker",
+            "name": "NVIDIA worker",
+            "hardware": {
+                "encoder_families": ["nvenc", "software"],
+                "encoders": ["nvenc_h265_10bit", "x265_10bit"],
+            },
+        }
+
+        derived = app_routes._prepare_plan_for_node(plan, node)
+        preset = json.loads(derived["preset_bundle"]["contents"])["PresetList"][0]
+
+        self.assertEqual(derived["encode_metadata"]["encoder"], "nvenc_h265_10bit")
+        self.assertEqual(derived["encode_metadata"]["encoder_family"], "nvenc")
+        self.assertIn("--encoder nvenc_h265_10bit", derived["extra_args"])
+        self.assertNotIn("--encoder-preset", derived["extra_args"])
+        self.assertIn("--width 1920 --height 1080", derived["extra_args"])
+        self.assertIn("--all-audio", derived["extra_args"])
+        self.assertIn("--all-subtitles", derived["extra_args"])
+        self.assertEqual(preset["VideoEncoder"], "nvenc_h265_10bit")
+        self.assertEqual(preset["AudioList"][0]["AudioEncoder"], "copy")
+        self.assertTrue(preset["SubtitleAddForeignAudioSearch"])
+        self.assertEqual(derived["preset_preferences"], plan["preset_preferences"])
+        self.assertEqual(derived["preset_adaptation"]["from_encoder"], "qsv_h265_10bit")
+        self.assertEqual(derived["preset_adaptation"]["to_encoder"], "nvenc_h265_10bit")
+
+    def test_smart_plan_falls_back_to_matching_software_encoder(self):
+        plan = {
+            "preset": "4k",
+            "preset_bundle": self._video_preset_bundle(name="Smart 4K"),
+            "extra_args": "--encoder qsv_h265_10bit --all-audio",
+            "preset_selection": "smart",
+            "preset_adaptive": True,
+            "encode_metadata": {
+                "smart_preset": True,
+                "encoder": "qsv_h265_10bit",
+                "encoder_family": "qsv",
+                "video_codec": "h265",
+                "bit_depth": "10",
+            },
+        }
+        derived = app_routes._prepare_plan_for_node(
+            plan,
+            {
+                "id": "cpu-worker",
+                "name": "CPU worker",
+                "hardware": {
+                    "encoder_families": ["software"],
+                    "encoders": ["x265_10bit"],
+                },
+            },
+        )
+        self.assertEqual(derived["encode_metadata"]["encoder"], "x265_10bit")
+        self.assertEqual(derived["encode_metadata"]["encoder_family"], "software")
+        self.assertIn("--encoder x265_10bit", derived["extra_args"])
+        self.assertIn("--all-audio", derived["extra_args"])
+
+    def test_locked_preset_is_rejected_instead_of_rewritten(self):
+        plan = {
+            "preset": "1080",
+            "preset_bundle": self._video_preset_bundle(),
+            "extra_args": "",
+            "preset_selection": "1080",
+            "preset_adaptive": False,
+            "encode_metadata": {"encoder_family": "preset"},
+        }
+        original = json.loads(json.dumps(plan))
+        with self.assertRaisesRegex(ValueError, "does not support locked video encoder qsv_h265_10bit"):
+            app_routes._prepare_plan_for_node(
+                plan,
+                {
+                    "name": "NVIDIA-only worker",
+                    "hardware": {
+                        "encoder_families": ["nvenc", "software"],
+                        "encoders": ["nvenc_h265_10bit", "x265_10bit"],
+                    },
+                },
+            )
+        self.assertEqual(plan, original)
+
+    def test_queued_preset_changes_only_through_edit_endpoint(self):
+        job_id = "explicit-preset-edit"
+        src = os.path.join(TEST_MEDIA, "Edit.Preset.Movie.mkv")
+        with open(src, "wb") as handle:
+            handle.write(b"preset-edit")
+        original_bundle = self._video_preset_bundle(name="Original queued preset")
+        replacement_bundle = self._video_preset_bundle(encoder="x265_10bit", name="Edited preset")
+        app_jobs.jobs[job_id] = {
+            "status": "queued",
+            "src": src,
+            "preset": "1080",
+            "extra_args": "",
+            "mode": "local",
+            "preset_bundle": original_bundle,
+            "preset_selection": "1080",
+            "preset_adaptive": False,
+            "preset_preferences": {},
+            "preset_snapshot_locked": True,
+            "preset_revision": 1,
+            "queued_preset_name": "Original queued preset",
+        }
+        app_jobs.job_queue.append(job_id)
+        plan = {
+            "preset": "1080",
+            "preset_bundle": replacement_bundle,
+            "extra_args": "--encoder x265_10bit",
+            "preset_selection": "1080",
+            "preset_adaptive": False,
+            "preset_preferences": {},
+            "encode_metadata": {"encoder": "x265_10bit", "encoder_family": "software"},
+        }
+        try:
+            with (
+                patch.object(app_routes, "_node_queue_plan", return_value=plan),
+                patch.object(app_jobs, "save_jobs"),
+                patch.object(app_routes, "_wake_auto_node_dispatch"),
+                patch.object(app_routes, "log_event"),
+            ):
+                response = self.client.post(f"/api/jobs/{job_id}/preset", json={"preset": "1080"})
+            self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+            updated = app_jobs.jobs[job_id]
+            self.assertEqual(updated["queued_preset_name"], "Edited preset")
+            self.assertEqual(updated["preset_revision"], 2)
+            self.assertEqual(updated["encoder"], "x265_10bit")
+            self.assertTrue(updated["preset_snapshot_locked"])
+        finally:
+            app_jobs.jobs.pop(job_id, None)
+            while job_id in app_jobs.job_queue:
+                app_jobs.job_queue.remove(job_id)
+
+    def test_auto_worker_capacity_accepts_hardware_slots_but_not_software_work(self):
+        auto_job = {
+            "encoder": "qsv_h265_10bit",
+            "encoder_family": "qsv",
+        }
+        base = {
+            "id": "capacity-worker",
+            "name": "Capacity worker",
+            "online": True,
+            "status": "running",
+            "last_heartbeat": app_routes.time.time(),
+            "hardware_transcode_concurrency": 2,
+            "summary": {"counts": {"queued": 0, "running": 1}},
+        }
+        hardware_row = {
+            **base,
+            "jobs": [{"status": "running", "uses_hardware_encoder": True}],
+        }
+        software_row = {
+            **base,
+            "jobs": [{"status": "running", "uses_hardware_encoder": False}],
+        }
+        self.assertTrue(app_routes._worker_available_for_auto(hardware_row, auto_job)[0])
+        self.assertFalse(app_routes._worker_available_for_auto(software_row, auto_job)[0])
+
+        smart_qsv_job = {
+            "dispatch_plan": {
+                "preset": "1080",
+                "preset_bundle": self._video_preset_bundle(),
+                "extra_args": "--encoder qsv_h265_10bit",
+                "preset_selection": "smart",
+                "preset_adaptive": True,
+                "encode_metadata": {
+                    "smart_preset": True,
+                    "encoder": "qsv_h265_10bit",
+                    "encoder_family": "qsv",
+                    "video_codec": "h265",
+                    "bit_depth": "10",
+                },
+            },
+        }
+        cpu_busy_row = {
+            **hardware_row,
+            "hardware": {
+                "encoder_families": ["software"],
+                "encoders": ["x265_10bit"],
+            },
+        }
+        self.assertFalse(app_routes._worker_available_for_auto(cpu_busy_row, smart_qsv_job)[0])
+
+    def test_auto_dispatch_loop_claims_the_oldest_job_for_an_available_worker(self):
+        pending_job = {
+            "src": os.path.join(TEST_MEDIA, "Oldest.Automatic.Movie.mkv"),
+            "preset": "1080",
+            "encoder": "qsv_h265_10bit",
+            "encoder_family": "qsv",
+            "dispatch_plan": {
+                "preset": "1080",
+                "preset_bundle": None,
+                "extra_args": "--encoder qsv_h265_10bit",
+                "encode_metadata": {"encoder": "qsv_h265_10bit", "encoder_family": "qsv"},
+            },
+        }
+        claimed = {**pending_job, "status": "dispatching"}
+        worker = {"id": "next-worker", "name": "Next worker"}
+        stop = unittest.mock.Mock()
+        stop.is_set.side_effect = [False, True]
+        with (
+            patch.object(app_routes, "AUTO_NODE_DISPATCH_STOP", stop),
+            patch.object(app_routes, "get_queue_state", return_value=False),
+            patch.object(app_routes, "get_next_auto_dispatch_job", return_value=("oldest-job", pending_job)),
+            patch.object(app_routes, "auto_dispatch_local_available", return_value=False),
+            patch.object(app_routes, "list_nodes_private", return_value=[worker]),
+            patch.object(app_routes, "_worker_available_for_auto", return_value=(True, 0.0)),
+            patch.object(app_routes, "claim_auto_dispatch_job", return_value=claimed) as claim,
+            patch.object(
+                app_routes,
+                "_dispatch_plan_to_worker",
+                return_value=(worker, {"ok": True, "count": 1}, "remote"),
+            ) as dispatch,
+            patch.object(app_routes, "complete_auto_dispatch_job", return_value=True) as complete,
+            patch.object(app_routes, "_refresh_linked_node", return_value=worker),
+            patch.object(app_routes, "log_event"),
+        ):
+            app_routes._auto_node_dispatch_loop()
+
+        claim.assert_called_once_with("oldest-job", "next-worker", "Next worker")
+        self.assertEqual(dispatch.call_args.kwargs["require_available_for"], claimed)
+        complete.assert_called_once_with("oldest-job")
 
     def test_library_local_smart_batch_keeps_tuning_for_every_file(self):
         paths = []
@@ -1230,7 +1531,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.15.4")
+        self.assertEqual(dashboard_payload["release"], "3.15.5")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

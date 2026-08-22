@@ -77,6 +77,30 @@ class NodePairingProtocolTests(unittest.TestCase):
         self.assertIn("controller-encoding-policy", discovery["capabilities"])
         self.assertIn("gpu-multi-encode", discovery["capabilities"])
         self.assertIn("cpu-software-exclusive", discovery["capabilities"])
+        self.assertIn("hardware-profile", discovery["capabilities"])
+        self.assertIn("hardware", discovery)
+
+    def test_encoder_hardware_profile_reports_available_gpu_families(self):
+        def fake_glob(pattern):
+            if pattern == "/dev/dri/renderD*":
+                return ["/dev/dri/renderD128"]
+            if pattern == "/sys/class/drm/renderD*/device/vendor":
+                return ["/sys/class/drm/renderD128/device/vendor"]
+            if pattern == "/dev/nvidia[0-9]*":
+                return ["/dev/nvidia0"]
+            return []
+
+        with (
+            mock.patch.object(node_linking.glob, "glob", side_effect=fake_glob),
+            mock.patch.object(node_linking, "_read_gpu_vendor", return_value="intel"),
+            mock.patch.object(node_linking.shutil, "which", return_value=None),
+        ):
+            profile = node_linking.encoder_hardware_profile(force=True)
+
+        self.assertEqual(profile["encoder_families"], ["qsv", "nvenc", "software"])
+        self.assertIn("qsv_h265_10bit", profile["encoders"])
+        self.assertIn("nvenc_h265_10bit", profile["encoders"])
+        self.assertIn("x265_10bit", profile["encoders"])
 
     def test_headless_worker_forces_remote_mode_and_drops_path_mappings(self):
         responses = [

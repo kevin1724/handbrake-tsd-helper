@@ -147,6 +147,18 @@
               <option value="4k">Force 4K preset</option>
             </select>
           </div>
+          <div class="field-stack">
+            <label for="queueDispatchModeSelect">Run on</label>
+            <select id="queueDispatchModeSelect">
+              <option value="available" selected>Next available node</option>
+              <option value="local">Local controller</option>
+              <option value="node">Specific worker</option>
+            </select>
+            <select id="queueDispatchNodeSelect" aria-label="Specific worker" disabled>
+              <option value="">No workers paired</option>
+            </select>
+            <span class="small">Automatic jobs wait in this queue until the main controller or a linked worker has capacity.</span>
+          </div>
           <div class="button-row">
             <button id="startBtn" type="button" disabled>Start Encode</button>
             <button id="cancelBtn" type="button" disabled>Cancel Encode</button>
@@ -293,6 +305,8 @@ let statusTimer = null;
 let jobsTimer = null;
 let linkedNodesTimer = null;
 let operationsTimer = null;
+let queueLinkedNodes = [];
+let currentJobAutoDispatch = false;
 
 // --------------------------
 // Jobs page view mode
@@ -670,14 +684,24 @@ function searchMedia() {
 function startEncode() {
   const src = document.getElementById('selectedFile').value;
   const preset = document.getElementById('presetSelect').value;
+  const dispatchMode = document.getElementById('queueDispatchModeSelect')?.value || 'available';
+  const nodeId = document.getElementById('queueDispatchNodeSelect')?.value || '';
   if (!src) {
     alert('Pick a video file first.');
     return;
   }
-  fetch('/encode', {
+  if (dispatchMode === 'node' && !nodeId) {
+    alert('Pick a specific worker first.');
+    return;
+  }
+  const endpoint = dispatchMode === 'local' ? '/encode' : '/api/nodes/dispatch';
+  const payload = dispatchMode === 'local'
+    ? {src, preset}
+    : {paths: [src], preset, mode: dispatchMode, node_id: nodeId};
+  fetch(endpoint, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({src, preset})
+    body: JSON.stringify(payload)
   })
   .then(r => r.json())
   .then(data => {
@@ -685,21 +709,26 @@ function startEncode() {
       alert(data.error);
       return;
     }
-    currentJobId = data.job_id;
-    if (window.appToast) appToast('Encode queued.', 'success');
-    if (window.setAppStatus) setAppStatus('Encoding', 'encoding');
-    setTextIfPresent('statusText', 'Job queued: ' + currentJobId);
+    currentJobId = data.job_id || (Array.isArray(data.job_ids) ? data.job_ids[0] : null);
+    currentJobAutoDispatch = dispatchMode === 'available';
+    const target = dispatchMode === 'available'
+      ? 'next available node'
+      : (dispatchMode === 'node' ? (data.target?.name || 'selected worker') : 'local controller');
+    if (window.appToast) appToast(`Encode queued for ${target}.`, 'success');
+    if (window.setAppStatus) setAppStatus('Queued', 'encoding');
+    setTextIfPresent('statusText', currentJobId ? ('Job queued: ' + currentJobId) : (`Queued on ${target}`));
     setTextIfPresent('statusBox', '');
     const pb = document.getElementById('progressBar');
     pb.style.display = 'block';
     pb.value = 0;
     document.getElementById('progressLabel').textContent = 'Queued';
 
-    document.getElementById('cancelBtn').disabled = false;
+    document.getElementById('cancelBtn').disabled = !currentJobId;
 
     if (statusTimer) clearInterval(statusTimer);
-    statusTimer = setInterval(checkStatus, 2000);
+    if (currentJobId) statusTimer = setInterval(checkStatus, 2000);
     refreshJobs();
+    refreshLinkedNodesStatus();
   })
   .catch(err => {
     console.error(err);
@@ -743,6 +772,16 @@ function checkStatus() {
     .then(r => r.json())
     .then(data => {
       if (data.error) {
+        if (currentJobAutoDispatch && data.error === 'job not found') {
+          setTextIfPresent('statusText', 'Assigned to an available linked worker.');
+          document.getElementById('cancelBtn').disabled = true;
+          currentJobId = null;
+          currentJobAutoDispatch = false;
+          clearInterval(statusTimer);
+          refreshJobs();
+          refreshLinkedNodesStatus();
+          return;
+        }
         setTextIfPresent('statusText', 'Error: ' + data.error);
         clearInterval(statusTimer);
         return;
@@ -1225,7 +1264,16 @@ function refreshJobs() {
           tr.appendChild(tdSrc);
 
           const tdPreset = document.createElement('td');
-          tdPreset.appendChild(createBadge(job.preset_name || job.preset || '', 'badge-preset'));
+          tdPreset.appendChild(createBadge(job.queued_preset_name || job.preset_name || job.preset || '', 'badge-preset'));
+          if (job.preset_adaptation) {
+            const adaptation = document.createElement('div');
+            adaptation.className = 'small';
+            const fromEncoder = job.preset_adaptation.from_encoder || 'queued encoder';
+            const toEncoder = job.preset_adaptation.to_encoder || 'software';
+            adaptation.textContent = `Smart for this node: ${fromEncoder} → ${toEncoder}`;
+            adaptation.title = job.preset_adaptation.reason || '';
+            tdPreset.appendChild(adaptation);
+          }
           tr.appendChild(tdPreset);
 
           const tdStatus = document.createElement('td');
@@ -1235,7 +1283,9 @@ function refreshJobs() {
           else if (status === 'error') statusClass = 'badge-status-error';
           else if (status === 'running') statusClass = 'badge-status-running';
           else if (status === 'canceled') statusClass = 'badge-status-canceled';
-          const statusLabel = job.auto_stop_triggered ? 'auto stopped' : (job.status || '');
+          const statusLabel = job.auto_stop_triggered
+            ? 'auto stopped'
+            : (job.dispatch_mode === 'auto' && status === 'queued' ? 'waiting for node' : (job.status || ''));
           tdStatus.appendChild(createBadge(statusLabel, statusClass));
           if (job.auto_stop_triggered && job.auto_stop_details) {
             const stopNote = document.createElement('div');
@@ -1341,6 +1391,16 @@ function refreshJobs() {
             moveWrap.appendChild(goBtn);
             tdActions.appendChild(moveWrap);
 
+            if (!job.is_worker_job) {
+              const editPresetBtn = document.createElement('button');
+              editPresetBtn.textContent = 'Edit preset';
+              editPresetBtn.onclick = () => editQueuedPreset(job).catch(err => {
+                console.error(err);
+                alert(err.message || 'Preset edit failed');
+              });
+              tdActions.appendChild(editPresetBtn);
+            }
+
             const removeBtn = document.createElement('button');
             removeBtn.textContent = 'Remove';
             removeBtn.className = 'danger-outline';
@@ -1384,11 +1444,58 @@ function refreshJobs() {
     });
 }
 
+async function editQueuedPreset(job) {
+  const current = String(job.preset_selection || job.preset || 'auto').toLowerCase();
+  const requested = prompt('Choose preset: smart, auto, 1080, or 4k', current);
+  if (requested === null) return;
+  const selection = requested.trim().toLowerCase();
+  if (!['smart', 'auto', '1080', '4k'].includes(selection)) {
+    alert('Preset must be smart, auto, 1080, or 4k.');
+    return;
+  }
+  const response = await fetch(`/api/jobs/${encodeURIComponent(job.id)}/preset`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ preset: selection }),
+  });
+  const data = await response.json();
+  if (!response.ok || data.error) throw new Error(data.error || 'Preset edit failed');
+  if (window.appToast) appToast('Queued preset updated.', 'success');
+  await refreshJobs();
+}
+
 function nodeStatusClass(value) {
   return String(value || 'idle').toLowerCase().replace(/[^a-z0-9_-]+/g, '-');
 }
 
+function updateQueueDispatchControls() {
+  const modeSelect = document.getElementById('queueDispatchModeSelect');
+  const nodeSelect = document.getElementById('queueDispatchNodeSelect');
+  if (!modeSelect || !nodeSelect) return;
+  const previous = nodeSelect.value;
+  nodeSelect.innerHTML = '';
+  if (!queueLinkedNodes.length) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = 'No workers paired';
+    nodeSelect.appendChild(option);
+  } else {
+    queueLinkedNodes.forEach(node => {
+      const option = document.createElement('option');
+      option.value = node.id || '';
+      option.textContent = `${node.name || 'Worker'} (${node.online ? (node.status || 'online') : 'offline'})`;
+      nodeSelect.appendChild(option);
+    });
+    if (queueLinkedNodes.some(node => String(node.id || '') === previous)) {
+      nodeSelect.value = previous;
+    }
+  }
+  nodeSelect.disabled = modeSelect.value !== 'node' || !queueLinkedNodes.length;
+}
+
 function renderLinkedNodeJobs(nodes) {
+  queueLinkedNodes = Array.isArray(nodes) ? nodes : [];
+  updateQueueDispatchControls();
   const panel = document.getElementById('linkedNodesJobsPanel');
   if (!panel) return;
   panel.innerHTML = '';
@@ -1566,14 +1673,25 @@ function batchEncode(folderOnly) {
   }
 
   const preset = document.getElementById('presetSelect').value;
+  const dispatchMode = document.getElementById('queueDispatchModeSelect')?.value || 'available';
+  const nodeId = document.getElementById('queueDispatchNodeSelect')?.value || '';
+  if (dispatchMode === 'node' && !nodeId) {
+    alert('Pick a specific worker first.');
+    return;
+  }
+  const targetLabel = dispatchMode === 'available'
+    ? 'next available node'
+    : (dispatchMode === 'node'
+      ? (queueLinkedNodes.find(node => String(node.id || '') === nodeId)?.name || 'specific worker')
+      : 'local controller');
 
   const msg = folderOnly
     ? 'This will QUEUE encodes for ALL video files directly in:\n' +
       currentPath +
-      '\n\nPreset: ' + preset + '\n\nThey will run one-by-one in order. Continue?'
+      '\n\nPreset: ' + preset + '\nDestination: ' + targetLabel + '\n\nThey will run in queue order. Continue?'
     : 'This will QUEUE encodes for ALL video files in this folder AND ALL SUBFOLDERS:\n' +
       currentPath +
-      '\n\nPreset: ' + preset + '\n\nThey will run one-by-one in order. Continue?';
+      '\n\nPreset: ' + preset + '\nDestination: ' + targetLabel + '\n\nThey will run in queue order. Continue?';
 
   if (!confirm(msg)) {
     return;
@@ -1584,7 +1702,7 @@ function batchEncode(folderOnly) {
   fetch(url, {
     method: 'POST',
     headers: {'Content-Type': 'application/json'},
-    body: JSON.stringify({path: currentPath, preset})
+    body: JSON.stringify({path: currentPath, preset, mode: dispatchMode, node_id: nodeId})
   })
     .then(r => r.json())
     .then(data => {
@@ -1712,6 +1830,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
   document.getElementById('upBtn').onclick = goUp;
   document.getElementById('startBtn').onclick = startEncode;
+  document.getElementById('queueDispatchModeSelect').onchange = updateQueueDispatchControls;
   document.getElementById('openWizardBtn').onclick = openSizeWizard;
   document.getElementById('cancelBtn').onclick = cancelEncode;
   document.getElementById('batchRenameBtn').onclick = batchRename;

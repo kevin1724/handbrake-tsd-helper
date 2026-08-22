@@ -473,14 +473,14 @@ docker run -d \
 ```
 
 The `latest` and `main` images are published automatically from `main`. Stable
-controller releases also publish `3.15.4` and `3.15` tags.
+controller releases also publish `3.15.5` and `3.15` tags.
 
 The encoding-only worker has its own public Docker Hub image:
 
 [kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
 
 `latest` and `main` follow the main branch. Stable worker releases also publish
-`2.5.4` and `2.5` tags:
+`2.5.5` and `2.5` tags:
 
 ```bash
 docker pull kevina1724/handbrake-tsd-worker:latest

@@ -45,6 +45,8 @@ import threading
 import secrets
 import shutil
 import socket
+import shlex
+from copy import deepcopy
 from datetime import datetime, timedelta
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlparse, urlencode
@@ -89,6 +91,13 @@ from .jobs import (
     get_job_summary,
     save_jobs,
     ensure_dispatcher,
+    get_next_auto_dispatch_job,
+    auto_dispatch_local_available,
+    claim_auto_dispatch_job,
+    release_auto_dispatch_job,
+    complete_auto_dispatch_job,
+    activate_auto_dispatch_locally,
+    replace_queued_job_preset,
     _encoded_output_is_valid,
 )
 
@@ -138,6 +147,7 @@ from .node_linking import (
     delete_node,
     delete_trusted_controller,
     enable_pair_recovery,
+    encoder_hardware_profile,
     get_node_private,
     heartbeat_allowed_age,
     hmac_headers,
@@ -2842,7 +2852,13 @@ def _create_smart_job(
             "smart_candidate_id": recommended_id,
             "smart_feedback_context": feedback_context,
             "automation_source": automation_source,
+            "preset_selection": "smart",
+            "preset_adaptive": True,
+            "preset_preferences": plan.get("options") if isinstance(plan.get("options"), dict) else {},
         },
+        preset_selection="smart",
+        preset_adaptive=True,
+        preset_preferences=plan.get("options") if isinstance(plan.get("options"), dict) else {},
     )
     return job_id, recommendation
 
@@ -2863,6 +2879,10 @@ BETA_AUTOSCAN_RUN_NOW = threading.Event()
 BETA_AUTOSCAN_LOCK = threading.Lock()
 NODE_HEARTBEAT_THREAD = None
 NODE_HEARTBEAT_STOP = threading.Event()
+AUTO_NODE_DISPATCH_THREAD = None
+AUTO_NODE_DISPATCH_STOP = threading.Event()
+AUTO_NODE_DISPATCH_WAKE = threading.Event()
+AUTO_NODE_LAST_ASSIGNMENT: dict[str, float] = {}
 NODE_HEARTBEAT_HEALTH = {
     "running": False,
     "started_at": 0,
@@ -2880,7 +2900,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.15.4"
+APP_RELEASE = "3.15.5"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -5509,6 +5529,7 @@ def _refresh_linked_node(row: dict, *, allow_recovery: bool = True) -> dict:
             "worker_encoding_policy": data.get("encoding_policy") if isinstance(data.get("encoding_policy"), dict) else {},
             "worker_release": str(data.get("release") or row.get("worker_release") or "")[:80],
             "capabilities": data.get("capabilities") if isinstance(data.get("capabilities"), list) else row.get("capabilities", []),
+            "hardware": data.get("hardware") if isinstance(data.get("hardware"), dict) else row.get("hardware", {}),
             "protocol_version": protocol_version,
             "remote_temp_dir": str(data.get("remote_transfer_temp_dir") or row.get("remote_temp_dir") or "").strip()[:500],
             "worker_mode": str(data.get("worker_mode") or row.get("worker_mode") or "full").strip().lower(),
@@ -5804,6 +5825,60 @@ def _queue_local_paths(raw_paths, preset: str, smart_tuning: dict | None = None)
     return int(create_jobs_batch(to_create) or 0), skipped
 
 
+def _queue_paths_to_destination(
+    paths: list[str],
+    preset: str,
+    mode: str,
+    node_id: str = "",
+) -> tuple[int, list[dict]]:
+    """Queue an already validated batch using the Queue screen destination."""
+    normalized_mode = str(mode or "local").strip().lower()
+    if normalized_mode == "local":
+        return _queue_local_paths(paths, preset)
+
+    if normalized_mode in {"available", "auto_node", "next_available"}:
+        job_ids = []
+        skipped = []
+        for src in paths:
+            try:
+                plan = _node_queue_plan(src, preset)
+                job_id = create_job(
+                    src,
+                    plan.get("preset") or "1080",
+                    extra_args=str(plan.get("extra_args") or ""),
+                    preset_bundle=plan.get("preset_bundle"),
+                    encode_metadata=plan.get("encode_metadata") if isinstance(plan.get("encode_metadata"), dict) else None,
+                    dispatch_mode="auto",
+                    preset_selection=plan.get("preset_selection") or preset,
+                    preset_adaptive=bool(plan.get("preset_adaptive")),
+                    preset_preferences=plan.get("preset_preferences") if isinstance(plan.get("preset_preferences"), dict) else None,
+                )
+                if job_id not in job_ids:
+                    job_ids.append(job_id)
+            except Exception as exc:
+                skipped.append({"path": src, "reason": str(exc)[:160]})
+        if job_ids:
+            _wake_auto_node_dispatch()
+        return len(job_ids), skipped
+
+    if normalized_mode == "node":
+        selected = get_node_private(node_id)
+        if not selected:
+            return 0, [{"path": "", "reason": "selected worker was not found"}]
+        count = 0
+        skipped = []
+        for src in paths:
+            try:
+                plan = _node_queue_plan(src, preset)
+                selected, _result, _transfer_mode = _dispatch_plan_to_worker(selected, src, plan)
+                count += 1
+            except Exception as exc:
+                skipped.append({"path": src, "reason": str(exc)[:160]})
+        return count, skipped
+
+    return 0, [{"path": "", "reason": "invalid dispatch mode"}]
+
+
 def _controller_base_url(default_url: str = "", worker_url: str = "") -> str:
     value = str(default_url or "").strip().rstrip("/")
     if value:
@@ -5861,6 +5936,9 @@ def _node_queue_plan(src: str, requested_preset: str, smart_tuning: dict | None 
             "preset": effective,
             "preset_bundle": _node_preset_bundle(effective),
             "extra_args": " ".join(str(arg) for arg in plan.get("extra_args") or []),
+            "preset_selection": "smart",
+            "preset_adaptive": True,
+            "preset_preferences": options,
             "encode_metadata": {
                 "encode_method": estimates.get("encoder"),
                 "encoder": estimates.get("encoder"),
@@ -5875,6 +5953,9 @@ def _node_queue_plan(src: str, requested_preset: str, smart_tuning: dict | None 
                 "smart_candidate_id": recommendation.get("recommended_id"),
                 "smart_feedback_context": smart_feedback_context(plan, str(recommendation.get("recommended_id") or "balanced")),
                 "automation_source": "library_smart",
+                "preset_selection": "smart",
+                "preset_adaptive": True,
+                "preset_preferences": options,
             },
         }
     effective = guess_preset_from_filename(os.path.basename(src)) if requested == "auto" else requested
@@ -5884,6 +5965,9 @@ def _node_queue_plan(src: str, requested_preset: str, smart_tuning: dict | None 
         "preset": effective,
         "preset_bundle": _node_preset_bundle(effective),
         "extra_args": "",
+        "preset_selection": requested if requested in {"auto", "1080", "4k"} else effective,
+        "preset_adaptive": False,
+        "preset_preferences": {},
         "encode_metadata": {
             "encode_method": f"preset:{effective}",
             "encoder": "",
@@ -5892,6 +5976,643 @@ def _node_queue_plan(src: str, requested_preset: str, smart_tuning: dict | None 
             "bit_depth": "",
         },
     }
+
+
+NODE_ENCODERS = {
+    "qsv": {
+        ("h264", "8"): "qsv_h264",
+        ("h265", "8"): "qsv_h265",
+        ("h265", "10"): "qsv_h265_10bit",
+        ("av1", "8"): "qsv_av1",
+        ("av1", "10"): "qsv_av1_10bit",
+    },
+    "nvenc": {
+        ("h264", "8"): "nvenc_h264",
+        ("h265", "8"): "nvenc_h265",
+        ("h265", "10"): "nvenc_h265_10bit",
+        ("av1", "8"): "nvenc_av1",
+        ("av1", "10"): "nvenc_av1_10bit",
+    },
+    "vce": {
+        ("h264", "8"): "vce_h264",
+        ("h265", "8"): "vce_h265",
+        ("h265", "10"): "vce_h265_10bit",
+        ("av1", "8"): "vce_av1",
+        ("av1", "10"): "vce_av1_10bit",
+    },
+    "software": {
+        ("h264", "8"): "x264",
+        ("h264", "10"): "x264_10bit",
+        ("h265", "8"): "x265",
+        ("h265", "10"): "x265_10bit",
+        ("av1", "8"): "svt_av1",
+        ("av1", "10"): "svt_av1_10bit",
+    },
+}
+
+
+def _bundle_video_encoder(bundle: dict | None) -> str:
+    """Read VideoEncoder from the selected preset, never an audio encoder."""
+    if not isinstance(bundle, dict):
+        return ""
+    try:
+        data = json.loads(str(bundle.get("contents") or ""))
+    except Exception:
+        return ""
+    expected = str(bundle.get("name") or "").strip().casefold()
+    candidates = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            encoder = str(value.get("VideoEncoder") or "").strip().lower()
+            if encoder:
+                candidates.append((value, encoder))
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(data)
+    for row, encoder in candidates:
+        name = str(row.get("PresetName") or row.get("Name") or "").strip().casefold()
+        if expected and name == expected:
+            return encoder
+    return candidates[0][1] if candidates else ""
+
+
+def _plan_encoder(plan: dict) -> tuple[str, str, str, str]:
+    metadata = plan.get("encode_metadata") if isinstance(plan.get("encode_metadata"), dict) else {}
+    encoder = str(metadata.get("encoder") or metadata.get("encode_method") or "").strip().lower()
+    if not encoder:
+        try:
+            args = shlex.split(str(plan.get("extra_args") or ""))
+        except Exception:
+            args = str(plan.get("extra_args") or "").split()
+        for index, arg in enumerate(args):
+            if arg in {"--encoder", "-e"} and index + 1 < len(args):
+                encoder = str(args[index + 1]).strip().lower()
+                break
+            if str(arg).startswith("--encoder="):
+                encoder = str(arg).split("=", 1)[1].strip().lower()
+                break
+    if not encoder:
+        encoder = _bundle_video_encoder(plan.get("preset_bundle"))
+    family = str(metadata.get("encoder_family") or "").strip().lower()
+    if (not family or family == "preset") and encoder:
+        family = next((name for name in NODE_ENCODERS if encoder in NODE_ENCODERS[name].values()), "software")
+    codec = str(metadata.get("video_codec") or "").strip().lower()
+    if not codec:
+        codec = "av1" if "av1" in encoder else ("h265" if "265" in encoder else "h264")
+    depth = str(metadata.get("bit_depth") or "").strip()
+    if not depth:
+        depth = "10" if "10bit" in encoder or "_10" in encoder else "8"
+    return encoder, family or "software", codec, depth
+
+
+def _hardware_supports_plan(plan: dict, hardware: dict) -> bool:
+    encoder, family, _codec, _depth = _plan_encoder(plan)
+    families = {str(value).lower() for value in hardware.get("encoder_families") or []}
+    encoders = {str(value).lower() for value in hardware.get("encoders") or []}
+    if not families and not encoders:
+        return True  # Older workers did not report a hardware profile.
+    if family == "software":
+        return True
+    return bool((encoder and encoder in encoders) or family in families and not encoders)
+
+
+def _replace_plan_encoder_args(extra_args: str, encoder: str) -> str:
+    try:
+        args = shlex.split(str(extra_args or ""))
+    except Exception:
+        args = str(extra_args or "").split()
+    out = []
+    replaced = False
+    index = 0
+    while index < len(args):
+        arg = str(args[index])
+        if arg in {"--encoder", "-e"}:
+            if not replaced:
+                out.extend(["--encoder", encoder])
+                replaced = True
+            index += 2
+            continue
+        if arg.startswith("--encoder=") or arg.startswith("-e="):
+            if not replaced:
+                out.extend(["--encoder", encoder])
+                replaced = True
+            index += 1
+            continue
+        if arg == "--encoder-preset":
+            # Preset vocabularies differ between QSV, NVENC, VCE, and x265.
+            # Let HandBrake choose the safe default for a derived fallback.
+            index += 2
+            continue
+        if arg.startswith("--encoder-preset="):
+            index += 1
+            continue
+        out.append(arg)
+        index += 1
+    if not replaced:
+        out.extend(["--encoder", encoder])
+    return shlex.join(out)
+
+
+def _derived_preset_bundle(bundle: dict | None, encoder: str, family: str) -> dict | None:
+    if not isinstance(bundle, dict):
+        return None
+    try:
+        data = json.loads(str(bundle.get("contents") or ""))
+    except Exception:
+        return bundle
+    expected = str(bundle.get("name") or "").strip().casefold()
+    candidates = []
+
+    def walk(value):
+        if isinstance(value, dict):
+            if value.get("VideoEncoder"):
+                candidates.append(value)
+            for child in value.values():
+                walk(child)
+        elif isinstance(value, list):
+            for child in value:
+                walk(child)
+
+    walk(data)
+    selected = next(
+        (
+            row for row in candidates
+            if str(row.get("PresetName") or row.get("Name") or "").strip().casefold() == expected
+        ),
+        candidates[0] if candidates else None,
+    )
+    if not selected:
+        return bundle
+    family_label = {"qsv": "Intel QSV", "nvenc": "NVIDIA NVENC", "vce": "AMD VCE", "software": "Software"}.get(family, family.upper())
+    original_name = str(bundle.get("name") or selected.get("PresetName") or "Smart preset")
+    derived_name = f"{original_name} [Smart {family_label}]"[:160]
+    selected["VideoEncoder"] = encoder
+    selected["VideoHWDecode"] = 0
+    selected["VideoQSVDecode"] = False
+    selected["VideoAdapterIndex"] = -1
+    if selected.get("PresetName") is not None:
+        selected["PresetName"] = derived_name
+    elif selected.get("Name") is not None:
+        selected["Name"] = derived_name
+    out = dict(bundle)
+    out["name"] = derived_name
+    out["contents"] = json.dumps(data, indent=2)
+    return out
+
+
+def _adapt_smart_plan_for_node(plan: dict, node: dict) -> dict:
+    """Derive only the encoder for Smart jobs; locked presets stay byte-for-byte."""
+    out = deepcopy(plan if isinstance(plan, dict) else {})
+    metadata = out.get("encode_metadata") if isinstance(out.get("encode_metadata"), dict) else {}
+    original_bundle = out.get("preset_bundle") if isinstance(out.get("preset_bundle"), dict) else {}
+    out.setdefault("queued_preset_name", str(original_bundle.get("name") or out.get("preset") or ""))
+    out.setdefault("preset_revision", max(1, int(metadata.get("preset_revision") or 1)))
+    adaptive = bool(out.get("preset_adaptive") or metadata.get("preset_adaptive") or metadata.get("smart_preset"))
+    if not adaptive:
+        return out
+    hardware = node.get("hardware") if isinstance(node.get("hardware"), dict) else {}
+    if not hardware or _hardware_supports_plan(out, hardware):
+        return out
+
+    old_encoder, old_family, codec, depth = _plan_encoder(out)
+    families = [str(value).lower() for value in hardware.get("encoder_families") or []]
+    supported = {str(value).lower() for value in hardware.get("encoders") or []}
+    selected_encoder = ""
+    selected_family = "software"
+    for family in [value for value in families if value != "software"] + ["software"]:
+        candidate = NODE_ENCODERS.get(family, {}).get((codec, depth))
+        if candidate and (not supported or candidate in supported):
+            selected_encoder = candidate
+            selected_family = family
+            break
+    if not selected_encoder:
+        selected_encoder = NODE_ENCODERS["software"].get((codec, depth)) or (
+            "svt_av1_10bit" if codec == "av1" else ("x265_10bit" if codec == "h265" else "x264")
+        )
+        selected_family = "software"
+
+    metadata = dict(metadata)
+    metadata.update({
+        "encode_method": selected_encoder,
+        "encoder": selected_encoder,
+        "encoder_family": selected_family,
+    })
+    adaptation = {
+        "node_id": str(node.get("id") or ""),
+        "node_name": str(node.get("name") or "Worker"),
+        "from_encoder": old_encoder,
+        "from_family": old_family,
+        "to_encoder": selected_encoder,
+        "to_family": selected_family,
+        "reason": f"{old_family or 'requested'} encoder is unavailable on the selected node",
+        "adapted_at": time.time(),
+    }
+    metadata["preset_adaptation"] = adaptation
+    metadata["preset_selection"] = "smart"
+    metadata["preset_adaptive"] = True
+    metadata["preset_preferences"] = out.get("preset_preferences") if isinstance(out.get("preset_preferences"), dict) else metadata.get("preset_preferences", {})
+    out["encode_metadata"] = metadata
+    out["extra_args"] = _replace_plan_encoder_args(str(out.get("extra_args") or ""), selected_encoder)
+    out["preset_bundle"] = _derived_preset_bundle(out.get("preset_bundle"), selected_encoder, selected_family)
+    out["preset_adaptation"] = adaptation
+    return out
+
+
+def _plan_metadata_for_worker(plan: dict) -> dict:
+    metadata = dict(plan.get("encode_metadata")) if isinstance(plan.get("encode_metadata"), dict) else {}
+    metadata.update({
+        "preset_selection": str(plan.get("preset_selection") or metadata.get("preset_selection") or plan.get("preset") or "1080"),
+        "preset_adaptive": bool(plan.get("preset_adaptive") or metadata.get("preset_adaptive")),
+        "preset_preferences": (
+            plan.get("preset_preferences")
+            if isinstance(plan.get("preset_preferences"), dict)
+            else metadata.get("preset_preferences", {})
+        ),
+        "preset_snapshot_locked": True,
+    })
+    bundle = plan.get("preset_bundle") if isinstance(plan.get("preset_bundle"), dict) else {}
+    metadata["queued_preset_name"] = str(plan.get("queued_preset_name") or bundle.get("name") or plan.get("preset") or "")
+    metadata["preset_revision"] = max(1, int(plan.get("preset_revision") or metadata.get("preset_revision") or 1))
+    adaptation = plan.get("preset_adaptation") if isinstance(plan.get("preset_adaptation"), dict) else None
+    if adaptation:
+        metadata["preset_adaptation"] = adaptation
+    return metadata
+
+
+def _prepare_plan_for_node(plan: dict, node: dict) -> dict:
+    prepared = _adapt_smart_plan_for_node(plan, node)
+    metadata = prepared.get("encode_metadata") if isinstance(prepared.get("encode_metadata"), dict) else {}
+    adaptive = bool(prepared.get("preset_adaptive") or metadata.get("preset_adaptive") or metadata.get("smart_preset"))
+    hardware = node.get("hardware") if isinstance(node.get("hardware"), dict) else {}
+    if not adaptive and not _hardware_supports_plan(prepared, hardware):
+        encoder, _family, _codec, _depth = _plan_encoder(prepared)
+        node_name = str(node.get("name") or "selected node")
+        raise ValueError(
+            f"{node_name} does not support locked video encoder {encoder or 'from the queued preset'}; "
+            "choose Smart or click Edit preset"
+        )
+    prepared["encode_metadata"] = _plan_metadata_for_worker(prepared)
+    return prepared
+
+
+def _worker_encoding_policy(selected: dict) -> dict:
+    controller_settings = load_settings()
+    return {
+        "hb_threads": controller_settings.get("hb_threads", 0),
+        "hardware_transcode_concurrency": normalize_hardware_transcode_concurrency(
+            selected.get("hardware_transcode_concurrency"),
+            controller_settings.get("hardware_transcode_concurrency", 1),
+        ),
+        "auto_stop_large_output_enabled": controller_settings.get("auto_stop_large_output_enabled", False),
+        "auto_stop_large_output_percent": controller_settings.get("auto_stop_large_output_percent", 90),
+    }
+
+
+def _dispatch_plan_to_worker(
+    selected: dict,
+    src: str,
+    plan: dict,
+    *,
+    controller_url_hint: str = "",
+    require_available_for: dict | None = None,
+) -> tuple[dict, dict, str]:
+    """Send one planned job to a linked worker, including remote fallback."""
+    selected = _refresh_linked_node(selected)
+    if not public_node(selected).get("online"):
+        raise ValueError(selected.get("last_error") or "worker is offline")
+    if isinstance(require_available_for, dict) and not _worker_available_for_auto(selected, require_available_for)[0]:
+        raise ValueError("worker capacity changed before assignment")
+    plan = _prepare_plan_for_node(plan, selected)
+
+    selected_mode = normalize_transfer_mode(selected.get("transfer_mode") or "local")
+    controller_url = _controller_base_url(
+        selected.get("controller_url") or controller_url_hint or "",
+        selected.get("url") or "",
+    )
+    if selected_mode in {"remote", "auto"} and not controller_url:
+        raise ValueError("controller URL could not be inferred for remote transfer")
+    if controller_url and controller_url != str(selected.get("controller_url") or "").strip().rstrip("/"):
+        selected["controller_url"] = controller_url
+        save_node(selected)
+
+    policy = _worker_encoding_policy(selected)
+
+    def remote_payload() -> dict:
+        source_size = int(os.path.getsize(src))
+        grant = create_transfer_grant(src, selected.get("id") or "", source_size=source_size)
+        effective_preset = plan.get("preset") or "1080"
+        encode_metadata = _plan_metadata_for_worker(plan)
+        transfer_row = get_transfer(grant["id"]) or {}
+        transfer_row["preset"] = effective_preset
+        transfer_row["controller_url"] = controller_url
+        transfer_row["remote_temp_dir"] = str(selected.get("remote_temp_dir") or "").strip()
+        transfer_row["encode_metadata"] = encode_metadata
+        save_transfer(transfer_row)
+        return {
+            "src": src,
+            "preset": effective_preset,
+            "preset_bundle": plan.get("preset_bundle"),
+            "extra_args": str(plan.get("extra_args") or ""),
+            "encode_metadata": encode_metadata,
+            "encoding_policy": policy,
+            "transfer": {
+                "id": grant["id"],
+                "controller_id": str(local_node_overview().get("id") or ""),
+                "controller_url": controller_url,
+                "source_url": f"{controller_url}/api/node/transfers/{grant['id']}/source",
+                "upload_url": f"{controller_url}/api/node/transfers/{grant['id']}/output",
+                "download_token": grant["download_token"],
+                "upload_token": grant["upload_token"],
+                "worker_node_id": selected.get("id") or "",
+                "original_path": src,
+                "source_basename": grant.get("source_basename") or os.path.basename(src),
+                "source_size": source_size,
+                "remote_temp_dir": str(selected.get("remote_temp_dir") or "").strip(),
+                "encode_metadata": encode_metadata,
+            },
+        }
+
+    worker_path = translate_path(src, selected.get("path_mappings") or [])
+    use_remote = selected_mode == "remote" or (selected_mode == "auto" and not worker_path)
+    if use_remote:
+        payload = remote_payload()
+    else:
+        if not worker_path:
+            raise ValueError("no path mapping for worker")
+        payload = {
+            "src": worker_path,
+            "original_path": src,
+            "preset": plan.get("preset"),
+            "preset_bundle": plan.get("preset_bundle"),
+            "extra_args": plan.get("extra_args") or "",
+            "encode_metadata": _plan_metadata_for_worker(plan),
+            "encoding_policy": policy,
+        }
+
+    result = signed_json_request(
+        selected,
+        "/api/node/jobs",
+        method="POST",
+        body={"jobs": [payload], "encoding_policy": policy},
+        timeout=15,
+    )
+    result_skipped = result.get("skipped") if isinstance(result.get("skipped"), list) else []
+    if selected_mode == "auto" and not use_remote and result_skipped:
+        reasons = {str(item.get("reason") or "").lower() for item in result_skipped if isinstance(item, dict)}
+        if reasons.intersection({"not a file", "path not allowed", "headless worker requires remote transfer"}):
+            result = signed_json_request(
+                selected,
+                "/api/node/jobs",
+                method="POST",
+                body={"jobs": [remote_payload()], "encoding_policy": policy},
+                timeout=15,
+            )
+            result_skipped = result.get("skipped") if isinstance(result.get("skipped"), list) else []
+            use_remote = True
+
+    if result_skipped:
+        first = result_skipped[0] if isinstance(result_skipped[0], dict) else {}
+        raise ValueError(first.get("reason") or "worker rejected the job")
+    if not result.get("ok", True):
+        raise ValueError(result.get("error") or "worker rejected the job")
+    return selected, result, "remote" if use_remote else "local"
+
+
+def _plan_uses_hardware_encoder(job: dict) -> bool:
+    if bool(job.get("uses_hardware_encoder")):
+        return True
+    family = str(job.get("encoder_family") or "").strip().lower()
+    encoder = str(job.get("encoder") or job.get("encode_method") or "").strip().lower()
+    if family in {"qsv", "nvenc", "vce", "amf", "videotoolbox", "vaapi"}:
+        return True
+    if any(token in encoder for token in ("qsv", "nvenc", "vce", "amf", "videotoolbox", "vaapi")):
+        return True
+    plan = job.get("dispatch_plan") if isinstance(job.get("dispatch_plan"), dict) else {
+        "preset": job.get("preset"),
+        "preset_bundle": job.get("preset_bundle"),
+        "extra_args": job.get("extra_args") or "",
+        "preset_selection": job.get("preset_selection") or job.get("preset") or "1080",
+        "preset_adaptive": bool(job.get("preset_adaptive")),
+        "preset_preferences": job.get("preset_preferences") if isinstance(job.get("preset_preferences"), dict) else {},
+        "encode_metadata": {
+            "encoder": job.get("encoder") or job.get("encode_method") or "",
+            "encode_method": job.get("encode_method") or job.get("encoder") or "",
+            "encoder_family": job.get("encoder_family") or "",
+            "video_codec": job.get("video_codec") or "",
+            "bit_depth": job.get("bit_depth") or "",
+            "smart_preset": bool(job.get("smart_preset")),
+        },
+    }
+    bundle = plan.get("preset_bundle") if isinstance(plan.get("preset_bundle"), dict) else {}
+    try:
+        preset_data = json.loads(str(bundle.get("contents") or ""))
+    except Exception:
+        preset_data = None
+
+    def video_encoder(value) -> str:
+        if isinstance(value, dict):
+            direct = str(value.get("VideoEncoder") or "").strip().lower()
+            if direct:
+                return direct
+            for child in value.values():
+                found = video_encoder(child)
+                if found:
+                    return found
+        elif isinstance(value, list):
+            for child in value:
+                found = video_encoder(child)
+                if found:
+                    return found
+        return ""
+
+    preset_encoder = video_encoder(preset_data)
+    return any(token in preset_encoder for token in ("qsv", "nvenc", "vce", "amf", "videotoolbox", "vaapi"))
+
+
+def _worker_available_for_auto(row: dict, job: dict) -> tuple[bool, float]:
+    public = public_node(row)
+    if not public.get("online") or public.get("status") in {"offline", "paired", "reconnecting", "stale"}:
+        return False, 1.0
+    plan = job.get("dispatch_plan") if isinstance(job.get("dispatch_plan"), dict) else {
+        "preset": job.get("preset"),
+        "preset_bundle": job.get("preset_bundle"),
+        "extra_args": job.get("extra_args") or "",
+        "preset_selection": job.get("preset_selection") or job.get("preset") or "1080",
+        "preset_adaptive": bool(job.get("preset_adaptive")),
+        "preset_preferences": job.get("preset_preferences") if isinstance(job.get("preset_preferences"), dict) else {},
+        "encode_metadata": {
+            "encoder": job.get("encoder") or job.get("encode_method") or "",
+            "encode_method": job.get("encode_method") or job.get("encoder") or "",
+            "encoder_family": job.get("encoder_family") or "",
+            "video_codec": job.get("video_codec") or "",
+            "bit_depth": job.get("bit_depth") or "",
+            "smart_preset": bool(job.get("smart_preset")),
+        },
+    }
+    metadata = plan.get("encode_metadata") if isinstance(plan.get("encode_metadata"), dict) else {}
+    adaptive = bool(plan.get("preset_adaptive") or metadata.get("preset_adaptive") or metadata.get("smart_preset"))
+    if not adaptive and not _hardware_supports_plan(plan, public.get("hardware") or {}):
+        return False, 1.0
+    prepared_plan = _adapt_smart_plan_for_node(plan, public) if adaptive else plan
+    _prepared_encoder, prepared_family, _prepared_codec, _prepared_depth = _plan_encoder(prepared_plan)
+    prepared_uses_hardware = prepared_family in {"qsv", "nvenc", "vce"}
+    worker_jobs = public.get("jobs") if isinstance(public.get("jobs"), list) else []
+    active = [
+        item for item in worker_jobs
+        if isinstance(item, dict) and str(item.get("status") or "").lower() in {"queued", "running"}
+    ]
+    summary = public.get("summary") if isinstance(public.get("summary"), dict) else {}
+    counts = summary.get("counts") if isinstance(summary.get("counts"), dict) else {}
+    reported_active = max(0, int(counts.get("queued") or 0)) + max(0, int(counts.get("running") or 0))
+    if not active and reported_active:
+        return False, 1.0
+    limit = normalize_hardware_transcode_concurrency(public.get("hardware_transcode_concurrency"), 1)
+    if not active:
+        return True, 0.0
+    if not prepared_uses_hardware:
+        return False, 1.0
+    if any(not bool(item.get("uses_hardware_encoder")) for item in active):
+        return False, 1.0
+    return len(active) < limit, min(1.0, len(active) / max(1, limit))
+
+
+def _auto_node_dispatch_loop() -> None:
+    while not AUTO_NODE_DISPATCH_STOP.is_set():
+        try:
+            if get_queue_state():
+                AUTO_NODE_DISPATCH_WAKE.wait(2.0)
+                AUTO_NODE_DISPATCH_WAKE.clear()
+                continue
+            pending = get_next_auto_dispatch_job()
+            if not pending:
+                AUTO_NODE_DISPATCH_WAKE.wait(2.0)
+                AUTO_NODE_DISPATCH_WAKE.clear()
+                continue
+            job_id, job = pending
+            candidates = []
+            local = local_node_overview()
+            local_id = str(local.get("id") or "local")
+            if auto_dispatch_local_available(job_id):
+                local_summary = get_job_summary()
+                local_counts = local_summary.get("counts") if isinstance(local_summary.get("counts"), dict) else {}
+                local_active = max(0, int(local_counts.get("running") or 0))
+                local_limit = max(1, int(local_summary.get("hardware_transcode_concurrency") or 1))
+                local_plan = job.get("dispatch_plan") if isinstance(job.get("dispatch_plan"), dict) else {}
+                local_metadata = local_plan.get("encode_metadata") if isinstance(local_plan.get("encode_metadata"), dict) else {}
+                local_adaptive = bool(local_plan.get("preset_adaptive") or local_metadata.get("preset_adaptive") or local_metadata.get("smart_preset"))
+                if local_adaptive or _hardware_supports_plan(local_plan, local.get("hardware") or {}):
+                    prepared_local_plan = _prepare_plan_for_node(local_plan, local)
+                    _local_encoder, local_family, _local_codec, _local_depth = _plan_encoder(prepared_local_plan)
+                    if not (local_active and local_family == "software"):
+                        candidates.append({
+                            "kind": "local",
+                            "id": local_id,
+                            "name": local.get("name") or "Main controller",
+                            "load": min(1.0, local_active / local_limit),
+                            "plan": prepared_local_plan,
+                        })
+            for row in list_nodes_private():
+                available, load = _worker_available_for_auto(row, job)
+                if available:
+                    candidates.append({
+                        "kind": "worker",
+                        "id": str(row.get("id") or ""),
+                        "name": row.get("name") or "Worker",
+                        "load": load,
+                        "row": row,
+                    })
+            if not candidates:
+                AUTO_NODE_DISPATCH_WAKE.wait(2.0)
+                AUTO_NODE_DISPATCH_WAKE.clear()
+                continue
+            candidates.sort(key=lambda item: (
+                float(item.get("load") or 0.0),
+                float(AUTO_NODE_LAST_ASSIGNMENT.get(str(item.get("id") or ""), 0.0)),
+                str(item.get("name") or "").casefold(),
+            ))
+            selected = candidates[0]
+            if selected["kind"] == "local":
+                if activate_auto_dispatch_locally(
+                    job_id,
+                    selected["id"],
+                    selected["name"],
+                    dispatch_plan=selected.get("plan"),
+                ):
+                    AUTO_NODE_LAST_ASSIGNMENT[selected["id"]] = time.time()
+                    log_event(
+                        "auto_node_assigned",
+                        f"Assigned {os.path.basename(job.get('src') or '')} to {selected['name']}.",
+                        job_id=job_id,
+                        src=job.get("src"),
+                    )
+                continue
+
+            AUTO_NODE_LAST_ASSIGNMENT[selected["id"]] = time.time()
+            claimed = claim_auto_dispatch_job(job_id, selected["id"], selected["name"])
+            if not claimed:
+                continue
+            plan = claimed.get("dispatch_plan") if isinstance(claimed.get("dispatch_plan"), dict) else {
+                "preset": claimed.get("preset"),
+                "preset_bundle": claimed.get("preset_bundle"),
+                "extra_args": claimed.get("extra_args") or "",
+                "encode_metadata": {},
+            }
+            try:
+                refreshed, _result, transfer_mode = _dispatch_plan_to_worker(
+                    selected["row"],
+                    str(claimed.get("src") or ""),
+                    plan,
+                    require_available_for=claimed,
+                )
+                if complete_auto_dispatch_job(job_id):
+                    log_event(
+                        "auto_node_assigned",
+                        (
+                            f"Assigned {os.path.basename(claimed.get('src') or '')} to "
+                            f"{refreshed.get('name') or selected['name']} ({transfer_mode})."
+                        ),
+                        job_id=job_id,
+                        src=claimed.get("src"),
+                        extra={"worker_id": selected["id"], "transfer_mode": transfer_mode},
+                    )
+                    _refresh_linked_node(refreshed)
+            except Exception as exc:
+                release_auto_dispatch_job(job_id, str(exc), retry_seconds=3.0)
+                log_event(
+                    "auto_node_dispatch_retry",
+                    f"Could not assign {os.path.basename(claimed.get('src') or '')} to {selected['name']}: {str(exc)[:160]}",
+                    level="warn",
+                    job_id=job_id,
+                    src=claimed.get("src"),
+                )
+        except Exception as exc:
+            log_event("auto_node_dispatch_error", f"Automatic node dispatcher recovered from an error: {str(exc)[:180]}", level="warn")
+            AUTO_NODE_DISPATCH_STOP.wait(2.0)
+
+
+def _start_auto_node_dispatch_thread() -> None:
+    global AUTO_NODE_DISPATCH_THREAD
+    if os.environ.get("TSD_DISABLE_AUTO_NODE_DISPATCH") == "1":
+        return
+    if os.environ.get("FLASK_DEBUG") == "1" and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        return
+    if AUTO_NODE_DISPATCH_THREAD and AUTO_NODE_DISPATCH_THREAD.is_alive():
+        return
+    AUTO_NODE_DISPATCH_THREAD = threading.Thread(
+        target=_auto_node_dispatch_loop,
+        name="auto-node-dispatch",
+        daemon=True,
+    )
+    AUTO_NODE_DISPATCH_THREAD.start()
+
+
+def _wake_auto_node_dispatch() -> None:
+    AUTO_NODE_DISPATCH_WAKE.set()
 
 
 def _transfer_output_path_for_src(src: str) -> str:
@@ -7382,6 +8103,7 @@ def register_routes(app):
             summary=get_job_summary(),
             jobs=list_jobs_for_api(include_log_tail=True),
             prediction_profile=_history_prediction_profile(),
+            hardware=local.get("hardware") if isinstance(local.get("hardware"), dict) else {},
         )
 
     @app.route("/api/node/transfers/<transfer_id>/source")
@@ -7846,6 +8568,56 @@ def register_routes(app):
         if not isinstance(paths, list) or not paths:
             return jsonify(error="missing paths"), 400
 
+        if mode in {"available", "auto_node", "next_available"}:
+            job_ids = []
+            skipped = []
+            seen = set()
+            for raw in paths:
+                src = str(raw or "").strip()
+                if not src or src in seen:
+                    continue
+                seen.add(src)
+                reason = ""
+                if not os.path.isfile(src):
+                    reason = "not a file"
+                elif not is_allowed_path(src):
+                    reason = "path not allowed"
+                elif not src.lower().endswith(VIDEO_EXTS):
+                    reason = "not a video"
+                elif os.path.splitext(os.path.basename(src))[0].lower().endswith("-tsd"):
+                    reason = "already tagged -TSD"
+                if reason:
+                    skipped.append({"path": src, "reason": reason})
+                    continue
+                try:
+                    plan = _node_queue_plan(src, preset, data.get("smart_tuning"))
+                    job_id = create_job(
+                        src,
+                        plan.get("preset") or "1080",
+                        extra_args=str(plan.get("extra_args") or ""),
+                        preset_bundle=plan.get("preset_bundle"),
+                        encode_metadata=plan.get("encode_metadata") if isinstance(plan.get("encode_metadata"), dict) else None,
+                        dispatch_mode="auto",
+                        preset_selection=plan.get("preset_selection") or preset,
+                        preset_adaptive=bool(plan.get("preset_adaptive")),
+                        preset_preferences=plan.get("preset_preferences") if isinstance(plan.get("preset_preferences"), dict) else None,
+                    )
+                    if job_id not in job_ids:
+                        job_ids.append(job_id)
+                except Exception as exc:
+                    skipped.append({"path": src, "reason": f"queue planning failed: {str(exc)[:140]}"})
+            if not job_ids:
+                return jsonify(error="no queueable files", skipped=skipped), 400
+            _wake_auto_node_dispatch()
+            return jsonify(
+                ok=True,
+                target="next available node",
+                count=len(job_ids),
+                skipped=skipped,
+                job_ids=job_ids,
+                dispatch_mode="auto",
+            )
+
         if mode == "local":
             count, skipped = _queue_local_paths(paths, preset, data.get("smart_tuning"))
             return jsonify(ok=True, target="local", count=count, skipped=skipped)
@@ -7857,7 +8629,19 @@ def register_routes(app):
             candidates = [_refresh_linked_node(row) for row in list_nodes_private()]
             online = [row for row in candidates if public_node(row).get("online")]
             idle = [row for row in online if public_node(row).get("status") == "idle"]
-            selected = (idle or online or [None])[0]
+            ranked = idle or online
+            selected = (ranked or [None])[0]
+            if preset != "smart" and ranked:
+                probe_src = next((str(path or "").strip() for path in paths if str(path or "").strip()), "")
+                if probe_src:
+                    try:
+                        probe_plan = _node_queue_plan(probe_src, preset, data.get("smart_tuning"))
+                        selected = next(
+                            (row for row in ranked if _hardware_supports_plan(probe_plan, row.get("hardware") or {})),
+                            selected,
+                        )
+                    except Exception:
+                        pass
         else:
             return jsonify(error="invalid dispatch mode"), 400
 
@@ -7890,7 +8674,7 @@ def register_routes(app):
                 source_size = int(os.path.getsize(src))
                 grant = create_transfer_grant(src, selected.get("id") or "", source_size=source_size)
                 effective_preset = plan.get("preset") or "1080"
-                encode_metadata = plan.get("encode_metadata") if isinstance(plan.get("encode_metadata"), dict) else {}
+                encode_metadata = _plan_metadata_for_worker(plan)
                 transfer_row = get_transfer(grant["id"]) or {}
                 transfer_row["preset"] = effective_preset
                 transfer_row["controller_url"] = controller_url
@@ -7943,8 +8727,9 @@ def register_routes(app):
 
             try:
                 plan = _node_queue_plan(src, preset, data.get("smart_tuning"))
+                plan = _prepare_plan_for_node(plan, selected)
             except Exception as exc:
-                skipped.append({"path": src, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
+                skipped.append({"path": src, "reason": f"preset planning failed: {str(exc)[:180]}"})
                 continue
             worker_path = translate_path(src, selected.get("path_mappings") or [])
             use_remote = selected_mode == "remote" or (selected_mode == "auto" and not worker_path)
@@ -7966,7 +8751,7 @@ def register_routes(app):
                 "preset": plan.get("preset"),
                 "preset_bundle": plan.get("preset_bundle"),
                 "extra_args": plan.get("extra_args") or "",
-                "encode_metadata": plan.get("encode_metadata") or {},
+                "encode_metadata": _plan_metadata_for_worker(plan),
                 "encoding_policy": worker_encoding_policy,
             })
 
@@ -8006,8 +8791,9 @@ def register_routes(app):
                     continue
                 try:
                     retry_plan = _node_queue_plan(original_path, preset, data.get("smart_tuning"))
+                    retry_plan = _prepare_plan_for_node(retry_plan, selected)
                 except Exception as exc:
-                    remaining_result_skipped.append({"path": original_path, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
+                    remaining_result_skipped.append({"path": original_path, "reason": f"preset planning failed: {str(exc)[:180]}"})
                     continue
                 remote_payload, remote_error = build_remote_job_payload(original_path, retry_plan)
                 if remote_payload:
@@ -9057,6 +9843,33 @@ def register_routes(app):
             paused=get_queue_state(),
         )
 
+    @app.route("/api/jobs/<job_id>/preset", methods=["POST"])
+    def jobs_edit_queued_preset(job_id):
+        """Replace a queued job snapshot only after an explicit user edit."""
+        job = get_job(job_id)
+        if not job:
+            return jsonify(error="job not found on this node"), 404
+        data = request.get_json(silent=True) or {}
+        requested = str(data.get("preset") or data.get("selection") or "").strip().lower()
+        if requested not in {"smart", "auto", "1080", "4k"}:
+            return jsonify(error="preset must be smart, auto, 1080, or 4k"), 400
+        try:
+            plan = _node_queue_plan(str(job.get("src") or ""), requested, data.get("smart_tuning"))
+        except Exception as exc:
+            return jsonify(error=f"preset planning failed: {str(exc)[:180]}"), 400
+        ok, error = replace_queued_job_preset(job_id, plan)
+        if not ok:
+            return jsonify(error=error or "preset edit failed"), 400
+        _wake_auto_node_dispatch()
+        updated = next((row for row in list_jobs_for_api() if row.get("id") == job_id), None)
+        log_event(
+            "queued_preset_edited",
+            f"Queued preset changed to {requested} for {os.path.basename(str(job.get('src') or ''))}.",
+            job_id=job_id,
+            src=job.get("src"),
+        )
+        return jsonify(ok=True, job=updated)
+
     @app.route("/jobs/summary")
     def jobs_summary():
         """Return dashboard metrics for the jobs page."""
@@ -9138,6 +9951,8 @@ def register_routes(app):
         data = request.get_json(force=True)
         path = data.get("path")
         preset = data.get("preset") or "1080"
+        dispatch_mode = str(data.get("mode") or "local").strip().lower()
+        node_id = str(data.get("node_id") or "").strip()
 
         if not path or not os.path.isdir(path):
             return jsonify(error="invalid path"), 400
@@ -9145,7 +9960,7 @@ def register_routes(app):
         if not is_allowed_path(path):
             return jsonify(error="path not allowed"), 400
 
-        if preset not in ("1080", "4k", "auto"):
+        if preset not in ("1080", "4k", "auto", "smart"):
             return jsonify(error="invalid preset"), 400
 
         files = sorted(
@@ -9161,14 +9976,11 @@ def register_routes(app):
         if not files:
             return jsonify(error="no video files found"), 400
 
-        to_create = []
-        for entry in files:
-            src = os.path.join(path, entry)
-            effective_preset = guess_preset_from_filename(entry) if preset == "auto" else preset
-            to_create.append((src, effective_preset))
-
-        count = create_jobs_batch(to_create)
-        return jsonify(count=count)
+        paths = [os.path.join(path, entry) for entry in files]
+        count, skipped = _queue_paths_to_destination(paths, preset, dispatch_mode, node_id)
+        if not count and skipped:
+            return jsonify(error=skipped[0].get("reason") or "no files could be queued", skipped=skipped), 400
+        return jsonify(count=count, skipped=skipped)
 
     # ------------- Batch encode (recursive) -------------
 
@@ -9178,6 +9990,8 @@ def register_routes(app):
         data = request.get_json(force=True)
         path = data.get("path")
         preset = data.get("preset") or "1080"
+        dispatch_mode = str(data.get("mode") or "local").strip().lower()
+        node_id = str(data.get("node_id") or "").strip()
 
         if not path or not os.path.isdir(path):
             return jsonify(error="invalid path"), 400
@@ -9185,7 +9999,7 @@ def register_routes(app):
         if not is_allowed_path(path):
             return jsonify(error="path not allowed"), 400
 
-        if preset not in ("1080", "4k", "auto"):
+        if preset not in ("1080", "4k", "auto", "smart"):
             return jsonify(error="invalid preset"), 400
 
         to_create = []
@@ -9205,8 +10019,11 @@ def register_routes(app):
         if not to_create:
             return jsonify(error="no video files found"), 400
 
-        count = create_jobs_batch(to_create)
-        return jsonify(count=count)
+        paths = [src for src, _effective_preset in to_create]
+        count, skipped = _queue_paths_to_destination(paths, preset, dispatch_mode, node_id)
+        if not count and skipped:
+            return jsonify(error=skipped[0].get("reason") or "no files could be queued", skipped=skipped), 400
+        return jsonify(count=count, skipped=skipped)
 
     # ------------- Clear finished jobs -------------
 
@@ -9497,3 +10314,4 @@ def register_routes(app):
 
     _start_beta_autoscan_thread()
     _start_node_heartbeat_thread()
+    _start_auto_node_dispatch_thread()

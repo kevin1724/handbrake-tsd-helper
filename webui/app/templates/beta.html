@@ -1097,8 +1097,9 @@
           <label class="beta-field" for="dispatchModeSelect">
             <span>Run on</span>
             <select id="dispatchModeSelect">
-              <option value="local" selected>Local queue</option>
-              <option value="best">Best worker</option>
+              <option value="available" selected>Next available node</option>
+              <option value="local">Local controller</option>
+              <option value="best">Best worker now</option>
               <option value="node">Selected worker</option>
             </select>
           </label>
@@ -1601,7 +1602,7 @@
     }
 
     function selectedNodeForPrediction() {
-      const mode = el("dispatchModeSelect")?.value || "local";
+      const mode = el("dispatchModeSelect")?.value || "available";
       if (mode !== "node") return null;
       const nodeId = el("dispatchNodeSelect")?.value || "";
       return linkedNodes.find((node) => String(node.id || "") === String(nodeId)) || null;
@@ -1698,7 +1699,7 @@
       const node = selectedNodeForPrediction();
       const paths = Array.from(selectedPaths);
       if (!node) {
-        hint.textContent = (el("dispatchModeSelect")?.value || "local") === "node" ? "Pick a worker for node ETA." : "";
+        hint.textContent = (el("dispatchModeSelect")?.value || "available") === "node" ? "Pick a worker for node ETA." : "";
         return;
       }
       if (!paths.length) {
@@ -1723,7 +1724,7 @@
       const modeSelect = el("dispatchModeSelect");
       const nodeSelect = el("dispatchNodeSelect");
       if (!modeSelect || !nodeSelect) return;
-      const mode = modeSelect.value || "local";
+      const mode = modeSelect.value || "available";
       nodeSelect.innerHTML = "";
       if (!linkedNodes.length) {
         const opt = document.createElement("option");
@@ -1929,7 +1930,8 @@
     }
 
     function dispatchTargetLabel() {
-      const mode = el("dispatchModeSelect")?.value || "local";
+      const mode = el("dispatchModeSelect")?.value || "available";
+      if (mode === "available") return "Next available node";
       if (mode === "local") return "Local queue";
       if (mode === "best") return "Best worker";
       const nodeId = el("dispatchNodeSelect")?.value || "";
@@ -2155,7 +2157,7 @@
       if (queueBusy) return false;
       const preset = options.preset || el("queuePresetSelect").value || "smart";
       const smartTuning = options.smartTuning || {};
-      const mode = el("dispatchModeSelect")?.value || "local";
+      const mode = el("dispatchModeSelect")?.value || "available";
       const nodeId = el("dispatchNodeSelect")?.value || "";
       queueBusy = true;
       el("betaStatus").textContent = preset === "smart" ? `Building Smart plans for ${label}...` : `Queuing ${label}...`;

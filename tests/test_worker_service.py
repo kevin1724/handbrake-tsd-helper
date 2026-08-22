@@ -50,10 +50,72 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertEqual(discovery.status_code, 200)
         self.assertEqual(discovery.get_json()["worker_mode"], "headless")
         self.assertTrue(discovery.get_json()["requires_remote_transfer"])
+        self.assertIn("hardware", discovery.get_json())
 
         health = self.client.get("/api/health")
         self.assertEqual(health.status_code, 200)
         self.assertEqual(health.get_json()["work"]["path"], self.work_dir)
+
+    def test_automatic_dispatch_job_persists_and_keeps_fifo_claims(self):
+        original_jobs = jobs.jobs
+        original_queue = jobs.job_queue
+        original_threads = jobs.RUNNING_JOB_THREADS
+        original_jobs_file = jobs.JOBS_FILE
+        original_queue_paused = jobs.queue_paused
+        jobs.jobs = {}
+        jobs.job_queue = []
+        jobs.RUNNING_JOB_THREADS = {}
+        jobs.JOBS_FILE = os.path.join(self.tempdir.name, "auto-dispatch-jobs.json")
+        jobs.queue_paused = True
+        try:
+            with (
+                mock.patch.object(jobs, "ensure_dispatcher"),
+                mock.patch.object(jobs, "log_event"),
+            ):
+                job_id = jobs.create_job(
+                    "/media/Automatic.Movie.1080p.mkv",
+                    "1080",
+                    extra_args="--encoder qsv_h265_10bit",
+                    encode_metadata={
+                        "encoder": "qsv_h265_10bit",
+                        "encoder_family": "qsv",
+                    },
+                    dispatch_mode="auto",
+                )
+                queued = jobs.get_job(job_id)
+                self.assertEqual(queued["mode"], "auto_node")
+                self.assertEqual(queued["phase"], "waiting_for_node")
+                self.assertEqual(queued["dispatch_node_name"], "Next available node")
+                self.assertEqual(jobs.get_next_auto_dispatch_job()[0], job_id)
+
+                jobs.jobs = {}
+                jobs.job_queue = []
+                jobs.load_jobs()
+                queued = jobs.get_job(job_id)
+                self.assertEqual(queued["mode"], "auto_node")
+                self.assertEqual(queued["dispatch_plan"]["encode_metadata"]["encoder"], "qsv_h265_10bit")
+                self.assertEqual(jobs.get_next_auto_dispatch_job()[0], job_id)
+
+                claimed = jobs.claim_auto_dispatch_job(job_id, "worker-1", "Worker one")
+                self.assertEqual(claimed["status"], "dispatching")
+                self.assertEqual(claimed["dispatch_node_id"], "worker-1")
+                self.assertTrue(jobs.release_auto_dispatch_job(job_id, "busy", retry_seconds=0.5))
+                queued = jobs.get_job(job_id)
+                self.assertEqual(queued["status"], "queued")
+                self.assertEqual(queued["dispatch_node_name"], "Next available node")
+
+                queued["dispatch_retry_at"] = 0
+                self.assertTrue(jobs.activate_auto_dispatch_locally(job_id, "main", "Main controller"))
+                local = jobs.get_job(job_id)
+                self.assertEqual(local["mode"], "local")
+                self.assertEqual(local["dispatch_mode"], "auto")
+                self.assertEqual(local["dispatch_node_name"], "Main controller")
+        finally:
+            jobs.jobs = original_jobs
+            jobs.job_queue = original_queue
+            jobs.RUNNING_JOB_THREADS = original_threads
+            jobs.JOBS_FILE = original_jobs_file
+            jobs.queue_paused = original_queue_paused
 
     def test_pairing_response_marks_worker_as_transfer_only(self):
         pairing = node_linking.create_pairing_code()
@@ -271,7 +333,7 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertEqual(jobs._hardware_transcode_limit(job=stale_job), 3)
 
         health = self.client.get("/api/health").get_json()
-        self.assertEqual(health["release"], "2.5.4")
+        self.assertEqual(health["release"], "2.5.5")
         self.assertEqual(health["encoding_policy"]["hardware_transcode_concurrency"], 3)
 
     def test_hardware_preset_and_concurrency_limit_are_detected_safely(self):

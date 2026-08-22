@@ -44,7 +44,7 @@ from webui.app.presets import guess_preset_from_filename, load_preset_config
 from webui.app.settings import load_settings, save_settings
 
 
-WORKER_RELEASE = "2.5.4"
+WORKER_RELEASE = "2.5.5"
 
 
 def _public_encoding_policy() -> dict:
@@ -273,6 +273,7 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
         except ValueError as exc:
             return jsonify(error=str(exc)), 400
         accepted["capabilities"] = node_discovery().get("capabilities") or []
+        accepted["hardware"] = node_discovery().get("hardware") or {}
         print(
             f"[WORKER] Paired with controller {data.get('controller_name') or data.get('controller_id')} "
             f"at {accepted.get('controller_url') or data.get('controller_url')}",
@@ -298,6 +299,7 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
         except ValueError as exc:
             return jsonify(error=str(exc)), 401
         recovered["capabilities"] = node_discovery().get("capabilities") or []
+        recovered["hardware"] = node_discovery().get("hardware") or {}
         return jsonify(ok=True, worker_mode="headless", requires_remote_transfer=True, **recovered)
 
     @app.post("/api/node/pair/enable-recovery")
@@ -330,6 +332,7 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             requires_remote_transfer=True,
             protocol_version=NODE_PROTOCOL_VERSION,
             capabilities=discovery.get("capabilities") or [],
+            hardware=discovery.get("hardware") or {},
             paired_controllers=list_trusted_controllers_public(),
             remote_transfer_temp_dir=work_dir,
             work_free_bytes=int(usage.free),
