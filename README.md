@@ -402,6 +402,10 @@ maps HandBrake's adapter index to its detected DRM render node instead of
 passing the numeric index to VAAPI as a device name. Container startup and each
 QSV encode run VAAPI and QSV device preflight checks; their output includes the
 render-node listing, selected node, active Intel VA driver, and adapter index.
+When Linux HandBrake downloads decoded QSV frames for its software filter
+pipeline, the encoder log explicitly reports QSV hardware decode and QSV
+hardware encode through a system-memory transfer; it no longer mislabels that
+verified hardware-decode case as an encode-only path.
 
 Rebuild after QSV-related Dockerfile changes:
 
@@ -476,7 +480,7 @@ The encoding-only worker has its own public Docker Hub image:
 [kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
 
 `latest` and `main` follow the main branch. Stable worker releases also publish
-`2.5.3` and `2.5` tags:
+`2.5.4` and `2.5` tags:
 
 ```bash
 docker pull kevina1724/handbrake-tsd-worker:latest

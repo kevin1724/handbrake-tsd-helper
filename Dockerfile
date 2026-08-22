@@ -90,8 +90,8 @@ RUN set -eux; \
       $qsv_build_deps; \
     git clone --depth 1 --branch "${HANDBRAKE_VERSION}" https://github.com/HandBrake/HandBrake.git /tmp/HandBrake; \
     cd /tmp/HandBrake; \
-    git apply --check /tmp/handbrake-qsv-render-node.patch; \
-    git apply /tmp/handbrake-qsv-render-node.patch; \
+    git apply --check --unidiff-zero /tmp/handbrake-qsv-render-node.patch; \
+    git apply --unidiff-zero /tmp/handbrake-qsv-render-node.patch; \
     ./configure --disable-gtk --enable-qsv --launch-jobs="$(nproc)" --launch; \
     install -m 0755 build/HandBrakeCLI /usr/local/bin/HandBrakeCLI; \
     strip --strip-unneeded /usr/local/bin/HandBrakeCLI; \

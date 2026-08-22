@@ -99,7 +99,7 @@ HARDWARE_ENCODER_FAMILIES = frozenset({
 QSV_ENCODERS = frozenset({"qsv_h264", "qsv_h265", "qsv_h265_10bit", "qsv_av1", "qsv_av1_10bit"})
 QSV_DECODE_SOURCE_CODECS = frozenset({"h264", "avc", "avc1", "hevc", "h265"})
 QSV_DECODE_POSITIVE_RE = re.compile(
-    r'(?:"(?:HWDecode|HardwareDecode)"\s*:\s*(?!0\b)-?\d+|"Decode"\s*:\s*true|using full QSV|decoder:\s*(?:h264|hevc)_qsv|(?:h264|hevc)_qsv-decoder)',
+    r'(?:"(?:HWDecode|HardwareDecode)"\s*:\s*(?!0\b)-?\d+|"Decode"\s*:\s*true|using full QSV|QSV hardware decode and QSV hardware encode|decoder:\s*(?:qsv\s+)?(?:h264|hevc)(?:_qsv)?|(?:h264|hevc)_qsv-decoder)',
     re.IGNORECASE,
 )
 QSV_DECODE_FALLBACK_RE = re.compile(

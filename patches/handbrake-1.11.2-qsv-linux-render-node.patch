@@ -39,3 +39,20 @@ index 2512fd2..2ca06e5 100644
 -    return details->extended_device_id.DRMRenderNodeNum;
 +    return details != NULL ? details->extended_device_id.DRMRenderNodeNum : -1;
  }
+@@ -2792,3 +2792,13 @@ int hb_qsv_apply_encoder_options(qsv_data_t * qsv_data, hb_job_t *job, AVDiction
+-    hb_log("encavcodec: using%s%s path",
+-           hb_qsv_full_path_is_enabled(job) ? " full QSV" : " encode-only",
+-           hb_qsv_get_memory_type(job) == MFX_IOPATTERN_OUT_VIDEO_MEMORY ? " via video memory" : " via system memory");
++    if (hb_qsv_full_path_is_enabled(job))
++    {
++        hb_log("encavcodec: using full QSV%s path",
++               hb_qsv_get_memory_type(job) == MFX_IOPATTERN_OUT_VIDEO_MEMORY ? " via video memory" : " via system memory");
++    }
++    else if (job->hw_decode & HB_DECODE_QSV)
++    {
++        hb_log("encavcodec: QSV hardware decode and QSV hardware encode via system memory transfer");
++    }
++    else
++    {
++        hb_log("encavcodec: using encode-only via system memory path");
++    }

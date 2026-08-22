@@ -184,6 +184,9 @@ At startup and before each QSV encode, logs show `ls -l /dev/dri`, the selected
 render node, active VA driver, selected adapter, and VAAPI/QSV preflight result.
 HandBrake's adapter index is resolved to the detected DRM render node, so VAAPI
 is never initialized with the invalid device name `0`.
+On Linux, HandBrake may transfer QSV-decoded frames through system memory for
+software filters. The worker distinguishes that verified hardware decode plus
+hardware encode path from a genuinely encode-only job in its log message.
 
 ## 5. Send work
 

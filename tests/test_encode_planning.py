@@ -166,7 +166,9 @@ class EncodePlanningTests(unittest.TestCase):
             '"QSV": {"Decode": true}',
             'encqsvInit: using full QSV path',
             'decoder: h264_qsv 8-bit (yuv420p)',
+            'decoder: qsv hevc 10-bit (p010le, sw)',
             'hevc_qsv-decoder: opening decoder',
+            'encavcodec: QSV hardware decode and QSV hardware encode via system memory transfer',
         )
         negative = (
             '"QSV": {"Decode": false}',
@@ -243,11 +245,15 @@ class EncodePlanningTests(unittest.TestCase):
         with open(os.path.join(root, "worker", "qsv-preflight.sh"), "r", encoding="utf-8") as stream:
             preflight = stream.read()
 
-        self.assertIn("git apply /tmp/handbrake-qsv-render-node.patch", dockerfile)
+        self.assertIn("git apply --unidiff-zero /tmp/handbrake-qsv-render-node.patch", dockerfile)
         self.assertIn('ENTRYPOINT ["/usr/local/bin/bytesqueeze-entrypoint"]', dockerfile)
         self.assertIn("hb_qsv_get_adapter_render_node(device_index)", handbrake_patch)
         self.assertIn('"/dev/dri/renderD%u"', handbrake_patch)
         self.assertIn('"child_device_type", "vaapi"', handbrake_patch)
+        self.assertIn(
+            "QSV hardware decode and QSV hardware encode via system memory transfer",
+            handbrake_patch,
+        )
         self.assertIn('vainfo --display drm --device "$RENDER_DEVICE"', preflight)
         self.assertIn("child_device=$RENDER_DEVICE,child_device_type=vaapi", preflight)
 
