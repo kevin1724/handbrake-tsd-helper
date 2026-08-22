@@ -54,6 +54,11 @@ never changes server settings or media data.
 Smart Preset protections are editable from both **Settings → Smart Presets** on the web and the
 phone. They can lock source resolution, black bars, display aspect ratio, every
 audio/subtitle language, and audio passthrough across full-season queues.
+Every episode in a season or full-show Smart Queue is probed and snapshotted
+independently, including HDR/color metadata and its own minimum quality floor.
+The phone also exposes the explicitly opt-in beta scene-analysis switch; when
+enabled, the server sends representative JPEG stills to its configured OpenAI
+or Gemini provider and falls back safely if that analysis is unavailable.
 Queued controller and worker jobs can also be explicitly changed to Smart,
 Auto, 1080p, or 4K from the Queue screen; the saved preset snapshot changes
 only when the user selects that action.

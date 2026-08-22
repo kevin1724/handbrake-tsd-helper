@@ -51,7 +51,8 @@
       "SubtitleLanguageList": [
         "eng",
         "spa"
-      ]
+      ],
+      "VideoPasshtruHDRDynamicMetadata": "all"
     }
   ],
   "VersionMajor": 59,

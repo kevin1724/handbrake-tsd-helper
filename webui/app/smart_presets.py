@@ -20,7 +20,7 @@ from .config import DATA_DIR
 
 
 SMART_PRESETS_FILE = os.path.join(DATA_DIR, "smart_presets.json")
-SMART_PRESET_VERSION = 4
+SMART_PRESET_VERSION = 5
 SMART_FEEDBACK_LIMIT = 1000
 SMART_LOCK = threading.RLock()
 
@@ -97,6 +97,12 @@ def default_profile() -> dict:
         "never_transcode_audio": True,
         "preserve_audio": True,
         "preserve_subtitles": True,
+        # Explicitly opt-in because representative JPEG frames leave the
+        # controller when a cloud vision provider evaluates an episode. Each
+        # episode is sampled and cached independently; this never changes the
+        # deterministic HDR, resolution, audio, or subtitle guardrails.
+        "episode_ai_enabled": False,
+        "episode_ai_frame_count": 4,
         "automation_enabled": False,
         "minimum_feedback": 2,
         "confidence_threshold": 0.72,
@@ -170,6 +176,19 @@ def normalize_profile(values: dict | None, existing: dict | None = None) -> dict
             # Keep the legacy booleans synchronized for older clients.
             "preserve_audio": never_transcode_audio,
             "preserve_subtitles": keep_all_subtitle_languages,
+            "episode_ai_enabled": _truthy(
+                values.get("episode_ai_enabled"), base.get("episode_ai_enabled", False)
+            ),
+            "episode_ai_frame_count": int(
+                round(
+                    _bounded(
+                        values.get("episode_ai_frame_count"),
+                        base.get("episode_ai_frame_count", 4),
+                        3,
+                        8,
+                    )
+                )
+            ),
             "automation_enabled": _truthy(
                 values.get("automation_enabled"), base["automation_enabled"]
             ),

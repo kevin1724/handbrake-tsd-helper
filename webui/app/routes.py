@@ -46,6 +46,7 @@ import secrets
 import shutil
 import socket
 import shlex
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from copy import deepcopy
 from datetime import datetime, timedelta
 from urllib.error import HTTPError, URLError
@@ -126,7 +127,12 @@ from .cpu_profiles import (
     list_cpu_profiles,
     get_cpu_profile,
 )
-from .wizard_llm import run_wizard_llm, wizard_llm_status
+from .wizard_llm import (
+    analyze_episode_scenes,
+    episode_scene_fingerprint,
+    run_wizard_llm,
+    wizard_llm_status,
+)
 from .smart_presets import (
     candidate_learning as smart_candidate_learning,
     feedback_context as smart_feedback_context,
@@ -675,7 +681,9 @@ def _ffprobe_media_fast(src_path: str):
         raise RuntimeError("ffprobe returned incomplete video info")
 
     is_hdr, hdr_reason = _detect_hdr_from_video_info(v0, src_path)
+    hdr_format = _hdr_format_from_video_info(v0, src_path) if is_hdr else "sdr"
 
+    bit_depth_match = re.search(r"(?:p|yuv)\d*(10|12)(?:le|be)?", str(v0.get("pix_fmt") or ""), re.IGNORECASE)
     return {
         "duration_sec": duration_sec,
         "width": width,
@@ -684,6 +692,14 @@ def _ffprobe_media_fast(src_path: str):
         "video_codec": v0.get("codec_name") or None,
         "is_hdr": is_hdr,
         "hdr_reason": hdr_reason,
+        "hdr_format": hdr_format,
+        "pix_fmt": v0.get("pix_fmt") or "",
+        "color_space": v0.get("color_space") or "",
+        "color_transfer": v0.get("color_transfer") or "",
+        "color_primaries": v0.get("color_primaries") or "",
+        "bit_depth": int(bit_depth_match.group(1)) if bit_depth_match else 8,
+        "hdr_side_data": v0.get("side_data_list") if isinstance(v0.get("side_data_list"), list) else [],
+        "probe_source": "ffprobe",
     }
 
 
@@ -851,7 +867,7 @@ def _probe_media(src_path):
         return _probe_media_fallback(src_path, "the selected title omitted duration or dimensions")
 
     hdr_reason = _hdr_filename_reason(src_path)
-    return {
+    result = {
         "duration_sec": float(dur),
         "width": int(w),
         "height": int(h),
@@ -859,7 +875,34 @@ def _probe_media(src_path):
         "video_codec": codec,
         "is_hdr": bool(hdr_reason),
         "hdr_reason": hdr_reason,
+        "probe_source": "handbrake",
     }
+    # HandBrake's title JSON is reliable for title selection and geometry, but
+    # several releases omit color-transfer/mastering fields from that shape.
+    # Merge an ffprobe video-stream inspection for every source so an episode
+    # cannot become SDR merely because its filename lacks “HDR”. Geometry and
+    # duration remain sourced from the selected HandBrake title.
+    try:
+        technical = _ffprobe_media_fast(src_path)
+    except Exception as exc:
+        result["technical_probe_warning"] = str(exc)[:240]
+    else:
+        for key in (
+            "video_codec",
+            "is_hdr",
+            "hdr_reason",
+            "hdr_format",
+            "pix_fmt",
+            "color_space",
+            "color_transfer",
+            "color_primaries",
+            "bit_depth",
+            "hdr_side_data",
+        ):
+            if key in technical and technical.get(key) is not None and technical.get(key) != "":
+                result[key] = technical[key]
+        result["probe_source"] = "handbrake+ffprobe"
+    return result
 
 
 def _size_to_mb(value, unit):
@@ -2130,6 +2173,12 @@ def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h
         _wizard_encoder_preset(options),
     ]
 
+    if options.get("source_is_hdr"):
+        # Static HDR10 mastering/light metadata is passed automatically by
+        # HandBrake. This additionally requests supported HDR10+/Dolby Vision
+        # dynamic metadata instead of inheriting a preset that disables it.
+        args += ["--hdr-dynamic-metadata", "all"]
+
     if options.get("smart_never_downscale"):
         # Explicit dimensions override any lower resolution limit embedded in
         # the selected JSON preset, not just the Smart planner's own decision.
@@ -2224,6 +2273,13 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
     info["is_hdr"] = bool(info.get("is_hdr") or filename_hdr_reason)
     if info["is_hdr"] and not info.get("hdr_reason"):
         info["hdr_reason"] = filename_hdr_reason or "filename"
+    if not info.get("hdr_format"):
+        hdr_text = f"{info.get('hdr_reason') or ''} {filename_hdr_reason}".lower()
+        info["hdr_format"] = (
+            "dolby_vision"
+            if any(token in hdr_text for token in ("dolby", "dovi", "dvhe", "dvh1"))
+            else ("hlg" if "hlg" in hdr_text or "arib-std-b67" in hdr_text else ("hdr10" if info["is_hdr"] else "sdr"))
+        )
     duration_sec = float(info.get("duration_sec") or 0.0)
     src_w = int(info.get("width") or 0)
     src_h = int(info.get("height") or 0)
@@ -2258,6 +2314,28 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
         effective_preset,
         bool(settings.get("qsv_device_available", False)),
     )
+    hdr_format = str(info.get("hdr_format") or ("hdr10" if info.get("is_hdr") else "sdr")).lower()
+    if hdr_format in {"hdr10plus", "dolby_vision"} and options.get("encoder_family") in {
+        "qsv",
+        "nvenc",
+        "vce",
+        "vaapi",
+    }:
+        # These hardware paths retain static HDR10 but are not HandBrake's
+        # documented HDR10+/Dolby Vision passthrough encoders. Preserve the
+        # episode's dynamic metadata instead of silently flattening it.
+        options["encoder_family"] = "software"
+        if options.get("video_codec") not in {"h265", "av1"}:
+            options["video_codec"] = "h265"
+        options["bit_depth"] = "10"
+        ai_info.setdefault("warnings", []).append(
+            f"{hdr_format.replace('_', ' ').upper()} metadata requires a preservation-capable 10-bit software encoder."
+        )
+        ai_info.setdefault("decisions", []).append(
+            "Kept dynamic HDR metadata by avoiding an unsupported hardware-encoder path."
+        )
+    options["source_is_hdr"] = bool(info.get("is_hdr"))
+    options["source_hdr_format"] = hdr_format
     options = _enforce_smart_guardrails(options)
     target_mb = _size_to_mb(options["target_size_value"], options["target_size_unit"])
     target_bytes = target_mb * 1024.0 * 1024.0
@@ -2714,6 +2792,93 @@ def _normalize_smart_tuning(value) -> dict:
     return tuning
 
 
+def _smart_episode_quality_floor(plan: dict) -> dict:
+    """Calculate a codec-aware minimum target that prevents starved episodes."""
+    probe = plan.get("probe") if isinstance(plan.get("probe"), dict) else {}
+    options = plan.get("options") if isinstance(plan.get("options"), dict) else {}
+    estimates = plan.get("estimates") if isinstance(plan.get("estimates"), dict) else {}
+    output = estimates.get("output_resolution") if isinstance(estimates.get("output_resolution"), dict) else {}
+    width = max(1, int(output.get("width") or probe.get("width") or 1))
+    height = max(1, int(output.get("height") or probe.get("height") or 1))
+    fps = max(1.0, float(probe.get("fps") or 24.0))
+    duration = max(1.0, float(probe.get("duration_sec") or 1.0))
+    is_hdr = bool(probe.get("is_hdr"))
+    codec = str(options.get("video_codec") or "h265").lower()
+    encoder_family = str(options.get("encoder_family") or "software").lower()
+
+    # Bits per pixel per frame is deliberately conservative here. The floor
+    # is a last line of defense for complete-season jobs, not the quality
+    # target itself. HDR, hardware HEVC, grain, and high-resolution sources
+    # need more headroom than clean SDR software encodes.
+    min_bpp = 0.050 if is_hdr else 0.034
+    if codec == "h264":
+        min_bpp *= 1.35
+    elif codec == "av1":
+        min_bpp *= 0.82
+    if encoder_family in {"qsv", "nvenc", "vce", "vaapi", "videotoolbox"}:
+        min_bpp *= 1.06
+    if fps >= 50:
+        min_bpp *= 1.08
+    if width * height >= 3_200 * 1_800:
+        min_bpp *= 1.04
+
+    min_video_kbps = width * height * fps * min_bpp / 1000.0
+    audio_kbps = max(128.0, float(_wizard_audio_kbps(options) or 0.0))
+    target_mb = (min_video_kbps + audio_kbps) * 1000.0 * duration / 8.0 / (1024.0 * 1024.0)
+    source_mb = max(1.0, float(probe.get("source_size_bytes") or 0.0) / (1024.0 * 1024.0))
+    target_mb = min(target_mb, source_mb * 0.92)
+    return {
+        "target_mb": round(max(1.0, target_mb), 1),
+        "min_bpp": round(min_bpp, 5),
+        "video_kbps": round(min_video_kbps, 1),
+        "is_hdr": is_hdr,
+        "resolution": {"width": width, "height": height},
+        "reason": (
+            "HDR/color-detail safety floor"
+            if is_hdr
+            else "per-episode detail safety floor"
+        ),
+    }
+
+
+def _smart_episode_snapshot(plan: dict, scene_analysis: dict, quality_floor: dict) -> dict:
+    probe = plan.get("probe") if isinstance(plan.get("probe"), dict) else {}
+    estimates = plan.get("estimates") if isinstance(plan.get("estimates"), dict) else {}
+    try:
+        fingerprint = episode_scene_fingerprint(str(plan.get("src") or ""))
+    except OSError:
+        fingerprint = str(scene_analysis.get("fingerprint") or "")
+    return {
+        "version": 1,
+        "fingerprint": fingerprint,
+        "source_name": os.path.basename(str(plan.get("src") or ""))[:240],
+        "source": {
+            "width": int(probe.get("width") or 0),
+            "height": int(probe.get("height") or 0),
+            "fps": round(float(probe.get("fps") or 0.0), 3),
+            "duration_sec": round(float(probe.get("duration_sec") or 0.0), 2),
+            "video_codec": str(probe.get("video_codec") or "")[:30],
+            "bit_depth": int(probe.get("bit_depth") or 0),
+            "is_hdr": bool(probe.get("is_hdr")),
+            "hdr_reason": str(probe.get("hdr_reason") or "")[:120],
+            "hdr_format": str(probe.get("hdr_format") or "")[:40],
+            "color_transfer": str(probe.get("color_transfer") or "")[:40],
+            "color_primaries": str(probe.get("color_primaries") or "")[:40],
+            "probe_source": str(probe.get("probe_source") or "")[:40],
+        },
+        "target": {
+            "preset": str(plan.get("preset") or "")[:20],
+            "width": int((estimates.get("output_resolution") or {}).get("width") or 0),
+            "height": int((estimates.get("output_resolution") or {}).get("height") or 0),
+            "target_mb": round(float((plan.get("inputs") or {}).get("target_mb") or 0.0), 1),
+            "video_bitrate_kbps": round(float(estimates.get("video_bitrate_kbps") or 0.0), 1),
+            "encoder": str(estimates.get("encoder") or "")[:50],
+        },
+        "quality_floor": quality_floor,
+        "scene_analysis": scene_analysis,
+    }
+
+
 def _smart_recommendation(data: dict, *, require_automation_ready: bool = False) -> dict:
     """Build and rank three safe plans for one source."""
     data = dict(data or {})
@@ -2726,6 +2891,17 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
         if tuning.get(key):
             profile[key] = tuning[key]
 
+    src = str(data.get("src") or "").strip()
+    if not src or not os.path.isfile(src):
+        raise ValueError("invalid src")
+    if not is_allowed_path(src):
+        raise ValueError("path not allowed")
+    # One authoritative probe is created for this episode and reused only by
+    # its own candidates. A season/show request calls this function again for
+    # every path, so no HDR or scene characteristic can leak across episodes.
+    episode_probe = dict(_probe_media(src) or {})
+    probe_func = lambda _path: dict(episode_probe)
+
     base_options = _smart_profile_options(data, profile)
     if tuning.get("resolution_mode"):
         base_options["resolution_mode"] = tuning["resolution_mode"]
@@ -2734,10 +2910,20 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
         base_options["ai_subtitle_scope"] = tuning["subtitle_mode"]
         base_options["smart_subtitle_strategy"] = tuning["subtitle_mode"]
     base_options = _enforce_smart_guardrails(base_options)
-    baseline = _wizard_plan({**data, **base_options}, probe_func=_probe_media, preview=False)
+    baseline = _wizard_plan({**data, **base_options}, probe_func=probe_func, preview=False)
+    scene_analysis = analyze_episode_scenes(
+        src,
+        baseline.get("probe") or episode_probe,
+        profile=profile,
+        settings=load_settings(),
+    )
+    scene_scale = float(scene_analysis.get("target_scale") or 1.0)
+    quality_floor = _smart_episode_quality_floor(baseline)
     target_mb = max(
         1.0,
-        float(baseline.get("inputs", {}).get("target_mb") or 1.0) * float(tuning.get("target_scale") or 1.0),
+        float(baseline.get("inputs", {}).get("target_mb") or 1.0)
+        * float(tuning.get("target_scale") or 1.0)
+        * scene_scale,
     )
     plans = []
     errors = []
@@ -2747,12 +2933,27 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
             {
                 "ai_goal": definition["goal"],
                 "target_size_auto": False,
-                "target_size_value": round(target_mb * float(definition["target_factor"]), 1),
+                "target_size_value": round(
+                    max(
+                        target_mb * float(definition["target_factor"]),
+                        float(quality_floor.get("target_mb") or 1.0),
+                    ),
+                    1,
+                ),
                 "target_size_unit": "MB",
             }
         )
         try:
-            plan = _wizard_plan({**data, **candidate_options}, probe_func=_probe_media, preview=False)
+            plan = _wizard_plan({**data, **candidate_options}, probe_func=probe_func, preview=False)
+            candidate_floor = _smart_episode_quality_floor(plan)
+            planned_target = float((plan.get("inputs") or {}).get("target_mb") or 0.0)
+            if planned_target + 0.05 < float(candidate_floor.get("target_mb") or 0.0):
+                candidate_options["target_size_value"] = float(candidate_floor["target_mb"])
+                plan = _wizard_plan({**data, **candidate_options}, probe_func=probe_func, preview=False)
+                candidate_floor = _smart_episode_quality_floor(plan)
+            plan["quality_floor"] = candidate_floor
+            plan["estimates"]["smart_quality_floor_mb"] = candidate_floor.get("target_mb")
+            plan["estimates"]["episode_scene_target_scale"] = scene_scale
             plans.append((definition, plan))
         except Exception as exc:
             errors.append(f"{definition['name']}: {exc}")
@@ -2791,6 +2992,10 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
                     "eta_seconds": estimates.get("eta_seconds"),
                     "eta_human": estimates.get("eta_human"),
                     "output_resolution": estimates.get("output_resolution"),
+                    "is_hdr": bool((plan.get("probe") or {}).get("is_hdr")),
+                    "hdr_reason": (plan.get("probe") or {}).get("hdr_reason") or "",
+                    "quality_floor_mb": (plan.get("quality_floor") or {}).get("target_mb"),
+                    "episode_scene_target_scale": scene_scale,
                 },
                 "_queue_plan": plan,
             }
@@ -2807,6 +3012,13 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
     if require_automation_ready and not context_auto_ready:
         raise ValueError("smart preset automation needs more reviews for this kind of source")
     selected_plan = candidates[0].pop("_queue_plan")
+    selected_quality_floor = (
+        selected_plan.get("quality_floor")
+        if isinstance(selected_plan.get("quality_floor"), dict)
+        else quality_floor
+    )
+    episode_plan = _smart_episode_snapshot(selected_plan, scene_analysis, selected_quality_floor)
+    selected_plan["episode_plan"] = episode_plan
     for row in candidates[1:]:
         row.pop("_queue_plan", None)
     return {
@@ -2817,8 +3029,47 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
         "auto_apply": context_auto_ready,
         "candidates": candidates,
         "errors": errors,
+        "episode_plan": episode_plan,
+        "scene_analysis": scene_analysis,
+        "quality_floor": selected_quality_floor,
         "selected_plan": selected_plan,
     }
+
+
+def _smart_recommendations_for_paths(paths: list[str], tuning: dict | None = None) -> tuple[dict, dict]:
+    """Plan a season/show concurrently while retaining one result per path."""
+    clean_paths = list(dict.fromkeys(str(path or "").strip() for path in paths if str(path or "").strip()))
+    if not clean_paths:
+        return {}, {}
+
+    try:
+        configured = int(os.environ.get("TSD_SMART_PLAN_WORKERS") or 3)
+    except (TypeError, ValueError):
+        configured = 3
+    worker_count = max(1, min(4, configured, len(clean_paths)))
+
+    def build(path: str) -> dict:
+        return _smart_recommendation(
+            {"src": path, "preset": "auto", "smart_tuning": tuning or {}}
+        )
+
+    if worker_count == 1:
+        try:
+            return {clean_paths[0]: build(clean_paths[0])}, {}
+        except Exception as exc:
+            return {}, {clean_paths[0]: str(exc)[:240]}
+
+    planned = {}
+    errors = {}
+    with ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="smart-episode") as executor:
+        futures = {executor.submit(build, path): path for path in clean_paths}
+        for future in as_completed(futures):
+            path = futures[future]
+            try:
+                planned[path] = future.result()
+            except Exception as exc:
+                errors[path] = str(exc)[:240]
+    return planned, errors
 
 
 def _create_smart_job(
@@ -2827,14 +3078,21 @@ def _create_smart_job(
     require_automation_ready: bool = False,
     automation_source: str = "smart_preset",
     tuning: dict | None = None,
+    recommendation: dict | None = None,
 ) -> tuple[str, dict]:
-    recommendation = _smart_recommendation(
-        {"src": src, "preset": "auto", "smart_tuning": tuning or {}},
-        require_automation_ready=require_automation_ready,
-    )
+    if isinstance(recommendation, dict):
+        recommendation = deepcopy(recommendation)
+    else:
+        recommendation = _smart_recommendation(
+            {"src": src, "preset": "auto", "smart_tuning": tuning or {}},
+            require_automation_ready=require_automation_ready,
+        )
     plan = recommendation.pop("selected_plan")
     recommended_id = recommendation.get("recommended_id")
     feedback_context = smart_feedback_context(plan, str(recommended_id or "balanced"))
+    episode_plan = plan.get("episode_plan") if isinstance(plan.get("episode_plan"), dict) else {}
+    preset_preferences = dict(plan.get("options") or {})
+    preset_preferences["smart_episode_plan"] = episode_plan
     job_id = create_job(
         plan["src"],
         plan["preset"],
@@ -2852,14 +3110,36 @@ def _create_smart_job(
             "smart_profile_id": "default",
             "smart_candidate_id": recommended_id,
             "smart_feedback_context": feedback_context,
+            "smart_episode_plan": episode_plan,
+            "is_hdr": bool((plan.get("probe") or {}).get("is_hdr")),
+            "hdr_reason": str((plan.get("probe") or {}).get("hdr_reason") or ""),
             "automation_source": automation_source,
             "preset_selection": "smart",
             "preset_adaptive": True,
-            "preset_preferences": plan.get("options") if isinstance(plan.get("options"), dict) else {},
+            "preset_preferences": preset_preferences,
         },
         preset_selection="smart",
         preset_adaptive=True,
-        preset_preferences=plan.get("options") if isinstance(plan.get("options"), dict) else {},
+        preset_preferences=preset_preferences,
+    )
+    scene = episode_plan.get("scene_analysis") if isinstance(episode_plan.get("scene_analysis"), dict) else {}
+    log_event(
+        "smart_episode_planned",
+        (
+            f"Built an independent Smart plan for {os.path.basename(src)}: "
+            f"{'HDR' if (plan.get('probe') or {}).get('is_hdr') else 'SDR'}, "
+            f"{plan.get('estimates', {}).get('encoder') or 'encoder unknown'}, "
+            f"{round(float((plan.get('inputs') or {}).get('target_mb') or 0.0), 1)} MB."
+        ),
+        job_id=job_id,
+        src=src,
+        extra={
+            "episode_fingerprint": str(episode_plan.get("fingerprint") or "")[:16],
+            "hdr_reason": str((plan.get("probe") or {}).get("hdr_reason") or ""),
+            "quality_floor_mb": (episode_plan.get("quality_floor") or {}).get("target_mb"),
+            "scene_ai_used": bool(scene.get("used")),
+            "scene_ai_reason": str(scene.get("reason") or "")[:160],
+        },
     )
     return job_id, recommendation
 
@@ -2901,7 +3181,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.16.0"
+APP_RELEASE = "3.17.0"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -2998,6 +3278,23 @@ def _path_looks_hdr(path: str) -> bool:
     return bool(_hdr_filename_reason(path))
 
 
+def _hdr_format_from_video_info(stream: dict, path: str = "") -> str:
+    stream = stream if isinstance(stream, dict) else {}
+    transfer = str(stream.get("color_transfer") or "").lower()
+    side_data = stream.get("side_data_list") if isinstance(stream.get("side_data_list"), list) else []
+    side_text = json.dumps(side_data).lower() if side_data else ""
+    path_text = str(path or "").lower()
+    if any(token in side_text for token in ("dovi configuration record", "dolby vision", "dv profile")):
+        return "dolby_vision"
+    if any(token in side_text for token in ("smpte2094-40", "smpte 2094-40", "hdr10+")) or "hdr10+" in path_text or "hdr10plus" in path_text:
+        return "hdr10plus"
+    if transfer == "arib-std-b67" or "hlg" in path_text:
+        return "hlg"
+    if transfer == "smpte2084" or _hdr_filename_reason(path):
+        return "hdr10"
+    return "sdr"
+
+
 def _detect_hdr_from_video_info(stream: dict, path: str = "") -> tuple[bool, str]:
     stream = stream if isinstance(stream, dict) else {}
     transfer = str(stream.get("color_transfer") or "").lower()
@@ -3009,6 +3306,8 @@ def _detect_hdr_from_video_info(stream: dict, path: str = "") -> tuple[bool, str
 
     if transfer in {"smpte2084", "arib-std-b67"}:
         return True, transfer
+    if any(token in side_text for token in ("dovi configuration record", "dolby vision", "dv profile")):
+        return True, "dolby vision metadata"
     if "mastering display metadata" in side_text or "content light level" in side_text:
         return True, "hdr metadata"
     if "bt2020" in primaries or "bt2020" in color_space:
@@ -5316,6 +5615,24 @@ def _latest_worker_job_error(worker_jobs: list) -> dict:
     }
 
 
+def _smart_preset_public_payload() -> dict:
+    payload = public_smart_preset_state()
+    status = wizard_llm_status(load_settings())
+    provider = str(status.get("provider") or "local")
+    payload["scene_ai"] = {
+        "beta": True,
+        "provider": provider,
+        "model": str(status.get("model") or "")[:100],
+        "ready": bool(status.get("ready") and provider in {"openai", "gemini"}),
+        "message": (
+            f"{provider.title()} vision is ready for per-episode analysis."
+            if status.get("ready") and provider in {"openai", "gemini"}
+            else "Configure and select OpenAI or Gemini under AI & API Keys; deterministic episode planning remains active."
+        ),
+    }
+    return payload
+
+
 def _linked_worker_jobs_for_api() -> list[dict]:
     """Normalize cached worker jobs into the main Jobs API shape."""
     combined = []
@@ -5786,7 +6103,13 @@ def _infer_controller_url_for_worker(worker_url: str = "") -> str:
     return f"{_request_scheme()}://{local_host}{port_text}"
 
 
-def _queue_local_paths(raw_paths, preset: str, smart_tuning: dict | None = None) -> tuple[int, list[dict]]:
+def _queue_local_paths(
+    raw_paths,
+    preset: str,
+    smart_tuning: dict | None = None,
+    *,
+    automation_source: str = "library_smart",
+) -> tuple[int, list[dict]]:
     if isinstance(raw_paths, str):
         raw_paths = [raw_paths]
     if not isinstance(raw_paths, list):
@@ -5818,10 +6141,21 @@ def _queue_local_paths(raw_paths, preset: str, smart_tuning: dict | None = None)
         effective = guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset
         to_create.append((src, effective))
     if preset == "smart":
+        recommendations, planning_errors = _smart_recommendations_for_paths(
+            [src for src, _effective in to_create], smart_tuning
+        )
         count = 0
         for src, _effective in to_create:
+            if src in planning_errors:
+                skipped.append({"path": src, "reason": f"smart preset planning failed: {planning_errors[src]}"})
+                continue
             try:
-                _create_smart_job(src, tuning=smart_tuning, automation_source="library_smart")
+                _create_smart_job(
+                    src,
+                    tuning=smart_tuning,
+                    automation_source=automation_source,
+                    recommendation=recommendations.get(src),
+                )
                 count += 1
             except Exception as exc:
                 skipped.append({"path": src, "reason": f"smart preset planning failed: {str(exc)[:140]}"})
@@ -5834,18 +6168,33 @@ def _queue_paths_to_destination(
     preset: str,
     mode: str,
     node_id: str = "",
+    smart_tuning: dict | None = None,
 ) -> tuple[int, list[dict]]:
     """Queue an already validated batch using the Queue screen destination."""
     normalized_mode = str(mode or "local").strip().lower()
     if normalized_mode == "local":
-        return _queue_local_paths(paths, preset)
+        return _queue_local_paths(paths, preset, smart_tuning)
+
+    smart_plans, smart_errors = ({}, {})
+    if str(preset or "").strip().lower() == "smart":
+        smart_plans, smart_errors = _smart_recommendations_for_paths(paths, smart_tuning)
+
+    def plan_for(src: str) -> dict:
+        if src in smart_errors:
+            raise RuntimeError(smart_errors[src])
+        return _node_queue_plan(
+            src,
+            preset,
+            smart_tuning,
+            smart_recommendation=smart_plans.get(src),
+        )
 
     if normalized_mode in {"available", "auto_node", "next_available"}:
         job_ids = []
         skipped = []
         for src in paths:
             try:
-                plan = _node_queue_plan(src, preset)
+                plan = plan_for(src)
                 job_id = create_job(
                     src,
                     plan.get("preset") or "1080",
@@ -5873,7 +6222,7 @@ def _queue_paths_to_destination(
         skipped = []
         for src in paths:
             try:
-                plan = _node_queue_plan(src, preset)
+                plan = plan_for(src)
                 selected, _result, _transfer_mode = _dispatch_plan_to_worker(selected, src, plan)
                 count += 1
             except Exception as exc:
@@ -5928,13 +6277,26 @@ def _node_preset_bundle(preset_key: str) -> dict | None:
         return None
 
 
-def _node_queue_plan(src: str, requested_preset: str, smart_tuning: dict | None = None) -> dict:
+def _node_queue_plan(
+    src: str,
+    requested_preset: str,
+    smart_tuning: dict | None = None,
+    *,
+    smart_recommendation: dict | None = None,
+) -> dict:
     requested = str(requested_preset or "auto").strip().lower()
     if requested == "smart":
-        recommendation = _smart_recommendation({"src": src, "preset": "auto", "smart_tuning": smart_tuning or {}})
+        recommendation = (
+            deepcopy(smart_recommendation)
+            if isinstance(smart_recommendation, dict)
+            else _smart_recommendation({"src": src, "preset": "auto", "smart_tuning": smart_tuning or {}})
+        )
         plan = recommendation.get("selected_plan") or {}
         options = plan.get("options") if isinstance(plan.get("options"), dict) else {}
         estimates = plan.get("estimates") if isinstance(plan.get("estimates"), dict) else {}
+        episode_plan = plan.get("episode_plan") if isinstance(plan.get("episode_plan"), dict) else {}
+        preset_preferences = dict(options)
+        preset_preferences["smart_episode_plan"] = episode_plan
         effective = str(plan.get("preset") or guess_preset_from_filename(os.path.basename(src)))
         return {
             "preset": effective,
@@ -5942,7 +6304,7 @@ def _node_queue_plan(src: str, requested_preset: str, smart_tuning: dict | None 
             "extra_args": " ".join(str(arg) for arg in plan.get("extra_args") or []),
             "preset_selection": "smart",
             "preset_adaptive": True,
-            "preset_preferences": options,
+            "preset_preferences": preset_preferences,
             "encode_metadata": {
                 "encode_method": estimates.get("encoder"),
                 "encoder": estimates.get("encoder"),
@@ -5956,10 +6318,13 @@ def _node_queue_plan(src: str, requested_preset: str, smart_tuning: dict | None 
                 "smart_profile_id": "default",
                 "smart_candidate_id": recommendation.get("recommended_id"),
                 "smart_feedback_context": smart_feedback_context(plan, str(recommendation.get("recommended_id") or "balanced")),
+                "smart_episode_plan": episode_plan,
+                "is_hdr": bool((plan.get("probe") or {}).get("is_hdr")),
+                "hdr_reason": str((plan.get("probe") or {}).get("hdr_reason") or ""),
                 "automation_source": "library_smart",
                 "preset_selection": "smart",
                 "preset_adaptive": True,
-                "preset_preferences": options,
+                "preset_preferences": preset_preferences,
             },
         }
     effective = guess_preset_from_filename(os.path.basename(src)) if requested == "auto" else requested
@@ -7389,7 +7754,7 @@ def register_routes(app):
     @app.route("/api/smart_presets", methods=["GET"])
     def smart_presets_api():
         """Return the user's smart-preset goals and learning progress."""
-        return jsonify(ok=True, **public_smart_preset_state())
+        return jsonify(ok=True, **_smart_preset_public_payload())
 
     @app.route("/api/smart_presets/profile", methods=["POST"])
     def smart_preset_profile_api():
@@ -7859,16 +8224,13 @@ def register_routes(app):
 
         queued = 0
         if preset == "smart":
-            for src in queueable:
-                try:
-                    _create_smart_job(
-                        src,
-                        tuning=data.get("smart_tuning"),
-                        automation_source="mobile_library_smart",
-                    )
-                    queued += 1
-                except Exception as exc:
-                    skipped.append({"path": src, "reason": f"smart preset planning failed: {exc}"})
+            queued, smart_skipped = _queue_local_paths(
+                queueable,
+                "smart",
+                data.get("smart_tuning"),
+                automation_source="mobile_library_smart",
+            )
+            skipped.extend(smart_skipped)
         else:
             jobs_to_create = [
                 (src, guess_preset_from_filename(os.path.basename(src)) if preset == "auto" else preset)
@@ -8136,7 +8498,7 @@ def register_routes(app):
             data = request.get_json(silent=True) or {}
             profile_data = data.get("profile") if isinstance(data.get("profile"), dict) else data
             save_smart_preset_profile(profile_data)
-        return jsonify(ok=True, **public_smart_preset_state())
+        return jsonify(ok=True, **_smart_preset_public_payload())
 
     @app.route("/api/mobile/v1/events")
     def mobile_events_api():
@@ -8862,6 +9224,38 @@ def register_routes(app):
         if not isinstance(paths, list) or not paths:
             return jsonify(error="missing paths"), 400
 
+        smart_batch_plans = {}
+        smart_batch_errors = {}
+        smart_batch_initialized = False
+
+        def planned_node_queue(src: str) -> dict:
+            nonlocal smart_batch_plans, smart_batch_errors, smart_batch_initialized
+            if preset == "smart" and not smart_batch_initialized:
+                smart_paths = []
+                for raw in paths:
+                    candidate = str(raw or "").strip()
+                    if (
+                        candidate
+                        and candidate not in smart_paths
+                        and os.path.isfile(candidate)
+                        and is_allowed_path(candidate)
+                        and candidate.lower().endswith(VIDEO_EXTS)
+                        and not os.path.splitext(os.path.basename(candidate))[0].lower().endswith("-tsd")
+                    ):
+                        smart_paths.append(candidate)
+                smart_batch_plans, smart_batch_errors = _smart_recommendations_for_paths(
+                    smart_paths, data.get("smart_tuning")
+                )
+                smart_batch_initialized = True
+            if src in smart_batch_errors:
+                raise RuntimeError(smart_batch_errors[src])
+            return _node_queue_plan(
+                src,
+                preset,
+                data.get("smart_tuning"),
+                smart_recommendation=smart_batch_plans.get(src),
+            )
+
         if mode in {"available", "auto_node", "next_available"}:
             job_ids = []
             skipped = []
@@ -8884,7 +9278,7 @@ def register_routes(app):
                     skipped.append({"path": src, "reason": reason})
                     continue
                 try:
-                    plan = _node_queue_plan(src, preset, data.get("smart_tuning"))
+                    plan = planned_node_queue(src)
                     job_id = create_job(
                         src,
                         plan.get("preset") or "1080",
@@ -9020,7 +9414,7 @@ def register_routes(app):
                 continue
 
             try:
-                plan = _node_queue_plan(src, preset, data.get("smart_tuning"))
+                plan = planned_node_queue(src)
                 plan = _prepare_plan_for_node(plan, selected)
             except Exception as exc:
                 skipped.append({"path": src, "reason": f"preset planning failed: {str(exc)[:180]}"})
@@ -9084,7 +9478,7 @@ def register_routes(app):
                     remaining_result_skipped.append(item)
                     continue
                 try:
-                    retry_plan = _node_queue_plan(original_path, preset, data.get("smart_tuning"))
+                    retry_plan = planned_node_queue(original_path)
                     retry_plan = _prepare_plan_for_node(retry_plan, selected)
                 except Exception as exc:
                     remaining_result_skipped.append({"path": original_path, "reason": f"preset planning failed: {str(exc)[:180]}"})
@@ -10271,7 +10665,7 @@ def register_routes(app):
             return jsonify(error="no video files found"), 400
 
         paths = [os.path.join(path, entry) for entry in files]
-        count, skipped = _queue_paths_to_destination(paths, preset, dispatch_mode, node_id)
+        count, skipped = _queue_paths_to_destination(paths, preset, dispatch_mode, node_id, data.get("smart_tuning"))
         if not count and skipped:
             return jsonify(error=skipped[0].get("reason") or "no files could be queued", skipped=skipped), 400
         return jsonify(count=count, skipped=skipped)
@@ -10314,7 +10708,7 @@ def register_routes(app):
             return jsonify(error="no video files found"), 400
 
         paths = [src for src, _effective_preset in to_create]
-        count, skipped = _queue_paths_to_destination(paths, preset, dispatch_mode, node_id)
+        count, skipped = _queue_paths_to_destination(paths, preset, dispatch_mode, node_id, data.get("smart_tuning"))
         if not count and skipped:
             return jsonify(error=skipped[0].get("reason") or "no files could be queued", skipped=skipped), 400
         return jsonify(count=count, skipped=skipped)

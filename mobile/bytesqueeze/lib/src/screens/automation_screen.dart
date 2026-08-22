@@ -427,7 +427,8 @@ class _AutomationScreenState extends State<AutomationScreen> {
                 _SmartPresetCard(
                     controller: widget.controller,
                     profile: smartProfile,
-                    learning: learning),
+                    learning: learning,
+                    sceneAi: asMap(widget.controller.smartPresets['scene_ai'])),
                 const SectionHeader(
                     title: 'Latest decisions',
                     subtitle:
@@ -1438,11 +1439,13 @@ class _SmartPresetCard extends StatefulWidget {
   const _SmartPresetCard(
       {required this.controller,
       required this.profile,
-      required this.learning});
+      required this.learning,
+      required this.sceneAi});
 
   final AppController controller;
   final Map<String, dynamic> profile;
   final Map<String, dynamic> learning;
+  final Map<String, dynamic> sceneAi;
 
   @override
   State<_SmartPresetCard> createState() => _SmartPresetCardState();
@@ -1457,6 +1460,8 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
   late bool _neverTranscodeAudio;
   late bool _keepAllAudioLanguages;
   late bool _keepAllSubtitleLanguages;
+  late bool _episodeAiEnabled;
+  late int _episodeAiFrameCount;
   bool _saving = false;
 
   @override
@@ -1472,6 +1477,11 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
         widget.profile['keep_all_audio_languages'] != false;
     _keepAllSubtitleLanguages =
         widget.profile['keep_all_subtitle_languages'] != false;
+    _episodeAiEnabled = widget.profile['episode_ai_enabled'] == true;
+    _episodeAiFrameCount =
+        ((widget.profile['episode_ai_frame_count'] as num?)?.toInt() ?? 4)
+            .clamp(3, 8)
+            .toInt();
   }
 
   @override
@@ -1599,6 +1609,64 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
           ),
           SwitchListTile.adaptive(
             contentPadding: EdgeInsets.zero,
+            value: _episodeAiEnabled,
+            onChanged: widget.controller.canControl
+                ? (value) => setState(() => _episodeAiEnabled = value)
+                : null,
+            title: const Text('Beta: per-episode AI scene analysis'),
+            subtitle: const Text(
+                'Sends representative JPEG stills from each episode to the cloud AI selected on the server. HDR and preservation rules always stay local.'),
+            secondary: const Icon(Icons.auto_awesome_rounded),
+          ),
+          if (_episodeAiEnabled)
+            Padding(
+              padding: const EdgeInsets.fromLTRB(4, 0, 4, 10),
+              child: Row(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Icon(
+                    widget.sceneAi['ready'] == true
+                        ? Icons.cloud_done_outlined
+                        : Icons.cloud_off_outlined,
+                    size: 18,
+                    color: widget.sceneAi['ready'] == true
+                        ? ByteSqueezeColors.mint
+                        : ByteSqueezeColors.amber,
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: Text(
+                      '${widget.sceneAi['message'] ?? 'Configure OpenAI or Gemini on the server; deterministic fallback remains active.'}',
+                      style: const TextStyle(
+                          color: ByteSqueezeColors.muted, fontSize: 12),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          if (_episodeAiEnabled) ...[
+            const SizedBox(height: 6),
+            DropdownButtonFormField<int>(
+              initialValue: _episodeAiFrameCount,
+              decoration: const InputDecoration(
+                labelText: 'Representative stills per episode',
+                prefixIcon: Icon(Icons.photo_library_outlined),
+              ),
+              items: const [3, 4, 5, 6, 8]
+                  .map((count) => DropdownMenuItem(
+                        value: count,
+                        child: Text('$count low-detail stills'),
+                      ))
+                  .toList(),
+              onChanged: widget.controller.canControl
+                  ? (value) => setState(
+                      () => _episodeAiFrameCount = value ?? 4)
+                  : null,
+            ),
+            const SizedBox(height: 6),
+          ],
+          SwitchListTile.adaptive(
+            contentPadding: EdgeInsets.zero,
             value: _automationEnabled,
             onChanged: widget.controller.canControl
                 ? (value) => setState(() => _automationEnabled = value)
@@ -1639,6 +1707,8 @@ class _SmartPresetCardState extends State<_SmartPresetCard> {
         'keep_all_subtitle_languages': _keepAllSubtitleLanguages,
         'preserve_audio': _neverTranscodeAudio,
         'preserve_subtitles': _keepAllSubtitleLanguages,
+        'episode_ai_enabled': _episodeAiEnabled,
+        'episode_ai_frame_count': _episodeAiFrameCount,
         'automation_enabled': _automationEnabled,
       });
     } catch (error) {

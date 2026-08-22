@@ -214,9 +214,9 @@ void main() {
         scrollable: detailsScroll);
     expect(find.text('Smart Queue Full Show'), findsOneWidget);
     await tester.scrollUntilVisible(
-        find.text('Preview or Smart Queue one complete season'), 220,
+        find.text('Preview one episode; queue planning remains independent for every episode'), 220,
         scrollable: detailsScroll);
-    expect(find.text('Preview or Smart Queue one complete season'),
+    expect(find.text('Preview one episode; queue planning remains independent for every episode'),
         findsOneWidget);
     await tester.scrollUntilVisible(find.text('Season 1'), 220,
         scrollable: detailsScroll);

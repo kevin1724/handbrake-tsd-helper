@@ -9,7 +9,7 @@ You can use:
 - The bundled local advisor, when the image includes a usable local model
 - Planner-only mode, with no language model
 
-Video, audio, subtitle content, and API keys are never included in an AI prompt.
+The normal Size Wizard advisor never sends video, audio, or subtitle content. The separate, explicitly opt-in **Beta per-episode scene analysis** feature sends only a few representative JPEG stills from each episode to the selected cloud provider; it never sends the full video or audio. API keys are never included in a prompt.
 
 ## Fastest setup: web interface
 
@@ -113,16 +113,35 @@ Keep the source at 4K and tell me how risky this target size is.
 
 The advisor may suggest only supported Size Wizard fields. The normal planner recalculates the plan and remains authoritative.
 
+## Beta per-episode Smart Presets
+
+Open **Settings > Smart Presets** and enable **Beta: analyze every episode’s scene mix with the selected cloud AI**. This option requires OpenAI or Gemini to be selected and configured under **AI & API Keys**.
+
+When a movie, season, or complete show is Smart Queued, ByteSqueeze now creates a separate immutable plan for every file. It probes that episode’s actual color transfer, primaries, bit depth, resolution, frame rate, duration, and codec. HDR/color decisions are never copied from another episode. Each plan also enforces a codec-aware minimum quality floor so a tight season target cannot starve a 4K HDR episode.
+
+With the beta option enabled, ByteSqueeze additionally:
+
+- Samples 3–8 stills spread across that episode, avoiding the opening and ending where practical
+- Sends low-detail JPEG copies plus technical probe facts to the configured cloud vision provider
+- Receives a bounded profile for motion, grain, darkness, complexity, and animation/live-action content
+- Applies at most a small target-size adjustment for that one episode
+- Caches the result by a path/size/modified-time fingerprint; no sampled images are stored in the cache
+- Falls back to deterministic per-episode planning on timeout, provider error, missing key, or frame-extraction failure
+
+The cloud response cannot disable HDR metadata preservation, change resolution protection, remove audio/subtitles, select arbitrary HandBrake arguments, or bypass worker compatibility. Dynamic HDR formats also remain on a preservation-capable 10-bit encoder rather than being flattened merely to use an incompatible GPU path.
+
 ## What is sent to a cloud provider
 
-Only compact planning context is sent:
+For the normal Size Wizard chat advisor, only compact planning context is sent:
 
 - Source filename, resolution, duration, size, HDR flag, and media type
 - Selected goal, codec, encoder family, resolution, target size, audio mode, and subtitle mode
 - A few planner decisions and warnings
 - The question you type
 
-The source filename is included to give the answer useful context. Media bytes, frames, audio samples, subtitle text, mapped-drive paths, raw HandBrake commands, and API keys are not put in the prompt. Requests are made from the TSD server, not from the browser or phone.
+The source filename is included to give the chat answer useful context. Media bytes, frames, audio samples, subtitle text, mapped-drive paths, raw HandBrake commands, and API keys are not put in the normal advisor prompt. Requests are made from the TSD server, not from the browser or phone.
+
+The beta per-episode scene feature is the only exception for visual content: it sends the configured number of representative JPEG stills and technical facts, but omits the source filename and path from that vision prompt. It does not upload the video, audio, or subtitles. Leave the beta switch off if still images must never leave the server.
 
 Keys saved through the UI are stored in the TSD data volume and masked in later API responses. Protect that volume and its backups like any other application secret. For stricter secret management, use Docker environment variables.
 

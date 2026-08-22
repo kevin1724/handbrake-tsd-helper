@@ -538,7 +538,7 @@
       </div>
       <p class="small">Prefer Docker environment variables? Use <code>GEMINI_API_KEY</code> or <code>OPENAI_API_KEY</code>; environment values override saved keys. See the <a href="https://github.com/kevin1724/handbrake-tsd-helper/blob/main/docs/AI_ADVISOR.md" target="_blank" rel="noopener">complete AI Advisor guide</a> for Compose examples, privacy details, and troubleshooting.</p>
     </details>
-    <div class="ai-privacy-note"><strong>What leaves your server:</strong> media probe facts such as resolution, duration, HDR, target size, selected track policy, and the question you type. Video, audio, subtitles, file contents, and API keys are never placed in the model prompt. Environment variables <code>GEMINI_API_KEY</code> and <code>OPENAI_API_KEY</code> take priority over saved keys.</div>
+    <div class="ai-privacy-note"><strong>What leaves your server:</strong> normally only media probe facts such as resolution, duration, HDR, target size, selected track policy, and the question you type. If—and only if—you enable <em>Beta per-episode scene analysis</em> under Smart Presets, 3–8 representative low-detail JPEG stills from each episode are also sent to the selected cloud provider. The complete video, audio, subtitles, and API keys are never placed in the model prompt. Environment variables <code>GEMINI_API_KEY</code> and <code>OPENAI_API_KEY</code> take priority over saved keys.</div>
     <div class="button-row"><button id="testAiSettingsBtn" type="button">Save &amp; test selected provider</button><button id="saveAiSettingsBtn" class="ghost-btn" type="button">Save without testing</button><a class="button-link ghost-btn" href="/size_wizard">Open Size Wizard</a><span id="aiSettingsStatus" class="small" aria-live="polite"></span></div>
   </div>
   {% endif %}
@@ -684,6 +684,25 @@
           <option value="eac3_surround">E-AC3 5.1 at 640 kbps</option>
         </select>
       </label>
+    </div>
+
+    <div class="ai-privacy-note" style="margin-top:16px">
+      <label class="toggle-line" for="smartEpisodeAiEnabled">
+        <input id="smartEpisodeAiEnabled" type="checkbox">
+        <strong>Beta: analyze every episode’s scene mix with the selected cloud AI</strong>
+      </label>
+      <span id="smartEpisodeAiStatus" class="small" style="display:block;margin-top:6px"></span>
+      <div class="inline-input-group" style="margin-top:10px">
+        <label for="smartEpisodeAiFrameCount">Representative stills per episode</label>
+        <select id="smartEpisodeAiFrameCount" style="width:90px">
+          <option value="3">3</option>
+          <option value="4">4</option>
+          <option value="5">5</option>
+          <option value="6">6</option>
+          <option value="8">8</option>
+        </select>
+      </div>
+      <span class="small"><strong>Explicit opt-in:</strong> ByteSqueeze extracts low-detail JPEG samples from each episode and sends those images plus technical probe facts to the OpenAI or Gemini provider selected under AI &amp; API Keys. It never uploads the video or audio. The returned scene profile can make only a small bitrate adjustment; HDR/color, resolution, audio, subtitles, and node compatibility remain hard local rules. Failed or unavailable AI calls automatically use the deterministic per-episode plan.</span>
     </div>
 
     <div class="row button-row" style="margin-top:14px;">
@@ -1275,6 +1294,7 @@
       setValue("smartSettingsCompatibility", profile.compatibility || "modern");
       setValue("smartSettingsHardware", profile.hardware || "auto");
       setValue("smartSettingsAudioStrategy", profile.audio_strategy || "copy");
+      setValue("smartEpisodeAiFrameCount", String(profile.episode_ai_frame_count || 4));
       setValue("smartAudioLanguages", Array.isArray(profile.audio_languages) ? profile.audio_languages.join(", ") : "eng, spa");
       setValue("smartSubtitleLanguages", Array.isArray(profile.subtitle_languages) ? profile.subtitle_languages.join(", ") : "eng, spa");
       setChecked("smartNeverDownscale", profile.never_downscale);
@@ -1283,6 +1303,8 @@
       setChecked("smartNeverTranscodeAudio", profile.never_transcode_audio);
       setChecked("smartKeepAllAudioLanguages", profile.keep_all_audio_languages);
       setChecked("smartKeepAllSubtitleLanguages", profile.keep_all_subtitle_languages);
+      const episodeAi = document.getElementById("smartEpisodeAiEnabled");
+      if (episodeAi) episodeAi.checked = profile.episode_ai_enabled === true;
       updateSmartSafetyControls();
     }
 
@@ -1294,6 +1316,8 @@
         const data = await response.json();
         if (!response.ok) throw new Error(data.error || `HTTP ${response.status}`);
         renderSmartSafetySettings(data.profile || {});
+        const sceneStatus = document.getElementById("smartEpisodeAiStatus");
+        if (sceneStatus) sceneStatus.textContent = data.scene_ai?.message || "";
         if (status) status.textContent = "";
       } catch (error) {
         if (status) status.textContent = error.message || "Could not load Smart Preset protections.";
@@ -1320,7 +1344,9 @@
         keep_all_subtitle_languages: keepAllSubtitles,
         never_transcode_audio: neverTranscode,
         preserve_audio: neverTranscode,
-        preserve_subtitles: keepAllSubtitles
+        preserve_subtitles: keepAllSubtitles,
+        episode_ai_enabled: Boolean(document.getElementById("smartEpisodeAiEnabled")?.checked),
+        episode_ai_frame_count: safeNumber(document.getElementById("smartEpisodeAiFrameCount")?.value, 4, 3, 8)
       };
       try {
         if (button) button.disabled = true;

@@ -80,7 +80,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.16.0")
+        self.assertEqual(status.get_json()["release"], "3.17.0")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -100,6 +100,12 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertIn(b"Next available node", jobs_page.data)
         self.assertIn(b"Edit preset", jobs_page.data)
         self.assertIn(b"Next available node", library_page.data)
+        smart_settings = self.client.get("/settings/smart")
+        self.assertEqual(smart_settings.status_code, 200)
+        self.assertIn(b"smartEpisodeAiEnabled", smart_settings.data)
+        self.assertIn(b"analyze every episode", smart_settings.data)
+        ai_settings = self.client.get("/settings/ai")
+        self.assertIn(b"representative low-detail JPEG", ai_settings.data)
 
         job_id = "jobs-dashboard-route-regression"
         app_jobs.jobs[job_id] = {
@@ -819,7 +825,10 @@ class ApiRouteSmokeTests(unittest.TestCase):
             calls.append((src, kwargs))
             return f"smart-{len(calls)}", {"recommended_id": "compact"}
 
-        with patch("webui.app.routes._create_smart_job", side_effect=fake_create_smart_job):
+        with (
+            patch("webui.app.routes._smart_recommendations_for_paths", return_value=({}, {})),
+            patch("webui.app.routes._create_smart_job", side_effect=fake_create_smart_job),
+        ):
             response = self.client.post(
                 "/api/nodes/dispatch",
                 json={
@@ -835,6 +844,143 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual([row[0] for row in calls], paths)
         self.assertTrue(all(row[1]["tuning"] == tuning for row in calls))
         self.assertTrue(all(row[1]["automation_source"] == "library_smart" for row in calls))
+
+    def test_mixed_season_builds_independent_hdr_safe_snapshots_per_episode(self):
+        paths = [
+            os.path.join(TEST_MEDIA, "Mixed.Show.S01E01.mkv"),
+            os.path.join(TEST_MEDIA, "Mixed.Show.S01E02.mkv"),
+        ]
+        for path in paths:
+            with open(path, "wb") as handle:
+                handle.write(b"0" * 4096)
+        self.client.post(
+            "/api/smart_presets/profile",
+            json={
+                "goal": "balanced",
+                "hardware": "software",
+                "episode_ai_enabled": False,
+            },
+        )
+        probes = {
+            paths[0]: {
+                "duration_sec": 2700.0,
+                "width": 3840,
+                "height": 2160,
+                "fps": 23.976,
+                "video_codec": "hevc",
+                "bit_depth": 10,
+                "is_hdr": True,
+                "hdr_reason": "arib-std-b67",
+                "hdr_format": "hlg",
+                "color_transfer": "arib-std-b67",
+                "color_primaries": "bt2020",
+                "probe_source": "handbrake+ffprobe",
+            },
+            paths[1]: {
+                "duration_sec": 2700.0,
+                "width": 1920,
+                "height": 1080,
+                "fps": 23.976,
+                "video_codec": "h264",
+                "bit_depth": 8,
+                "is_hdr": False,
+                "hdr_reason": "",
+                "hdr_format": "sdr",
+                "color_transfer": "bt709",
+                "color_primaries": "bt709",
+                "probe_source": "handbrake+ffprobe",
+            },
+        }
+        created = []
+
+        def fake_create_job(src, preset, **kwargs):
+            created.append((src, preset, kwargs))
+            return f"episode-{len(created)}"
+
+        with (
+            patch("webui.app.routes._probe_media", side_effect=lambda path: probes[path]) as probe,
+            patch("webui.app.routes.create_job", side_effect=fake_create_job),
+            patch("webui.app.routes.log_event"),
+        ):
+            count, skipped = app_routes._queue_local_paths(paths, "smart")
+
+        self.assertEqual(count, 2)
+        self.assertEqual(skipped, [])
+        self.assertEqual(probe.call_count, 2, "every episode should be probed once, independently")
+        self.assertCountEqual([call.args[0] for call in probe.call_args_list], paths)
+        hdr_metadata = created[0][2]["encode_metadata"]
+        sdr_metadata = created[1][2]["encode_metadata"]
+        self.assertTrue(hdr_metadata["is_hdr"])
+        self.assertFalse(sdr_metadata["is_hdr"])
+        self.assertEqual(hdr_metadata["hdr_reason"], "arib-std-b67")
+        self.assertIn("--hdr-dynamic-metadata all", created[0][2]["extra_args"])
+        self.assertNotIn("--hdr-dynamic-metadata", created[1][2]["extra_args"])
+        first_plan = hdr_metadata["smart_episode_plan"]
+        second_plan = sdr_metadata["smart_episode_plan"]
+        self.assertNotEqual(first_plan["fingerprint"], second_plan["fingerprint"])
+        self.assertEqual(first_plan["source"]["hdr_format"], "hlg")
+        self.assertEqual(second_plan["source"]["hdr_format"], "sdr")
+        self.assertTrue(created[0][2]["preset_preferences"]["smart_episode_plan"])
+
+    def test_hdr_episode_quality_floor_prevents_starved_4k_target(self):
+        floor = app_routes._smart_episode_quality_floor({
+            "probe": {
+                "duration_sec": 2700.0,
+                "width": 3840,
+                "height": 2160,
+                "fps": 23.976,
+                "source_size_bytes": 8 * 1024**3,
+                "is_hdr": True,
+            },
+            "options": {
+                "video_codec": "h265",
+                "encoder_family": "qsv",
+                "audio_mode": "copy",
+                "audio_bitrate": "auto",
+            },
+            "estimates": {"output_resolution": {"width": 3840, "height": 2160}},
+        })
+        self.assertTrue(floor["is_hdr"])
+        self.assertGreater(floor["target_mb"], 3000)
+        self.assertGreater(floor["video_kbps"], 10000)
+
+    def test_dynamic_hdr_avoids_incompatible_qsv_encoder(self):
+        media_path = os.path.join(TEST_MEDIA, "Dynamic.Show.S01E01.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"dynamic-hdr")
+        probe = {
+            "duration_sec": 2700.0,
+            "width": 3840,
+            "height": 2160,
+            "fps": 23.976,
+            "video_codec": "hevc",
+            "is_hdr": True,
+            "hdr_reason": "dolby vision metadata",
+            "hdr_format": "dolby_vision",
+            "bit_depth": 10,
+        }
+        with patch(
+            "webui.app.routes.load_settings",
+            return_value={
+                "cpu_profile": "i5-9500t",
+                "cpu_speed_override": 1.0,
+                "qsv_device_available": True,
+            },
+        ):
+            plan = app_routes._wizard_plan(
+                {
+                    "src": media_path,
+                    "preset": "4k",
+                    "ai_mode": True,
+                    "ai_hardware": "qsv",
+                    "ai_codec_preference": "h265",
+                },
+                probe_func=lambda _src: probe,
+            )
+        self.assertEqual(plan["options"]["encoder_family"], "software")
+        self.assertEqual(plan["options"]["bit_depth"], "10")
+        self.assertEqual(plan["estimates"]["encoder"], "x265_10bit")
+        self.assertIn("--hdr-dynamic-metadata", plan["extra_args"])
 
     def test_jobs_api_merges_durable_encode_history_and_summary(self):
         original_history_cutoff = app_jobs.history_cleared_before
@@ -1220,14 +1366,33 @@ class ApiRouteSmokeTests(unittest.TestCase):
         }]
         with (
             patch("webui.app.routes._run_cmd", return_value=(True, json.dumps(scan), "")),
-            patch("webui.app.routes._ffprobe_media_fast") as ffprobe,
+            patch(
+                "webui.app.routes._ffprobe_media_fast",
+                return_value={
+                    "duration_sec": 9960.0,
+                    "width": 3840,
+                    "height": 2160,
+                    "fps": 23.976,
+                    "video_codec": "hevc",
+                    "is_hdr": True,
+                    "hdr_reason": "smpte2084",
+                    "hdr_format": "hdr10",
+                    "color_transfer": "smpte2084",
+                    "color_primaries": "bt2020",
+                    "bit_depth": 10,
+                },
+            ) as ffprobe,
         ):
             result = app_routes._probe_media("/media/example/movie.mp4")
 
         self.assertEqual(result["width"], 3840)
         self.assertEqual(result["height"], 2160)
         self.assertEqual(result["duration_sec"], 9960.0)
-        ffprobe.assert_not_called()
+        self.assertTrue(result["is_hdr"])
+        self.assertEqual(result["hdr_reason"], "smpte2084")
+        self.assertEqual(result["color_primaries"], "bt2020")
+        self.assertEqual(result["probe_source"], "handbrake+ffprobe")
+        ffprobe.assert_called_once_with("/media/example/movie.mp4")
 
     def test_gemini_and_openai_advisors_use_supported_json_shapes(self):
         class FakeResponse:
@@ -1281,6 +1446,114 @@ class ApiRouteSmokeTests(unittest.TestCase):
         sent = json.loads(openai_call.call_args.kwargs["data"].decode("utf-8"))
         self.assertEqual(sent["model"], "gpt-5.6-luna")
         self.assertNotIn("reasoning", sent)
+
+    def test_openai_episode_scene_analysis_uses_bounded_images_and_cache(self):
+        class FakeResponse:
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self):
+                scene = {
+                    "summary": "Dark, grainy dialogue alternates with fast action and detailed wide shots.",
+                    "scene_types": ["dark interiors", "fast action", "wide landscapes"],
+                    "complexity": "high",
+                    "motion": "high",
+                    "grain": "heavy",
+                    "lighting": "dark",
+                    "content_type": "live_action",
+                    "quality_bias": 1,
+                }
+                return json.dumps({
+                    "output": [{"content": [{"type": "output_text", "text": json.dumps(scene)}]}]
+                }).encode("utf-8")
+
+        media_path = os.path.join(TEST_MEDIA, "Scene.Test.S01E01.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"episode")
+        try:
+            os.remove(app_wizard_llm.EPISODE_AI_CACHE_FILE)
+        except FileNotFoundError:
+            pass
+        probe = {
+            "duration_sec": 2700.0,
+            "width": 3840,
+            "height": 2160,
+            "fps": 23.976,
+            "video_codec": "hevc",
+            "is_hdr": True,
+            "hdr_reason": "smpte2084",
+        }
+        settings = {
+            "wizard_ai_provider": "openai",
+            "openai_api_key": "scene-secret",
+            "openai_model": "gpt-5.6-luna",
+        }
+        profile = {"episode_ai_enabled": True, "episode_ai_frame_count": 4}
+        frames = [b"jpeg-one", b"jpeg-two", b"jpeg-three", b"jpeg-four"]
+        with (
+            patch("webui.app.wizard_llm._sample_episode_frames", return_value=frames) as sampler,
+            patch("webui.app.wizard_llm.urlopen", return_value=FakeResponse()) as openai_call,
+        ):
+            result = app_wizard_llm.analyze_episode_scenes(
+                media_path, probe, profile=profile, settings=settings
+            )
+
+        self.assertTrue(result["used"])
+        self.assertEqual(result["provider"], "openai")
+        self.assertEqual(result["target_scale"], 1.22)
+        sampler.assert_called_once()
+        request = openai_call.call_args.args[0]
+        self.assertEqual(request.full_url, "https://api.openai.com/v1/responses")
+        sent = json.loads(openai_call.call_args.kwargs["data"].decode("utf-8"))
+        content = sent["input"][0]["content"]
+        images = [row for row in content if row.get("type") == "input_image"]
+        self.assertEqual(len(images), 4)
+        self.assertTrue(all(row["detail"] == "low" for row in images))
+        prompt = next(row["text"] for row in content if row.get("type") == "input_text")
+        self.assertNotIn(media_path, prompt)
+        self.assertNotIn(os.path.basename(media_path), prompt)
+
+        with (
+            patch("webui.app.wizard_llm._sample_episode_frames") as cached_sampler,
+            patch("webui.app.wizard_llm.urlopen") as cached_call,
+        ):
+            cached = app_wizard_llm.analyze_episode_scenes(
+                media_path, probe, profile=profile, settings=settings
+            )
+        self.assertTrue(cached["cached"])
+        cached_sampler.assert_not_called()
+        cached_call.assert_not_called()
+
+    def test_episode_scene_analysis_failure_keeps_deterministic_plan(self):
+        media_path = os.path.join(TEST_MEDIA, "Scene.Fallback.S01E02.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"episode-fallback")
+        with (
+            patch(
+                "webui.app.wizard_llm._sample_episode_frames",
+                side_effect=RuntimeError("decoder unavailable"),
+            ),
+            patch("webui.app.wizard_llm.urlopen") as provider_call,
+        ):
+            result = app_wizard_llm.analyze_episode_scenes(
+                media_path,
+                {"duration_sec": 2400, "width": 1920, "height": 1080, "is_hdr": False},
+                profile={"episode_ai_enabled": True, "episode_ai_frame_count": 4},
+                settings={
+                    "wizard_ai_provider": "openai",
+                    "openai_api_key": "configured",
+                    "openai_model": "gpt-5.6-luna",
+                },
+            )
+        self.assertTrue(result["enabled"])
+        self.assertTrue(result["attempted"])
+        self.assertFalse(result["used"])
+        self.assertEqual(result["target_scale"], 1.0)
+        self.assertIn("decoder unavailable", result["reason"])
+        provider_call.assert_not_called()
 
     def test_autopilot_preview_training_is_visible_and_records_feedback(self):
         try:
@@ -1786,7 +2059,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.16.0")
+        self.assertEqual(dashboard_payload["release"], "3.17.0")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

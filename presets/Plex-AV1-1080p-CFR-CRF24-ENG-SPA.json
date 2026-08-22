@@ -54,7 +54,8 @@
         "spa"
       ],
       "SubtitleAddCC": false,
-      "SubtitleAddForeignAudioSearch": false
+      "SubtitleAddForeignAudioSearch": false,
+      "VideoPasshtruHDRDynamicMetadata": "all"
     }
   ],
   "VersionMajor": 59,

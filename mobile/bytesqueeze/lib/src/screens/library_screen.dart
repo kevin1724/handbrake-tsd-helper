@@ -855,7 +855,7 @@ class _MediaDetailsState extends State<_MediaDetails> {
           ],
           const SectionHeader(
               title: 'Smart plan',
-              subtitle: 'Preview first or send the complete scope to queue'),
+              subtitle: 'Every episode gets its own probe, HDR decision, quality floor, and preset snapshot'),
           SurfaceCard(
             borderColor: ByteSqueezeColors.cyan.withValues(alpha: .34),
             child: Column(
@@ -921,7 +921,9 @@ class _MediaDetailsState extends State<_MediaDetails> {
                           child: CircularProgressIndicator(strokeWidth: 2))
                       : const Icon(Icons.compare_rounded),
                   label: Text(_preview.isEmpty
-                      ? 'Preview real Smart encode'
+                      ? (widget.isShow
+                          ? 'Preview first episode’s Smart encode'
+                          : 'Preview real Smart encode')
                       : 'Refresh Smart preview'),
                 ),
               ],
@@ -1006,7 +1008,7 @@ class _MediaDetailsState extends State<_MediaDetails> {
           if (widget.isShow && seasons.isNotEmpty) ...[
             const SectionHeader(
                 title: 'Seasons',
-                subtitle: 'Preview or Smart Queue one complete season'),
+                subtitle: 'Preview one episode; queue planning remains independent for every episode'),
             ...seasons.entries.map((entry) {
               final season = entry.key;
               final rows = entry.value;
@@ -1041,7 +1043,7 @@ class _MediaDetailsState extends State<_MediaDetails> {
                       spacing: 3,
                       children: [
                         IconButton(
-                          tooltip: 'Preview this season',
+                          tooltip: 'Preview the first episode in this season',
                           onPressed: widget.controller.canControl &&
                                   !_previewWorking &&
                                   paths.isNotEmpty

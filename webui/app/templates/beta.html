@@ -2124,7 +2124,7 @@
       smartQueueContext = { paths: cleanPaths, label };
       smartQueueReturnFocus = trigger || document.activeElement;
       el("smartQueueTitle").textContent = `Fine tune ${label}`;
-      el("smartQueueScope").textContent = `${cleanPaths.length} file${cleanPaths.length === 1 ? "" : "s"}${predictedSaved ? ` · ${fmtBytes(predictedSaved)} predicted saved before tuning` : " · Smart will build a plan for each file"}.`;
+      el("smartQueueScope").textContent = `${cleanPaths.length} file${cleanPaths.length === 1 ? "" : "s"}${predictedSaved ? ` · ${fmtBytes(predictedSaved)} predicted saved before tuning` : ""} · Smart re-probes HDR/color and builds an immutable plan for every episode.`;
       el("smartQueueFiles").textContent = String(cleanPaths.length);
       el("smartQueueSource").textContent = fmtBytes(sourceBytes);
       el("smartQueueTarget").textContent = dispatchTargetLabel();

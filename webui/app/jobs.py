@@ -1436,12 +1436,14 @@ def _job_learning_metadata(metadata: dict | None) -> dict:
     metadata = metadata if isinstance(metadata, dict) else {}
     context = metadata.get("smart_feedback_context")
     feedback = metadata.get("quality_feedback")
+    episode_plan = metadata.get("smart_episode_plan")
     return {
         "smart_preset": bool(metadata.get("smart_preset", False)),
         "smart_profile_id": str(metadata.get("smart_profile_id") or "")[:80],
         "smart_candidate_id": str(metadata.get("smart_candidate_id") or "")[:80],
         "automation_source": str(metadata.get("automation_source") or "")[:40],
         "smart_feedback_context": context if isinstance(context, dict) else None,
+        "smart_episode_plan": episode_plan if isinstance(episode_plan, dict) else None,
         "quality_feedback": feedback if isinstance(feedback, dict) else None,
     }
 
@@ -1756,6 +1758,11 @@ def create_job(
     normalized_dispatch_mode = str(dispatch_mode or "local").strip().lower()
     automatic_dispatch = normalized_dispatch_mode in {"auto", "available", "next_available"}
     metadata_source = encode_metadata if isinstance(encode_metadata, dict) else {}
+    metadata_episode_plan = (
+        metadata_source.get("smart_episode_plan")
+        if isinstance(metadata_source.get("smart_episode_plan"), dict)
+        else {}
+    )
     normalized_selection = str(preset_selection or metadata_source.get("preset_selection") or preset or "1080").strip().lower()
     adaptive_encoder = bool(preset_adaptive or metadata_source.get("preset_adaptive") or normalized_selection == "smart")
     preferences = preset_preferences if isinstance(preset_preferences, dict) else (
@@ -1824,7 +1831,11 @@ def create_job(
         "out_bytes": None,
         "saved_bytes": None,
         "out_path": None,
-        "is_hdr": _looks_like_hdr_path(src),
+        "is_hdr": bool(
+            metadata_source.get("is_hdr")
+            or ((metadata_episode_plan.get("source") or {}).get("is_hdr"))
+            or _looks_like_hdr_path(src)
+        ),
         "created_at": _now_ts(),
         "started_at": None,
         "finished_at": None,
@@ -2167,6 +2178,11 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
     }
     method = _encode_metadata_from_extra_args(extra_args, preset, encode_metadata or transfer.get("encode_metadata"))
     learning_metadata = encode_metadata or transfer.get("encode_metadata")
+    learning_episode_plan = (
+        (learning_metadata or {}).get("smart_episode_plan")
+        if isinstance((learning_metadata or {}).get("smart_episode_plan"), dict)
+        else {}
+    )
     normalized_bundle = _normalize_preset_bundle(preset_bundle) or snapshot_preset_bundle(preset)
     selection = str((learning_metadata or {}).get("preset_selection") or preset).strip().lower()
     adaptive = bool((learning_metadata or {}).get("preset_adaptive") or (learning_metadata or {}).get("smart_preset"))
@@ -2206,7 +2222,11 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "out_bytes": None,
         "saved_bytes": None,
         "out_path": None,
-        "is_hdr": _looks_like_hdr_path(display_src),
+        "is_hdr": bool(
+            (learning_metadata or {}).get("is_hdr")
+            or ((learning_episode_plan.get("source") or {}).get("is_hdr"))
+            or _looks_like_hdr_path(display_src)
+        ),
         "created_at": _now_ts(),
         "started_at": None,
         "finished_at": None,
@@ -2784,6 +2804,28 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
         job["qsv_adapter"] = qsv_adapter
         job["qsv_render_device"] = qsv_render_device
         job["qsv_va_driver"] = qsv_va_driver
+    episode_plan = job.get("smart_episode_plan") if isinstance(job.get("smart_episode_plan"), dict) else {}
+    episode_source = episode_plan.get("source") if isinstance(episode_plan.get("source"), dict) else {}
+    episode_target = episode_plan.get("target") if isinstance(episode_plan.get("target"), dict) else {}
+    episode_floor = episode_plan.get("quality_floor") if isinstance(episode_plan.get("quality_floor"), dict) else {}
+    episode_scene = episode_plan.get("scene_analysis") if isinstance(episode_plan.get("scene_analysis"), dict) else {}
+    smart_episode_log = ""
+    if episode_plan:
+        scene_mode = (
+            f"AI {episode_scene.get('provider') or 'provider'}"
+            if episode_scene.get("used")
+            else f"deterministic ({episode_scene.get('reason') or 'scene AI disabled'})"
+        )
+        scene_summary = str(episode_scene.get("summary") or "").strip()
+        smart_episode_log = (
+            f"[ByteSqueeze] Smart episode plan: independent snapshot {str(episode_plan.get('fingerprint') or '')[:16]}\n"
+            f"[ByteSqueeze] HDR protection: {'on' if episode_source.get('is_hdr') else 'off'}"
+            f" ({episode_source.get('hdr_reason') or 'SDR metadata'})\n"
+            f"[ByteSqueeze] Episode target: {episode_target.get('target_mb') or 'unknown'} MB; "
+            f"quality floor {episode_floor.get('target_mb') or 'unknown'} MB\n"
+            f"[ByteSqueeze] Episode scene analysis: {scene_mode}"
+            f"{f' — {scene_summary}' if scene_summary else ''}\n"
+        )
     qsv_diagnostics_log = (
         f"[ByteSqueeze] Selected render device: {qsv_render_device}\n"
         f"[ByteSqueeze] Intel VA driver: {qsv_va_driver}\n"
@@ -2802,6 +2844,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             f"[ByteSqueeze] Source resolution: {source_resolution_label}\n"
             f"[ByteSqueeze] Target resolution: {target_resolution_label}\n"
             f"[ByteSqueeze] Selected preset: {preset_name}\n"
+            f"{smart_episode_log}"
             f"{qsv_diagnostics_log}"
             f"[ByteSqueeze] Preset decode policy: {preset_decode_policy}\n"
             f"[ByteSqueeze] Encoder launch: /worker/encode-one.sh\n"

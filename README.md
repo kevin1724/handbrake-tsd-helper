@@ -177,7 +177,7 @@ Advanced Mode keeps the full technical surface available:
 - Saved wizard presets
 - Fast and accurate previews
 
-The wizard also includes an optional AI advisor. Open **Settings > AI & API Keys** to paste and test a Google Gemini or OpenAI key, or choose built-in local or planner-only operation. Cloud providers receive compact probe facts and selected options, never video or audio content. The deterministic planner continues to validate and own the final HandBrake plan. The complete [AI Advisor setup guide](docs/AI_ADVISOR.md) includes Gemini and OpenAI walkthroughs, Docker Compose examples, privacy details, sample questions, and troubleshooting.
+The wizard also includes an optional AI advisor. Open **Settings > AI & API Keys** to paste and test a Google Gemini or OpenAI key, or choose built-in local or planner-only operation. Normal advisor chats send compact probe facts and selected options, not media content. The separately opt-in beta per-episode scene feature can send representative JPEG stills; its switch and privacy disclosure are under **Settings > Smart Presets**. The deterministic planner continues to validate and own the final HandBrake plan. The complete [AI Advisor setup guide](docs/AI_ADVISOR.md) includes Gemini and OpenAI walkthroughs, Docker Compose examples, privacy details, sample questions, and troubleshooting.
 
 Smart Presets add a learning loop on top of that safe planner:
 
@@ -187,6 +187,9 @@ Smart Presets add a learning loop on top of that safe planner:
 - Keep every audio and subtitle language, or select an explicit language list
 - Require original audio passthrough, or opt into E-AC3 5.1 at 640 kbps when audio conversion is acceptable
 - Generate three source-aware candidates ranked by quality, savings, speed, compatibility, and prior feedback
+- Re-probe every episode independently for HDR transfer/primaries, bit depth, resolution, frame rate, and codec; complete-season/show queues never reuse another episode's media decision
+- Enforce a codec-aware per-episode quality floor, preserve supported HDR dynamic metadata, and keep HDR10+/Dolby Vision on a compatible 10-bit encoder
+- Optionally enable beta cloud scene analysis to classify each episode's motion, grain, darkness, and complexity from representative stills, with a bounded bitrate adjustment and deterministic fallback
 - Apply a candidate and inspect the same short HandBrake encode that a real job will use
 - Approve the preview or mark quality, size, speed, or compatibility concerns
 - Keep all preference history local in `data/smart_presets.json`
@@ -473,14 +476,14 @@ docker run -d \
 ```
 
 The `latest` and `main` images are published automatically from `main`. Stable
-controller releases also publish `3.16.0` and `3.16` tags.
+controller releases also publish `3.17.0` and `3.17` tags.
 
 The encoding-only worker has its own public Docker Hub image:
 
 [kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
 
 `latest` and `main` follow the main branch. Stable worker releases also publish
-`2.6.0` and `2.6` tags:
+`2.7.0` and `2.7` tags:
 
 ```bash
 docker pull kevina1724/handbrake-tsd-worker:latest
