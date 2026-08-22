@@ -121,6 +121,12 @@ void main() {
 
   testWidgets('combined queue identifies workers and edits queued presets',
       (tester) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
     final controller = AppController()..enterDemo();
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
     await tester.pumpAndSettle();
@@ -145,6 +151,12 @@ void main() {
   });
 
   testWidgets('linked node page exposes worker controls', (tester) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
     final controller = AppController()..enterDemo();
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
     await tester.pumpAndSettle();
