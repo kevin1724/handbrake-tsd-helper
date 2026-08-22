@@ -47,6 +47,9 @@ NODE_CAPABILITIES = [
     "resilient-transfer-download",
     "qsv-hardware-decode",
     "remote-job-history-control",
+    "remote-job-control",
+    "remote-queue-control",
+    "remote-preset-edit",
     "hardware-profile",
 ]
 STATE_LOCK = threading.RLock()

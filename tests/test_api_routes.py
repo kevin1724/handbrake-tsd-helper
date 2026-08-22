@@ -80,7 +80,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.15.7")
+        self.assertEqual(status.get_json()["release"], "3.16.0")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -1550,6 +1550,207 @@ class ApiRouteSmokeTests(unittest.TestCase):
         )
         self.assertEqual(operation_update.status_code, 403)
 
+    def test_mobile_controls_combined_worker_queue_and_linked_nodes(self):
+        pairing_response = self.client.post(
+            "/api/mobile/pairing_code", json={"scope": "control"}
+        )
+        code = pairing_response.get_json()["pairing"]["code"]
+        paired = self.client.post(
+            "/api/mobile/v1/pair",
+            json={
+                "code": code,
+                "device_id": "node-control-phone",
+                "device_name": "Node control phone",
+                "platform": "android",
+            },
+        )
+        headers = {
+            "Authorization": f"Bearer {paired.get_json()['access_token']}"
+        }
+        node_id = "mobile-worker"
+        worker_job_id = "mobile-worker-job"
+        app_node_linking.save_node({
+            "id": node_id,
+            "name": "ByteSqueeze Worker",
+            "url": "http://worker:8080",
+            "token": "worker-token",
+            "recovery_token": "worker-recovery",
+            "hardware_transcode_concurrency": 1,
+            "jobs": [{
+                "id": worker_job_id,
+                "status": "queued",
+                "src": os.path.join(TEST_MEDIA, "Mobile.Worker.Movie.1080p.mkv"),
+                "preset": "1080",
+                "queued_preset_name": "Correct 1080p",
+            }],
+            "summary": {"counts": {"queued": 1, "running": 0, "error": 0}},
+        })
+        try:
+            combined = self.client.get("/api/mobile/v1/jobs", headers=headers)
+            self.assertEqual(combined.status_code, 200, combined.get_data(as_text=True))
+            worker_id = f"worker:{node_id}:{worker_job_id}"
+            indexed = {item["id"]: item for item in combined.get_json()["jobs"]}
+            self.assertIn(worker_id, indexed)
+            self.assertEqual(indexed[worker_id]["node_name"], "ByteSqueeze Worker")
+
+            with patch(
+                "webui.app.routes.signed_json_request",
+                return_value={
+                    "ok": True,
+                    "jobs": [],
+                    "summary": {"counts": {"queued": 0}},
+                },
+            ) as signed_request:
+                moved = self.client.post(
+                    f"/api/mobile/v1/jobs/{worker_id}/action",
+                    json={"action": "top"},
+                    headers=headers,
+                )
+            self.assertEqual(moved.status_code, 200, moved.get_data(as_text=True))
+            self.assertEqual(
+                signed_request.call_args.args[1],
+                f"/api/node/jobs/{worker_job_id}/action",
+            )
+            self.assertEqual(signed_request.call_args.kwargs["body"], {"action": "top"})
+
+            renamed = self.client.post(
+                f"/api/mobile/v1/nodes/{node_id}/action",
+                json={"action": "rename", "name": "Office Arc GPU"},
+                headers=headers,
+            )
+            self.assertEqual(renamed.status_code, 200, renamed.get_data(as_text=True))
+            self.assertEqual(renamed.get_json()["node"]["name"], "Office Arc GPU")
+
+            with patch(
+                "webui.app.routes.signed_json_request",
+                return_value={
+                    "ok": True,
+                    "encoding_policy": {"hardware_transcode_concurrency": 4},
+                },
+            ) as signed_request:
+                capacity = self.client.post(
+                    f"/api/mobile/v1/nodes/{node_id}/action",
+                    json={
+                        "action": "capacity",
+                        "hardware_transcode_concurrency": 4,
+                    },
+                    headers=headers,
+                )
+            self.assertEqual(capacity.status_code, 200, capacity.get_data(as_text=True))
+            self.assertEqual(capacity.get_json()["node"]["hardware_transcode_concurrency"], 4)
+            self.assertEqual(signed_request.call_args.args[1], "/api/node/config")
+
+            with patch(
+                "webui.app.routes.signed_json_request",
+                return_value={
+                    "ok": True,
+                    "paused": True,
+                    "summary": {"counts": {"queued": 0}},
+                },
+            ) as signed_request:
+                paused = self.client.post(
+                    "/api/mobile/v1/queue",
+                    json={"paused": True},
+                    headers=headers,
+                )
+            self.assertEqual(paused.status_code, 200, paused.get_data(as_text=True))
+            self.assertTrue(paused.get_json()["paused"])
+            self.assertEqual(signed_request.call_args.args[1], "/api/node/queue")
+            self.assertEqual(signed_request.call_args.kwargs["body"], {"paused": True})
+        finally:
+            app_jobs.set_queue_paused(False)
+            app_node_linking.delete_node(node_id)
+
+    def test_mobile_can_edit_worker_job_to_smart_and_clear_all_node_history(self):
+        pairing_response = self.client.post(
+            "/api/mobile/pairing_code", json={"scope": "control"}
+        )
+        code = pairing_response.get_json()["pairing"]["code"]
+        paired = self.client.post(
+            "/api/mobile/v1/pair",
+            json={
+                "code": code,
+                "device_id": "smart-worker-phone",
+                "device_name": "Smart worker phone",
+                "platform": "android",
+            },
+        )
+        headers = {
+            "Authorization": f"Bearer {paired.get_json()['access_token']}"
+        }
+        node_id = "smart-mobile-worker"
+        worker_job_id = "smart-worker-job"
+        src = os.path.join(TEST_MEDIA, "Mobile.Smart.Movie.1080p.mkv")
+        with open(src, "wb") as handle:
+            handle.write(b"smart-worker")
+        worker = {
+            "id": node_id,
+            "name": "Smart worker",
+            "url": "http://smart-worker:8080",
+            "token": "worker-token",
+            "jobs": [{
+                "id": worker_job_id,
+                "status": "queued",
+                "src": src,
+                "preset": "1080",
+            }],
+            "hardware": {"encoder_families": ["qsv", "software"]},
+        }
+        app_node_linking.save_node(worker)
+        plan = {
+            "preset": "1080",
+            "preset_bundle": None,
+            "extra_args": "--encoder qsv_h265_10bit",
+            "encode_metadata": {"encoder": "qsv_h265_10bit"},
+        }
+        try:
+            with (
+                patch("webui.app.routes._node_queue_plan", return_value=plan),
+                patch("webui.app.routes._prepare_plan_for_node", return_value=plan),
+                patch(
+                    "webui.app.routes.signed_json_request",
+                    return_value={
+                        "ok": True,
+                        "job": {
+                            "id": worker_job_id,
+                            "status": "queued",
+                            "src": src,
+                            "preset": "1080",
+                            "preset_selection": "smart",
+                        },
+                    },
+                ) as signed_request,
+            ):
+                edited = self.client.post(
+                    f"/api/mobile/v1/jobs/worker:{node_id}:{worker_job_id}/preset",
+                    json={"preset": "smart"},
+                    headers=headers,
+                )
+            self.assertEqual(edited.status_code, 200, edited.get_data(as_text=True))
+            self.assertEqual(
+                signed_request.call_args.args[1],
+                f"/api/node/jobs/{worker_job_id}/preset",
+            )
+            self.assertEqual(signed_request.call_args.kwargs["body"]["plan"], plan)
+
+            with (
+                patch("webui.app.routes.clear_finished_jobs_core", return_value=2),
+                patch(
+                    "webui.app.routes._clear_linked_worker_jobs",
+                    return_value={"removed": 3, "workers": [{"node_id": node_id, "ok": True}]},
+                ),
+            ):
+                cleared = self.client.post(
+                    "/api/mobile/v1/jobs/clear",
+                    json={"target": "finished"},
+                    headers=headers,
+                )
+            self.assertEqual(cleared.status_code, 200, cleared.get_data(as_text=True))
+            self.assertEqual(cleared.get_json()["removed"], 5)
+            self.assertEqual(cleared.get_json()["worker_removed"], 3)
+        finally:
+            app_node_linking.delete_node(node_id)
+
     def test_bytesqueeze_dashboard_library_and_control_surface(self):
         pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "control"})
         self.assertEqual(pairing_response.status_code, 200)
@@ -1585,7 +1786,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.15.7")
+        self.assertEqual(dashboard_payload["release"], "3.16.0")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

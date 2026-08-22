@@ -2901,7 +2901,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.15.7"
+APP_RELEASE = "3.16.0"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -7589,7 +7589,7 @@ def register_routes(app):
         return jsonify(
             ok=True,
             device=device,
-            queue={"paused": get_queue_state(), "summary": get_job_summary()},
+            queue={"paused": get_queue_state(), "summary": _combined_job_summary()},
             nodes={
                 "paired": len(nodes),
                 "online": sum(1 for node in nodes if node.get("online")),
@@ -7603,7 +7603,7 @@ def register_routes(app):
             return jsonify(error="unauthorized mobile device"), 401
         settings = load_settings()
         nodes = list_nodes_public()
-        jobs = list_jobs_for_api()
+        jobs = _combined_jobs_for_api()
         active_jobs = [
             row for row in jobs
             if str(row.get("status") or "").lower() in {"queued", "running", "waiting_to_upload"}
@@ -7613,7 +7613,7 @@ def register_routes(app):
             ok=True,
             release=APP_RELEASE,
             device=device,
-            queue={"paused": get_queue_state(), "summary": get_job_summary()},
+            queue={"paused": get_queue_state(), "summary": _combined_job_summary()},
             active_jobs=active_jobs[:8],
             nodes={
                 "local": local_node_overview(),
@@ -7636,7 +7636,7 @@ def register_routes(app):
     def mobile_jobs_api():
         if not _authenticated_mobile("read"):
             return jsonify(error="unauthorized mobile device"), 401
-        return jsonify(ok=True, jobs=list_job_history_for_api(), summary=get_job_summary(), paused=get_queue_state())
+        return jsonify(ok=True, jobs=_combined_jobs_for_api(), summary=_combined_job_summary(), paused=get_queue_state())
 
     @app.route("/api/mobile/v1/jobs/<job_id>/action", methods=["POST"])
     def mobile_job_action_api(job_id):
@@ -7645,7 +7645,30 @@ def register_routes(app):
             return jsonify(error="control permission required"), 403
         data = request.get_json(silent=True) or {}
         action = str(data.get("action") or "").strip().lower()
-        if action == "cancel":
+        worker_parts = str(job_id or "").split(":", 2)
+        if len(worker_parts) == 3 and worker_parts[0] == "worker":
+            node_id, worker_job_id = worker_parts[1], worker_parts[2]
+            row = get_node_private(node_id)
+            if not row:
+                return jsonify(error="worker node not found"), 404
+            try:
+                result = signed_json_request(
+                    row,
+                    f"/api/node/jobs/{worker_job_id}/action",
+                    method="POST",
+                    body={"action": action, **({"position": data.get("position")} if "position" in data else {})},
+                    timeout=15,
+                )
+            except Exception as exc:
+                return jsonify(error=str(exc)), 400
+            if isinstance(result.get("jobs"), list):
+                row["jobs"] = result["jobs"]
+            if isinstance(result.get("summary"), dict):
+                row["summary"] = result["summary"]
+                row["status"] = _node_summary_status(result["summary"])
+            save_node(row)
+            ok, error = True, None
+        elif action == "cancel":
             ok, error = cancel_job(job_id)
         elif action == "remove":
             ok, error = remove_queued_job(job_id)
@@ -7663,7 +7686,70 @@ def register_routes(app):
             level="warn" if action in {"cancel", "remove"} else "info",
             job_id=job_id,
         )
-        return jsonify(ok=True, job_id=job_id, action=action, jobs=list_job_history_for_api(), summary=get_job_summary())
+        return jsonify(ok=True, job_id=job_id, action=action, jobs=_combined_jobs_for_api(), summary=_combined_job_summary())
+
+    @app.route("/api/mobile/v1/jobs/<job_id>/preset", methods=["POST"])
+    def mobile_job_preset_api(job_id):
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        data = request.get_json(silent=True) or {}
+        requested = str(data.get("preset") or data.get("selection") or "").strip().lower()
+        if requested not in {"smart", "auto", "1080", "4k"}:
+            return jsonify(error="preset must be smart, auto, 1080, or 4k"), 400
+
+        worker_parts = str(job_id or "").split(":", 2)
+        if len(worker_parts) == 3 and worker_parts[0] == "worker":
+            node_id, worker_job_id = worker_parts[1], worker_parts[2]
+            row = get_node_private(node_id)
+            if not row:
+                return jsonify(error="worker node not found"), 404
+            worker_job = next(
+                (
+                    item for item in row.get("jobs") if isinstance(item, dict)
+                    and str(item.get("id") or "") == worker_job_id
+                ),
+                None,
+            ) if isinstance(row.get("jobs"), list) else None
+            if not worker_job:
+                return jsonify(error="worker job not found"), 404
+            try:
+                plan = _node_queue_plan(str(worker_job.get("src") or ""), requested, data.get("smart_tuning"))
+                plan = _prepare_plan_for_node(plan, public_node(row))
+                result = signed_json_request(
+                    row,
+                    f"/api/node/jobs/{worker_job_id}/preset",
+                    method="POST",
+                    body={"plan": plan},
+                    timeout=20,
+                )
+            except Exception as exc:
+                return jsonify(error=f"preset edit failed: {str(exc)[:180]}"), 400
+            if isinstance(result.get("job"), dict):
+                row["jobs"] = [
+                    result["job"] if isinstance(item, dict) and str(item.get("id") or "") == worker_job_id else item
+                    for item in row.get("jobs") or []
+                ]
+            save_node(row)
+        else:
+            job = get_job(job_id)
+            if not job:
+                return jsonify(error="job not found on this node"), 404
+            try:
+                plan = _node_queue_plan(str(job.get("src") or ""), requested, data.get("smart_tuning"))
+            except Exception as exc:
+                return jsonify(error=f"preset planning failed: {str(exc)[:180]}"), 400
+            ok, error = replace_queued_job_preset(job_id, plan)
+            if not ok:
+                return jsonify(error=error or "preset edit failed"), 400
+            _wake_auto_node_dispatch()
+
+        log_event(
+            "mobile_queued_preset_edited",
+            f"{device.get('name')} changed queued job {job_id} to {requested}.",
+            level="info",
+        )
+        return jsonify(ok=True, job_id=job_id, preset=requested, jobs=_combined_jobs_for_api(), summary=_combined_job_summary())
 
     @app.route("/api/mobile/v1/jobs/clear", methods=["POST"])
     def mobile_jobs_clear_api():
@@ -7673,13 +7759,25 @@ def register_routes(app):
         data = request.get_json(silent=True) or {}
         target = str(data.get("target") or "finished").strip().lower()
         if target == "finished":
-            removed = clear_finished_jobs_core()
+            local_removed = clear_finished_jobs_core()
+            worker_clear = _clear_linked_worker_jobs(target="finished")
         elif target == "queued":
-            removed = clear_queued_jobs()
+            local_removed = clear_queued_jobs()
+            worker_clear = _clear_linked_worker_jobs(target="queued")
         else:
             return jsonify(error="target must be finished or queued"), 400
+        worker_removed = int(worker_clear.get("removed") or 0)
+        removed = local_removed + worker_removed
         log_event("mobile_jobs_clear", f"{device.get('name')} cleared {removed} {target} jobs.", level="warn")
-        return jsonify(ok=True, removed=removed, target=target, summary=get_job_summary())
+        return jsonify(
+            ok=True,
+            removed=removed,
+            local_removed=local_removed,
+            worker_removed=worker_removed,
+            workers=worker_clear.get("workers") or [],
+            target=target,
+            summary=_combined_job_summary(),
+        )
 
     @app.route("/api/mobile/v1/library")
     def mobile_library_api():
@@ -7822,6 +7920,86 @@ def register_routes(app):
         if not _authenticated_mobile("read"):
             return jsonify(error="unauthorized mobile device"), 401
         return jsonify(ok=True, local=local_node_overview(), nodes=list_nodes_public())
+
+    @app.route("/api/mobile/v1/nodes/<node_id>/action", methods=["POST"])
+    def mobile_node_action_api(node_id):
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        row = get_node_private(node_id)
+        if not row:
+            return jsonify(error="node not found"), 404
+        data = request.get_json(silent=True) or {}
+        action = str(data.get("action") or "refresh").strip().lower()
+        warning = ""
+        if action == "refresh":
+            row = _refresh_linked_node(row)
+        elif action == "rename":
+            try:
+                row = rename_node(node_id, data.get("name") or "")
+            except ValueError as exc:
+                return jsonify(error=str(exc)), 400
+        elif action == "capacity":
+            limit = normalize_hardware_transcode_concurrency(
+                data.get("hardware_transcode_concurrency"),
+                row.get("hardware_transcode_concurrency") or 1,
+            )
+            row["hardware_transcode_concurrency"] = limit
+            save_node(row)
+            controller_settings = load_settings()
+            try:
+                result = signed_json_request(
+                    row,
+                    "/api/node/config",
+                    method="POST",
+                    body={
+                        "hb_threads": controller_settings.get("hb_threads", 0),
+                        "hardware_transcode_concurrency": limit,
+                        "auto_stop_large_output_enabled": controller_settings.get("auto_stop_large_output_enabled", False),
+                        "auto_stop_large_output_percent": controller_settings.get("auto_stop_large_output_percent", 90),
+                    },
+                    timeout=10,
+                )
+                if isinstance(result.get("encoding_policy"), dict):
+                    row["worker_encoding_policy"] = result["encoding_policy"]
+                    save_node(row)
+            except Exception as exc:
+                warning = f"Saved on the controller; the worker will receive it with the next dispatch ({str(exc)[:120]})."
+        elif action == "clear_finished":
+            try:
+                result = signed_json_request(
+                    row,
+                    "/api/node/jobs/clear",
+                    method="POST",
+                    body={"target": "finished"},
+                    timeout=20,
+                )
+            except Exception as exc:
+                return jsonify(error=str(exc)), 400
+            if isinstance(result.get("jobs"), list):
+                row["jobs"] = result["jobs"]
+            if isinstance(result.get("summary"), dict):
+                row["summary"] = result["summary"]
+                row["status"] = _node_summary_status(result["summary"])
+            save_node(row)
+        elif action in {"unlink", "forget"}:
+            if action == "unlink":
+                try:
+                    signed_json_request(row, "/api/node/unlink", method="POST", body={}, timeout=8)
+                except Exception as exc:
+                    warning = f"The worker did not confirm unlink; its controller record was removed locally ({str(exc)[:120]})."
+            delete_node(node_id)
+            log_event("mobile_node_unlinked", f"{device.get('name')} removed linked worker {row.get('name') or node_id}.", level="warn")
+            return jsonify(ok=True, removed=True, warning=warning, nodes=list_nodes_public())
+        else:
+            return jsonify(error="invalid node action"), 400
+
+        log_event(
+            "mobile_node_action",
+            f"{device.get('name')} requested {action} for {row.get('name') or node_id}.",
+            level="info",
+        )
+        return jsonify(ok=True, node=public_node(row), warning=warning, nodes=list_nodes_public())
 
     @app.route("/api/mobile/v1/operations", methods=["GET", "POST"])
     def mobile_operations_api():
@@ -7988,8 +8166,35 @@ def register_routes(app):
         if not isinstance(data.get("paused"), bool):
             return jsonify(error="paused must be true or false"), 400
         paused = set_queue_paused(data["paused"])
+        workers = []
+        for row in list_nodes_private():
+            try:
+                result = signed_json_request(
+                    row,
+                    "/api/node/queue",
+                    method="POST",
+                    body={"paused": paused},
+                    timeout=10,
+                )
+                if isinstance(result.get("summary"), dict):
+                    row["summary"] = result["summary"]
+                    row["status"] = _node_summary_status(result["summary"])
+                    save_node(row)
+                workers.append({
+                    "node_id": row.get("id"),
+                    "node_name": row.get("name") or row.get("id"),
+                    "ok": True,
+                    "paused": bool(result.get("paused")),
+                })
+            except Exception as exc:
+                workers.append({
+                    "node_id": row.get("id"),
+                    "node_name": row.get("name") or row.get("id"),
+                    "ok": False,
+                    "error": str(exc)[:180],
+                })
         log_event("mobile_queue_control", f"{device.get('name')} {'paused' if paused else 'resumed'} the queue.", level="info")
-        return jsonify(ok=True, paused=paused)
+        return jsonify(ok=True, paused=paused, workers=workers, summary=_combined_job_summary())
 
     # Browser-admin endpoints used by the web settings page.
     @app.route("/api/mobile/pairing_code", methods=["POST"])
@@ -8298,6 +8503,52 @@ def register_routes(app):
             truncated=truncated,
         )
 
+    @app.route("/api/node/jobs/<job_id>/action", methods=["POST"])
+    def node_worker_job_action_api(job_id):
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        data = request.get_json(silent=True) or {}
+        action = str(data.get("action") or "").strip().lower()
+        if action == "cancel":
+            ok, error = cancel_job(job_id)
+        elif action == "remove":
+            ok, error = remove_queued_job(job_id)
+        elif action in {"up", "down", "top", "bottom"}:
+            ok, error = move_queued_job(job_id, action)
+        elif action == "position":
+            ok, error = move_queued_job_to_position(job_id, data.get("position"))
+        else:
+            return jsonify(error="invalid job action"), 400
+        if not ok:
+            return jsonify(error=error or "job action failed"), 400
+        return jsonify(
+            ok=True,
+            job_id=job_id,
+            action=action,
+            jobs=list_jobs_for_api(include_log_tail=True),
+            summary=get_job_summary(),
+        )
+
+    @app.route("/api/node/jobs/<job_id>/preset", methods=["POST"])
+    def node_worker_job_preset_api(job_id):
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        data = request.get_json(silent=True) or {}
+        plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
+        ok, error = replace_queued_job_preset(job_id, plan)
+        if not ok:
+            return jsonify(error=error or "preset edit failed"), 400
+        return jsonify(
+            ok=True,
+            job=next(
+                (row for row in list_jobs_for_api(include_log_tail=True) if row.get("id") == job_id),
+                None,
+            ),
+            summary=get_job_summary(),
+        )
+
     @app.route("/api/node/jobs/clear", methods=["POST"])
     def node_worker_jobs_clear_api():
         controller = _authenticated_controller()
@@ -8305,13 +8556,31 @@ def register_routes(app):
             return jsonify(error="unauthorized"), 401
         data = request.get_json(silent=True) or {}
         target = str(data.get("target") or "finished").strip().lower()
-        if target != "finished":
-            return jsonify(error="only finished worker jobs can be cleared remotely"), 400
-        removed = clear_finished_jobs_core()
+        if target == "finished":
+            removed = clear_finished_jobs_core()
+        elif target == "queued":
+            removed = clear_queued_jobs()
+        else:
+            return jsonify(error="target must be finished or queued"), 400
         return jsonify(
             ok=True,
             removed=removed,
             jobs=list_jobs_for_api(include_log_tail=True),
+            summary=get_job_summary(),
+        )
+
+    @app.route("/api/node/queue", methods=["POST"])
+    def node_worker_queue_control_api():
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data.get("paused"), bool):
+            return jsonify(error="paused must be true or false"), 400
+        paused = set_queue_paused(data["paused"])
+        return jsonify(
+            ok=True,
+            paused=paused,
             summary=get_job_summary(),
         )
 

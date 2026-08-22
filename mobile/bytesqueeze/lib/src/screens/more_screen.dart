@@ -159,7 +159,7 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.info_outline_rounded,
                       color: ByteSqueezeColors.muted,
                       title: 'About',
-                      subtitle: 'ByteSqueeze $appVersion · TSD 3.15',
+                      subtitle: 'ByteSqueeze $appVersion · TSD 3.16',
                       onTap: () => showAboutDialog(
                         context: context,
                         applicationName: 'ByteSqueeze',
@@ -733,21 +733,156 @@ class _DetailScaffold extends StatelessWidget {
   }
 }
 
-class NodesPage extends StatelessWidget {
+class NodesPage extends StatefulWidget {
   const NodesPage({super.key, required this.controller});
 
   final AppController controller;
 
   @override
+  State<NodesPage> createState() => _NodesPageState();
+}
+
+class _NodesPageState extends State<NodesPage> {
+  Future<void> _run(Future<void> Function() action,
+      {String success = 'Linked node updated.'}) async {
+    try {
+      await action();
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text(success)),
+      );
+    } catch (error) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('$error')),
+      );
+    }
+  }
+
+  Future<void> _rename(Map<String, dynamic> node) async {
+    final input = TextEditingController(text: '${node['name'] ?? 'Worker'}');
+    final name = await showDialog<String>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Rename linked worker'),
+        content: TextField(
+          controller: input,
+          autofocus: true,
+          maxLength: 80,
+          decoration: const InputDecoration(
+            labelText: 'Worker name',
+            helperText: 'This controller alias stays after reconnects.',
+          ),
+          onSubmitted: (value) => Navigator.pop(context, value.trim()),
+        ),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, input.text.trim()),
+              child: const Text('Save')),
+        ],
+      ),
+    );
+    input.dispose();
+    if (name == null || name.isEmpty) return;
+    await _run(
+      () => widget.controller.nodeAction(
+        '${node['id'] ?? ''}',
+        'rename',
+        name: name,
+      ),
+      success: 'Worker renamed to $name.',
+    );
+  }
+
+  Future<void> _capacity(Map<String, dynamic> node) async {
+    final current =
+        ((node['hardware_transcode_concurrency'] as num?)?.toInt() ?? 1)
+            .clamp(1, 8);
+    final selected = await showDialog<int>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Simultaneous GPU jobs'),
+        children: [
+          for (var value = 1; value <= 8; value++)
+            SimpleDialogOption(
+              onPressed: () => Navigator.pop(context, value),
+              child: ListTile(
+                leading: Icon(value == current
+                    ? Icons.radio_button_checked_rounded
+                    : Icons.radio_button_off_rounded),
+                title: Text('$value GPU job${value == 1 ? '' : 's'}'),
+                subtitle: value == 1
+                    ? const Text('CPU/software work always remains exclusive')
+                    : null,
+              ),
+            ),
+        ],
+      ),
+    );
+    if (selected == null) return;
+    await _run(
+      () => widget.controller.nodeAction(
+        '${node['id'] ?? ''}',
+        'capacity',
+        hardwareTranscodeConcurrency: selected,
+      ),
+      success: 'Worker GPU capacity set to $selected.',
+    );
+  }
+
+  Future<void> _confirmNodeAction(
+      Map<String, dynamic> node, String action) async {
+    final unlink = action == 'unlink';
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: Text(unlink ? 'Unlink this worker?' : 'Clear worker history?'),
+        content: Text(unlink
+            ? 'The controller will stop assigning work to ${node['name'] ?? 'this worker'}. Media and persistent worker state are not deleted.'
+            : 'Completed and failed rows and their logs will be cleared from ${node['name'] ?? 'this worker'}. Active jobs are preserved.'),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(context, false),
+              child: const Text('Cancel')),
+          FilledButton(
+              onPressed: () => Navigator.pop(context, true),
+              child: Text(unlink ? 'Unlink' : 'Clear')),
+        ],
+      ),
+    );
+    if (confirmed != true) return;
+    await _run(
+      () => widget.controller.nodeAction('${node['id'] ?? ''}', action),
+      success: unlink ? 'Worker unlinked.' : 'Worker history cleared.',
+    );
+  }
+
+  Future<void> _handleAction(
+      Map<String, dynamic> node, String action) async {
+    if (action == 'rename') return _rename(node);
+    if (action == 'capacity') return _capacity(node);
+    if (action == 'unlink' || action == 'clear_finished') {
+      return _confirmNodeAction(node, action);
+    }
+    await _run(
+      () => widget.controller.nodeAction('${node['id'] ?? ''}', action),
+      success: 'Worker status refreshed.',
+    );
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final local = asMap(controller.nodes['local']);
-    final nodes = asList(controller.nodes['nodes']).map(asMap).toList();
+    final local = asMap(widget.controller.nodes['local']);
+    final nodes = asList(widget.controller.nodes['nodes']).map(asMap).toList();
     final all = [local, ...nodes].where((row) => row.isNotEmpty).toList();
     return _DetailScaffold(
       title: 'Encoding nodes',
       actions: [
         IconButton(
-            onPressed: controller.refreshAll,
+            onPressed: widget.controller.refreshAll,
             icon: const Icon(Icons.refresh_rounded))
       ],
       child: ListView(
@@ -756,7 +891,12 @@ class NodesPage extends StatelessWidget {
           for (var index = 0; index < all.length; index++)
             Padding(
               padding: const EdgeInsets.only(bottom: 11),
-              child: _NodeCard(node: all[index], local: index == 0),
+              child: _NodeCard(
+                node: all[index],
+                local: index == 0,
+                canControl: widget.controller.canControl,
+                onAction: (action) => _handleAction(all[index], action),
+              ),
             ),
         ],
       ),
@@ -765,20 +905,34 @@ class NodesPage extends StatelessWidget {
 }
 
 class _NodeCard extends StatelessWidget {
-  const _NodeCard({required this.node, required this.local});
+  const _NodeCard({
+    required this.node,
+    required this.local,
+    required this.canControl,
+    required this.onAction,
+  });
 
   final Map<String, dynamic> node;
   final bool local;
+  final bool canControl;
+  final ValueChanged<String> onAction;
 
   @override
   Widget build(BuildContext context) {
     final online = node['online'] != false;
     final status = '${node['status'] ?? (online ? 'idle' : 'offline')}';
     final color = statusColor(online ? status : 'offline');
+    final summary = asMap(node['summary']);
+    final counts = asMap(summary['counts']);
+    final capacity =
+        (node['hardware_transcode_concurrency'] as num?)?.toInt() ?? 1;
     return SurfaceCard(
-      child: Row(
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          Stack(
+          Row(
+            children: [
+              Stack(
             clipBehavior: Clip.none,
             children: [
               DecoratedBox(
@@ -805,24 +959,79 @@ class _NodeCard extends StatelessWidget {
                               color: ByteSqueezeColors.surface, width: 2)))),
             ],
           ),
-          const SizedBox(width: 15),
-          Expanded(
+              const SizedBox(width: 15),
+              Expanded(
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 Text('${node['name'] ?? (local ? 'TSD Main' : 'Worker')}',
                     style: const TextStyle(fontWeight: FontWeight.w700)),
                 const SizedBox(height: 4),
-                Text(
-                    local
-                        ? 'Controller · protocol ${node['protocol_version'] ?? 2}'
-                        : 'Linked worker · protocol ${node['protocol_version'] ?? 2}',
+                Text(local
+                    ? 'Controller · protocol ${node['protocol_version'] ?? 2}'
+                    : 'Linked worker · $capacity GPU slot${capacity == 1 ? '' : 's'} · protocol ${node['protocol_version'] ?? 2}',
                     style: const TextStyle(
                         color: ByteSqueezeColors.muted, fontSize: 12)),
               ],
             ),
+              ),
+              StatusPill(label: online ? status : 'offline', color: color),
+              if (!local)
+                PopupMenuButton<String>(
+                  enabled: canControl,
+                  onSelected: onAction,
+                  itemBuilder: (context) => const [
+                    PopupMenuItem(
+                      value: 'refresh',
+                      child: ListTile(
+                        leading: Icon(Icons.refresh_rounded),
+                        title: Text('Refresh status'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'rename',
+                      child: ListTile(
+                        leading: Icon(Icons.drive_file_rename_outline_rounded),
+                        title: Text('Rename worker'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'capacity',
+                      child: ListTile(
+                        leading: Icon(Icons.memory_rounded),
+                        title: Text('GPU capacity'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'clear_finished',
+                      child: ListTile(
+                        leading: Icon(Icons.delete_sweep_outlined),
+                        title: Text('Clear finished jobs'),
+                      ),
+                    ),
+                    PopupMenuItem(
+                      value: 'unlink',
+                      child: ListTile(
+                        leading: Icon(Icons.link_off_rounded,
+                            color: ByteSqueezeColors.danger),
+                        title: Text('Unlink worker'),
+                      ),
+                    ),
+                  ],
+                ),
+            ],
           ),
-          StatusPill(label: online ? status : 'offline', color: color),
+          if (!local) ...[
+            const SizedBox(height: 12),
+            Text(
+              '${node['url'] ?? ''}\n${counts['running'] ?? 0} running · ${counts['queued'] ?? 0} queued · ${counts['error'] ?? 0} errors',
+              style: const TextStyle(
+                color: ByteSqueezeColors.muted,
+                fontSize: 12,
+                height: 1.45,
+              ),
+            ),
+          ],
         ],
       ),
     );

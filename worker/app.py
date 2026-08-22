@@ -17,13 +17,21 @@ from flask import Flask, jsonify, request
 
 from webui.app.events import log_event
 from webui.app.jobs import (
+    cancel_job,
     clear_finished_jobs,
+    clear_queued_jobs,
     create_remote_transfer_job,
     get_job,
     get_job_summary,
+    get_queue_state,
     initialize_jobs_system,
     list_jobs_for_api,
+    move_queued_job,
+    move_queued_job_to_position,
     read_job_log,
+    remove_queued_job,
+    replace_queued_job_preset,
+    set_queue_paused,
 )
 from webui.app.node_linking import (
     NODE_PROTOCOL_VERSION,
@@ -44,7 +52,7 @@ from webui.app.presets import guess_preset_from_filename, load_preset_config
 from webui.app.settings import load_settings, save_settings
 
 
-WORKER_RELEASE = "2.5.7"
+WORKER_RELEASE = "2.6.0"
 
 
 def _public_encoding_policy() -> dict:
@@ -445,6 +453,52 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             truncated=truncated,
         )
 
+    @app.post("/api/node/jobs/<job_id>/action")
+    def worker_job_action(job_id):
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        data = request.get_json(silent=True) or {}
+        action = str(data.get("action") or "").strip().lower()
+        if action == "cancel":
+            ok, error = cancel_job(job_id)
+        elif action == "remove":
+            ok, error = remove_queued_job(job_id)
+        elif action in {"up", "down", "top", "bottom"}:
+            ok, error = move_queued_job(job_id, action)
+        elif action == "position":
+            ok, error = move_queued_job_to_position(job_id, data.get("position"))
+        else:
+            return jsonify(error="invalid job action"), 400
+        if not ok:
+            return jsonify(error=error or "job action failed"), 400
+        return jsonify(
+            ok=True,
+            job_id=job_id,
+            action=action,
+            jobs=list_jobs_for_api(include_log_tail=True),
+            summary=get_job_summary(),
+        )
+
+    @app.post("/api/node/jobs/<job_id>/preset")
+    def worker_job_preset(job_id):
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        data = request.get_json(silent=True) or {}
+        plan = data.get("plan") if isinstance(data.get("plan"), dict) else None
+        ok, error = replace_queued_job_preset(job_id, plan)
+        if not ok:
+            return jsonify(error=error or "preset edit failed"), 400
+        return jsonify(
+            ok=True,
+            job=next(
+                (row for row in list_jobs_for_api(include_log_tail=True) if row.get("id") == job_id),
+                None,
+            ),
+            summary=get_job_summary(),
+        )
+
     @app.post("/api/node/jobs/clear")
     def worker_jobs_clear():
         controller = _authenticated_controller()
@@ -452,9 +506,12 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             return jsonify(error="unauthorized"), 401
         data = request.get_json(silent=True) or {}
         target = str(data.get("target") or "finished").strip().lower()
-        if target != "finished":
-            return jsonify(error="only finished worker jobs can be cleared remotely"), 400
-        removed = clear_finished_jobs()
+        if target == "finished":
+            removed = clear_finished_jobs()
+        elif target == "queued":
+            removed = clear_queued_jobs()
+        else:
+            return jsonify(error="target must be finished or queued"), 400
         log_event(
             "worker_jobs_cleared",
             f"{controller.get('name') or 'Controller'} cleared {removed} finished worker job(s).",
@@ -464,6 +521,22 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             ok=True,
             removed=removed,
             jobs=list_jobs_for_api(include_log_tail=True),
+            summary=get_job_summary(),
+        )
+
+    @app.post("/api/node/queue")
+    def worker_queue_control():
+        controller = _authenticated_controller()
+        if not controller:
+            return jsonify(error="unauthorized"), 401
+        data = request.get_json(silent=True) or {}
+        if not isinstance(data.get("paused"), bool):
+            return jsonify(error="paused must be true or false"), 400
+        paused = set_queue_paused(data["paused"])
+        return jsonify(
+            ok=True,
+            paused=paused,
+            queue_paused=get_queue_state(),
             summary=get_job_summary(),
         )
 

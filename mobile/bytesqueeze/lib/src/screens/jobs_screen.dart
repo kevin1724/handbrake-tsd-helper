@@ -54,7 +54,7 @@ class _JobsScreenState extends State<JobsScreen> {
                               style: Theme.of(context).textTheme.headlineLarge),
                           const SizedBox(height: 4),
                           Text(
-                            "${summaryCount(summary, 'running')} running · ${summaryCount(summary, 'queued')} queued · ${summaryCount(summary, 'done')} completed",
+                            "${summaryCount(summary, 'running')} running · ${summaryCount(summary, 'queued')} queued · ${summaryCount(summary, 'done')} completed across all nodes",
                             style:
                                 const TextStyle(color: ByteSqueezeColors.muted),
                           ),
@@ -98,7 +98,8 @@ class _JobsScreenState extends State<JobsScreen> {
                         child: _JobCard(
                             controller: widget.controller,
                             job: job,
-                            run: _run),
+                            run: _run,
+                            editPreset: _editPreset),
                       )),
                 const SizedBox(height: 18),
                 SegmentedButton<bool>(
@@ -152,6 +153,17 @@ class _JobsScreenState extends State<JobsScreen> {
                       label: const Text('Clear finished history'),
                     ),
                   )
+                else if (!_history && rows.isNotEmpty)
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: TextButton.icon(
+                      onPressed: widget.controller.canControl
+                          ? () => _confirmClear('queued')
+                          : null,
+                      icon: const Icon(Icons.playlist_remove_rounded),
+                      label: const Text('Clear waiting jobs'),
+                    ),
+                  )
                 else
                   const SizedBox(height: 8),
                 if (paused && !_history)
@@ -185,7 +197,10 @@ class _JobsScreenState extends State<JobsScreen> {
                   ...rows.map((job) => Padding(
                         padding: const EdgeInsets.only(bottom: 11),
                         child: _JobCard(
-                            controller: widget.controller, job: job, run: _run),
+                            controller: widget.controller,
+                            job: job,
+                            run: _run,
+                            editPreset: _editPreset),
                       )),
               ],
             ),
@@ -199,9 +214,9 @@ class _JobsScreenState extends State<JobsScreen> {
     final limit =
         (summary['hardware_transcode_concurrency'] as num?)?.toInt() ?? 1;
     if (running == 0) {
-      return '$limit GPU slot${limit == 1 ? '' : 's'} available · CPU jobs remain exclusive';
+      return 'Controller GPU limit $limit · linked workers report here too';
     }
-    return '$running active · GPU limit $limit · CPU jobs remain exclusive';
+    return '$running active across controller and linked workers · controller GPU limit $limit';
   }
 
   String _filterLabel(String value) {
@@ -211,12 +226,14 @@ class _JobsScreenState extends State<JobsScreen> {
   }
 
   Future<void> _confirmClear(String target) async {
+    final queued = target == 'queued';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
-        title: const Text('Clear finished jobs?'),
-        content: const Text(
-            'This removes finished job rows and their logs from the TSD dashboard. Media files are not deleted.'),
+        title: Text(queued ? 'Clear waiting jobs?' : 'Clear finished jobs?'),
+        content: Text(queued
+            ? 'This removes queued jobs from the controller and linked workers. Running encodes and media files are not deleted.'
+            : 'This removes finished job rows and logs from the controller and linked workers. Media files are not deleted.'),
         actions: [
           TextButton(
               onPressed: () => Navigator.pop(context, false),
@@ -229,6 +246,55 @@ class _JobsScreenState extends State<JobsScreen> {
     );
     if (confirmed == true) {
       await _run(() => widget.controller.clearJobs(target));
+    }
+  }
+
+  Future<void> _editPreset(Map<String, dynamic> job) async {
+    final selected = await showDialog<String>(
+      context: context,
+      builder: (context) => SimpleDialog(
+        title: const Text('Edit queued preset'),
+        children: [
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 'smart'),
+            child: const ListTile(
+              leading: Icon(Icons.auto_awesome_rounded),
+              title: Text('Smart Preset'),
+              subtitle: Text('Use learned preferences and node hardware'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, 'auto'),
+            child: const ListTile(
+              leading: Icon(Icons.route_rounded),
+              title: Text('Automatic'),
+              subtitle: Text('Choose from the source and destination node'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, '1080'),
+            child: const ListTile(
+              leading: Icon(Icons.hd_rounded),
+              title: Text('1080p'),
+              subtitle: Text('Keep or limit output to 1920×1080'),
+            ),
+          ),
+          SimpleDialogOption(
+            onPressed: () => Navigator.pop(context, '4k'),
+            child: const ListTile(
+              leading: Icon(Icons.four_k_rounded),
+              title: Text('4K'),
+              subtitle: Text('Use the configured 4K preset'),
+            ),
+          ),
+        ],
+      ),
+    );
+    if (selected != null) {
+      await _run(() => widget.controller.editJobPreset(
+            '${job['id'] ?? ''}',
+            selected,
+          ));
     }
   }
 
@@ -245,11 +311,15 @@ class _JobsScreenState extends State<JobsScreen> {
 
 class _JobCard extends StatelessWidget {
   const _JobCard(
-      {required this.controller, required this.job, required this.run});
+      {required this.controller,
+      required this.job,
+      required this.run,
+      required this.editPreset});
 
   final AppController controller;
   final Map<String, dynamic> job;
   final Future<void> Function(Future<void> Function()) run;
+  final Future<void> Function(Map<String, dynamic>) editPreset;
 
   @override
   Widget build(BuildContext context) {
@@ -258,6 +328,7 @@ class _JobCard extends StatelessWidget {
     final progress =
         ((job['progress'] as num?)?.toDouble() ?? 0).clamp(0, 100).toDouble();
     final canMove = status == 'queued' && controller.canControl;
+    final canEditPreset = status == 'queued' && controller.canControl;
     final canCancel =
         {'running', 'queued', 'waiting_to_upload'}.contains(status) &&
             controller.canControl;
@@ -293,7 +364,7 @@ class _JobCard extends StatelessWidget {
                         style: const TextStyle(fontWeight: FontWeight.w700)),
                     const SizedBox(height: 5),
                     Text(
-                      '${job['encoder'] ?? job['encode_method'] ?? job['preset'] ?? 'Automatic'} · ${job['preset'] ?? 'auto'}',
+                      '${job['queued_preset_name'] ?? job['encoder'] ?? job['encode_method'] ?? job['preset'] ?? 'Automatic'} · ${job['node_name'] ?? (job['is_worker_job'] == true ? 'Linked worker' : 'Main controller')}',
                       style: const TextStyle(
                           color: ByteSqueezeColors.muted, fontSize: 12),
                     ),
@@ -302,9 +373,21 @@ class _JobCard extends StatelessWidget {
               ),
               PopupMenuButton<String>(
                 enabled: controller.canControl,
-                onSelected: (action) =>
-                    run(() => controller.jobAction('${job['id']}', action)),
+                onSelected: (action) async {
+                  if (action == 'edit_preset') {
+                    await editPreset(job);
+                  } else {
+                    await run(
+                        () => controller.jobAction('${job['id']}', action));
+                  }
+                },
                 itemBuilder: (context) => [
+                  if (canEditPreset)
+                    const PopupMenuItem(
+                        value: 'edit_preset',
+                        child: ListTile(
+                            leading: Icon(Icons.auto_awesome_rounded),
+                            title: Text('Edit preset'))),
                   if (canMove) ...const [
                     PopupMenuItem(
                         value: 'top',

@@ -1,6 +1,6 @@
 abstract final class DemoData {
   static Map<String, dynamic> get dashboard => {
-        'release': '3.15.4',
+        'release': '3.16.0',
         'queue': {
           'paused': false,
           'summary': {
@@ -51,6 +51,7 @@ abstract final class DemoData {
             'progress': 67.4,
             'eta_seconds': 1248,
             'encoder': 'qsv_h265_10bit',
+            'node_name': 'TSD Main',
             'estimated_out_gb': 8.4,
           },
           {
@@ -60,6 +61,10 @@ abstract final class DemoData {
             'status': 'queued',
             'progress': 0,
             'encoder': 'x265_10bit',
+            'queued_preset_name': 'Smart HEVC 10-bit',
+            'node_id': 'node-2',
+            'node_name': 'Office Encoder',
+            'is_worker_job': true,
           },
           {
             'id': 'demo-queued-2',
@@ -241,15 +246,21 @@ abstract final class DemoData {
           {
             'id': 'node-1',
             'name': 'Living Room Mini PC',
+            'url': 'http://192.168.12.110:8082',
             'online': true,
             'status': 'idle',
+            'hardware_transcode_concurrency': 2,
+            'summary': {'counts': {'running': 0, 'queued': 0, 'error': 0}},
             'protocol_version': 2
           },
           {
             'id': 'node-2',
             'name': 'Office Encoder',
+            'url': 'http://192.168.12.111:8082',
             'online': true,
-            'status': 'idle',
+            'status': 'queued',
+            'hardware_transcode_concurrency': 3,
+            'summary': {'counts': {'running': 0, 'queued': 1, 'error': 0}},
             'protocol_version': 2
           },
         ],

@@ -10,6 +10,10 @@ ByteSqueeze is the Flutter remote-control app for HandBrake TSD Helper.
   **Settings → Interface & layout**
 - Persistent live operations dock with automatic queue/progress refresh
 - Running-now, up-next, and history queue views with GPU-capacity guidance
+- One combined controller/worker queue with remote reordering, cancellation,
+  queued-preset editing, and controller/worker history cleanup
+- Linked-worker controls for status refresh, persistent names, GPU capacity,
+  completed-job cleanup, and safe unlinking
 - Mobile control of safe GPU concurrency and projected-output-size protection;
   CPU/software encoding always remains exclusive
 - Graceful compatibility with older TSD servers: unsupported V3 controls become
@@ -50,6 +54,9 @@ never changes server settings or media data.
 Smart Preset protections are editable from both **Settings → Smart Presets** on the web and the
 phone. They can lock source resolution, black bars, display aspect ratio, every
 audio/subtitle language, and audio passthrough across full-season queues.
+Queued controller and worker jobs can also be explicitly changed to Smart,
+Auto, 1080p, or 4K from the Queue screen; the saved preset snapshot changes
+only when the user selects that action.
 
 ## Android package
 

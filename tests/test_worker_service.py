@@ -333,7 +333,7 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertEqual(jobs._hardware_transcode_limit(job=stale_job), 3)
 
         health = self.client.get("/api/health").get_json()
-        self.assertEqual(health["release"], "2.5.7")
+        self.assertEqual(health["release"], "2.6.0")
         self.assertEqual(health["encoding_policy"]["hardware_transcode_concurrency"], 3)
 
     def test_hardware_preset_and_concurrency_limit_are_detected_safely(self):
@@ -399,6 +399,99 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertEqual(response.get_json()["removed"], 2)
         self.assertEqual(response.get_json()["jobs"], remaining)
         clear.assert_called_once_with()
+
+    def test_controller_can_reorder_and_edit_worker_queue(self):
+        pairing = node_linking.create_pairing_code()
+        paired = self.client.post(
+            "/api/node/pair/accept",
+            json={
+                "code": pairing["code"],
+                "controller_id": "controller-worker-control",
+                "controller_name": "Main node",
+                "controller_url": "http://controller:8080",
+                "protocol_version": 2,
+            },
+        ).get_json()
+
+        action_body = json.dumps({"action": "top"}).encode("utf-8")
+        action_headers = node_linking.hmac_headers(
+            "POST",
+            "/api/node/jobs/queued-job/action",
+            action_body,
+            node_id="controller-worker-control",
+            token=paired["token"],
+        )
+        with mock.patch("worker.app.move_queued_job", return_value=(True, None)) as move:
+            action = self.client.post(
+                "/api/node/jobs/queued-job/action",
+                data=action_body,
+                content_type="application/json",
+                headers=action_headers,
+            )
+        self.assertEqual(action.status_code, 200, action.get_data(as_text=True))
+        move.assert_called_once_with("queued-job", "top")
+
+        plan = {"preset": "1080", "extra_args": "--encoder qsv_h265_10bit"}
+        preset_body = json.dumps({"plan": plan}).encode("utf-8")
+        preset_headers = node_linking.hmac_headers(
+            "POST",
+            "/api/node/jobs/queued-job/preset",
+            preset_body,
+            node_id="controller-worker-control",
+            token=paired["token"],
+        )
+        with mock.patch(
+            "worker.app.replace_queued_job_preset", return_value=(True, None)
+        ) as replace:
+            preset = self.client.post(
+                "/api/node/jobs/queued-job/preset",
+                data=preset_body,
+                content_type="application/json",
+                headers=preset_headers,
+            )
+        self.assertEqual(preset.status_code, 200, preset.get_data(as_text=True))
+        replace.assert_called_once_with("queued-job", plan)
+
+        clear_body = json.dumps({"target": "queued"}).encode("utf-8")
+        clear_headers = node_linking.hmac_headers(
+            "POST",
+            "/api/node/jobs/clear",
+            clear_body,
+            node_id="controller-worker-control",
+            token=paired["token"],
+        )
+        with mock.patch("worker.app.clear_queued_jobs", return_value=4) as clear:
+            cleared = self.client.post(
+                "/api/node/jobs/clear",
+                data=clear_body,
+                content_type="application/json",
+                headers=clear_headers,
+            )
+        self.assertEqual(cleared.status_code, 200, cleared.get_data(as_text=True))
+        self.assertEqual(cleared.get_json()["removed"], 4)
+        clear.assert_called_once_with()
+
+        pause_body = json.dumps({"paused": True}).encode("utf-8")
+        pause_headers = node_linking.hmac_headers(
+            "POST",
+            "/api/node/queue",
+            pause_body,
+            node_id="controller-worker-control",
+            token=paired["token"],
+        )
+        original_paused = jobs.get_queue_state()
+        try:
+            paused = self.client.post(
+                "/api/node/queue",
+                data=pause_body,
+                content_type="application/json",
+                headers=pause_headers,
+            )
+            self.assertEqual(paused.status_code, 200, paused.get_data(as_text=True))
+            self.assertTrue(paused.get_json()["paused"])
+            self.assertTrue(jobs.get_queue_state())
+        finally:
+            jobs.set_queue_paused(original_paused)
 
 
 if __name__ == "__main__":

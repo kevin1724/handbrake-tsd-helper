@@ -119,6 +119,54 @@ void main() {
     expect(find.text('Up next'), findsOneWidget);
   });
 
+  testWidgets('combined queue identifies workers and edits queued presets',
+      (tester) async {
+    final controller = AppController()..enterDemo();
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.motion_photos_on_outlined));
+    await tester.pumpAndSettle();
+
+    expect(find.textContaining('across all nodes'), findsOneWidget);
+    expect(find.textContaining('Office Encoder'), findsOneWidget);
+    final menus = find.byType(PopupMenuButton<String>);
+    expect(menus, findsWidgets);
+    await tester.tap(menus.at(1));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit preset'), findsOneWidget);
+    await tester.tap(find.text('Edit preset'));
+    await tester.pumpAndSettle();
+    expect(find.text('Edit queued preset'), findsOneWidget);
+    expect(find.text('Smart Preset'), findsOneWidget);
+    expect(find.text('Automatic'), findsOneWidget);
+    expect(find.text('1080p'), findsOneWidget);
+    expect(find.text('4K'), findsOneWidget);
+  });
+
+  testWidgets('linked node page exposes worker controls', (tester) async {
+    final controller = AppController()..enterDemo();
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.tune_outlined));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Encoding nodes'), 220,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Encoding nodes'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Living Room Mini PC'), findsOneWidget);
+    expect(find.text('Office Encoder'), findsOneWidget);
+    await tester.tap(find.byType(PopupMenuButton<String>).first);
+    await tester.pumpAndSettle();
+    expect(find.text('Refresh status'), findsOneWidget);
+    expect(find.text('Rename worker'), findsOneWidget);
+    expect(find.text('GPU capacity'), findsOneWidget);
+    expect(find.text('Clear finished jobs'), findsOneWidget);
+    expect(find.text('Unlink worker'), findsOneWidget);
+  });
+
   testWidgets('library exposes friendly Smart preview and season actions',
       (tester) async {
     final controller = AppController()..enterDemo();

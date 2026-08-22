@@ -245,6 +245,45 @@ class AppController extends ChangeNotifier {
     await refreshJobsAndDashboard();
   }
 
+  Future<void> editJobPreset(
+    String jobId,
+    String preset, {
+    Map<String, dynamic>? smartTuning,
+  }) async {
+    _requireControl();
+    if (!{'smart', 'auto', '1080', '4k'}.contains(preset)) {
+      throw const ApiFailure('Choose Smart, Auto, 1080p, or 4K.');
+    }
+    if (demoMode) {
+      Map<String, dynamic>? row;
+      for (final value in _list(jobs['jobs'])) {
+        final candidate = _map(value);
+        if ('${candidate['id'] ?? ''}' == jobId) {
+          row = candidate;
+          break;
+        }
+      }
+      if (row != null) {
+        row['preset'] = preset;
+        row['queued_preset_name'] = preset == 'smart'
+            ? 'Smart Preset'
+            : preset == '4k'
+                ? '4K preset'
+                : preset == '1080'
+                    ? '1080p preset'
+                    : 'Automatic preset';
+      }
+      notifyListeners();
+      return;
+    }
+    await api.post('/jobs/$jobId/preset', {
+      'preset': preset,
+      if (preset == 'smart' && smartTuning != null)
+        'smart_tuning': smartTuning,
+    });
+    await refreshJobsAndDashboard();
+  }
+
   Future<void> clearJobs(String target) async {
     _requireControl();
     if (demoMode) {
@@ -269,6 +308,47 @@ class AppController extends ChangeNotifier {
     final values = await Future.wait([api.get('/jobs'), api.get('/dashboard')]);
     jobs = values[0];
     dashboard = values[1];
+    notifyListeners();
+  }
+
+  Future<void> nodeAction(
+    String nodeId,
+    String action, {
+    String? name,
+    int? hardwareTranscodeConcurrency,
+  }) async {
+    _requireControl();
+    if (demoMode) {
+      final rows = _list(nodes['nodes']);
+      final index = rows.indexWhere(
+        (value) => '${_map(value)['id'] ?? ''}' == nodeId,
+      );
+      if (index >= 0) {
+        final row = _map(rows[index]);
+        if (action == 'rename' && name != null) row['name'] = name.trim();
+        if (action == 'capacity' && hardwareTranscodeConcurrency != null) {
+          row['hardware_transcode_concurrency'] =
+              hardwareTranscodeConcurrency.clamp(1, 8);
+        }
+        if (action == 'unlink' || action == 'forget') rows.removeAt(index);
+      }
+      notifyListeners();
+      return;
+    }
+    await api.post('/nodes/$nodeId/action', {
+      'action': action,
+      if (name != null) 'name': name,
+      if (hardwareTranscodeConcurrency != null)
+        'hardware_transcode_concurrency': hardwareTranscodeConcurrency,
+    });
+    final values = await Future.wait([
+      api.get('/nodes'),
+      api.get('/jobs'),
+      api.get('/dashboard'),
+    ]);
+    nodes = values[0];
+    jobs = values[1];
+    dashboard = values[2];
     notifyListeners();
   }
 
