@@ -396,6 +396,13 @@ software decoding while keeping the selected encoder. Encode logs show the
 source and target resolution, actual preset and encoder, requested decode path,
 and whether HandBrake verified the active QSV path.
 
+Linux defaults to QSV adapter `0` and `/dev/dri/renderD128`. Override these only
+on multi-GPU hosts with `TSD_QSV_ADAPTER` and `TSD_QSV_RENDER_DEVICE`. The image
+maps HandBrake's adapter index to its detected DRM render node instead of
+passing the numeric index to VAAPI as a device name. Container startup and each
+QSV encode run VAAPI and QSV device preflight checks; their output includes the
+render-node listing, selected node, active Intel VA driver, and adapter index.
+
 Rebuild after QSV-related Dockerfile changes:
 
 ```bash
@@ -414,6 +421,7 @@ Expected signs of working QSV:
 ```text
 /dev/dri exists
 vainfo returns Intel driver details
+QSV device preflight: passed
 HandBrake lists qsv_h264, qsv_h265, or qsv_h265_10bit
 ```
 
@@ -461,14 +469,14 @@ docker run -d \
 ```
 
 The `latest` and `main` images are published automatically from `main`. Stable
-controller releases also publish `3.15.3` and `3.15` tags.
+controller releases also publish `3.15.4` and `3.15` tags.
 
 The encoding-only worker has its own public Docker Hub image:
 
 [kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
 
 `latest` and `main` follow the main branch. Stable worker releases also publish
-`2.5.2` and `2.5` tags:
+`2.5.3` and `2.5` tags:
 
 ```bash
 docker pull kevina1724/handbrake-tsd-worker:latest

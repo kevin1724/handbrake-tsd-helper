@@ -44,6 +44,41 @@ PRESET_FILE="${HB_PRESET_FILE:-/presets/my-presets.json}"
 PRESET_NAME="${HB_PRESET_NAME:-MyPresetName}"
 DIMENSION_OPTS="${HB_DIMENSION_OPTS:-}"
 HW_DECODE_OPTS="${HB_HW_DECODE_OPTS:---disable-hw-decoding}"
+QSV_ADAPTER="${TSD_QSV_ADAPTER:-0}"
+QSV_ADAPTER_OPTS=""
+
+# Pin HandBrake to the same adapter that the Linux render-node preflight
+# validates. HandBrake's patched hwaccel layer resolves this adapter index to
+# its DRM render node (for example adapter 0 -> /dev/dri/renderD128).
+QSV_JOB=0
+case "${HB_VIDEO_ENCODER:-}" in
+  qsv_*) QSV_JOB=1 ;;
+esac
+if [ "$HW_DECODE_OPTS" = "--enable-hw-decoding qsv" ]; then
+  QSV_JOB=1
+fi
+if [ "$QSV_JOB" -eq 1 ]; then
+  case "$QSV_ADAPTER" in
+    ''|*[!0-9]*)
+      echo "[ByteSqueeze] Invalid TSD_QSV_ADAPTER='$QSV_ADAPTER'; selecting adapter 0"
+      QSV_ADAPTER=0
+      ;;
+  esac
+  QSV_ADAPTER_OPTS="--qsv-adapter $QSV_ADAPTER"
+  if [ -x /usr/local/bin/bytesqueeze-qsv-preflight ]; then
+    if ! /usr/local/bin/bytesqueeze-qsv-preflight encode; then
+      if [ "$HW_DECODE_OPTS" = "--enable-hw-decoding qsv" ]; then
+        echo "[ByteSqueeze] Hardware decode: software fallback (QSV render-device preflight failed)"
+        HW_DECODE_OPTS="--disable-hw-decoding"
+        HB_HW_DECODE_LABEL="software fallback (QSV render-device preflight failed)"
+      fi
+    fi
+  elif [ "$HW_DECODE_OPTS" = "--enable-hw-decoding qsv" ]; then
+    echo "[ByteSqueeze] Hardware decode: software fallback (QSV preflight helper is missing)"
+    HW_DECODE_OPTS="--disable-hw-decoding"
+    HB_HW_DECODE_LABEL="software fallback (QSV preflight helper is missing)"
+  fi
+fi
 
 echo "=== HandBrake one-shot encode ==="
 echo "Source : $SRC"
@@ -107,6 +142,7 @@ HandBrakeCLI \
   ${HB_THREAD_OPTS} \
   ${EXTRA_ARGS} \
   ${DIMENSION_OPTS} \
+  ${QSV_ADAPTER_OPTS} \
   ${HW_DECODE_OPTS} \
   -i "$SRC" \
   -o "$OUT"
@@ -125,6 +161,7 @@ if [ "$ENCODE_STATUS" -ne 0 ] && [ "$HW_DECODE_OPTS" = "--enable-hw-decoding qsv
     ${HB_THREAD_OPTS} \
     ${EXTRA_ARGS} \
     ${DIMENSION_OPTS} \
+    ${QSV_ADAPTER_OPTS} \
     --disable-hw-decoding \
     -i "$SRC" \
     -o "$OUT"

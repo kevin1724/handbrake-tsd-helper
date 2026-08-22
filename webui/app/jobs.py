@@ -1187,6 +1187,15 @@ def _selected_video_encoder(job: dict, preset_file: str, preset_name: str) -> st
         return _preset_video_encoder(job).strip().lower()
 
 
+def _qsv_adapter_index() -> int:
+    """Return a safe, explicit HandBrake QSV adapter index."""
+    try:
+        index = int(str(os.environ.get("TSD_QSV_ADAPTER") or "0").strip())
+    except (TypeError, ValueError):
+        return 0
+    return index if index >= 0 else 0
+
+
 def _set_preset_hardware_decode(data, preset_name: str, enabled: bool) -> bool:
     """Set decode policy only on a preset object with a video encoder."""
     candidates = []
@@ -1217,6 +1226,10 @@ def _set_preset_hardware_decode(data, preset_name: str, enabled: bool) -> bool:
     # QSV source, even when VideoQSVDecode is true.
     selected["VideoHWDecode"] = 2 if enabled else 0
     selected["VideoQSVDecode"] = bool(enabled)
+    # Do not leave AdapterIndex at HandBrake's auto sentinel (-1). The CLI and
+    # patched Linux hwaccel layer use this index to resolve the DRM render node.
+    if enabled or str(selected.get("VideoEncoder") or "").strip().lower().startswith("qsv_"):
+        selected["VideoAdapterIndex"] = _qsv_adapter_index()
     return True
 
 
@@ -2403,6 +2416,23 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     env["HB_VIDEO_ENCODER"] = selected_encoder or "unknown"
     env["HB_SOURCE_RESOLUTION"] = source_resolution_label
     env["HB_TARGET_RESOLUTION"] = target_resolution_label
+    qsv_adapter = _qsv_adapter_index()
+    qsv_render_device = str(os.environ.get("TSD_QSV_RENDER_DEVICE") or "/dev/dri/renderD128")
+    qsv_va_driver = str(os.environ.get("LIBVA_DRIVER_NAME") or "iHD")
+    qsv_job = selected_encoder.startswith("qsv_") or hardware_decode["enabled"]
+    if qsv_job:
+        env["TSD_QSV_ADAPTER"] = str(qsv_adapter)
+        env["TSD_QSV_RENDER_DEVICE"] = qsv_render_device
+        env["LIBVA_DRIVER_NAME"] = qsv_va_driver
+        job["qsv_adapter"] = qsv_adapter
+        job["qsv_render_device"] = qsv_render_device
+        job["qsv_va_driver"] = qsv_va_driver
+    qsv_diagnostics_log = (
+        f"[ByteSqueeze] Selected render device: {qsv_render_device}\n"
+        f"[ByteSqueeze] Intel VA driver: {qsv_va_driver}\n"
+        f"[ByteSqueeze] Selected QSV adapter: {qsv_adapter}\n"
+        if qsv_job else ""
+    )
 
     # Spawn worker shell script
     job["phase"] = "encoding"
@@ -2415,6 +2445,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             f"[ByteSqueeze] Source resolution: {source_resolution_label}\n"
             f"[ByteSqueeze] Target resolution: {target_resolution_label}\n"
             f"[ByteSqueeze] Selected preset: {preset_name}\n"
+            f"{qsv_diagnostics_log}"
             f"[ByteSqueeze] Preset decode policy: {preset_decode_policy}\n"
             f"[ByteSqueeze] Encoder launch: /worker/encode-one.sh\n"
             f"[ByteSqueeze] Preset file: {preset_file}\n"

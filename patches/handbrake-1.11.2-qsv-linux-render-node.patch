@@ -1,0 +1,41 @@
+diff --git a/libhb/hwaccel.c b/libhb/hwaccel.c
+index 04ea5cd..bddaf87 100644
+--- a/libhb/hwaccel.c
++++ b/libhb/hwaccel.c
+@@ -236,6 +236,24 @@ int hb_hwaccel_hw_device_ctx_init(enum AVHWDeviceType device_type, int device_in
+     if (device_index > -1)
+     {
+-        char device[32];
+-        snprintf(device, 32, "%u", device_index);
++        char device[64];
++#if HB_PROJECT_FEATURE_QSV && !defined(_WIN32) && !defined(__MINGW32__)
++        if (device_type == AV_HWDEVICE_TYPE_QSV)
++        {
++            int render_node = hb_qsv_get_adapter_render_node(device_index);
++            if (render_node < 0)
++            {
++                hb_error("hwaccel: no DRM render node for QSV adapter %d", device_index);
++                return AVERROR_UNKNOWN;
++            }
++            snprintf(device, sizeof(device), "/dev/dri/renderD%u", render_node);
++            av_dict_set(&dict, "child_device_type", "vaapi", 0);
++            hb_log("hwaccel: QSV adapter %d uses VAAPI render device %s",
++                   device_index, device);
++        }
++        else
++#endif
++        {
++            snprintf(device, sizeof(device), "%u", device_index);
++        }
+         av_dict_set(&dict, "child_device", device, 0);
+     }
+diff --git a/libhb/qsv_common.c b/libhb/qsv_common.c
+index 2512fd2..2ca06e5 100644
+--- a/libhb/qsv_common.c
++++ b/libhb/qsv_common.c
+@@ -237,4 +237,4 @@ int hb_qsv_get_adapter_render_node(int adapter_index)
+ {
+     const hb_qsv_adapter_details_t *details = hb_qsv_get_adapters_details_by_index(adapter_index);
+-    return details->extended_device_id.DRMRenderNodeNum;
++    return details != NULL ? details->extended_device_id.DRMRenderNodeNum : -1;
+ }

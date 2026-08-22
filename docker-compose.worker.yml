@@ -16,6 +16,11 @@ services:
       # auto: use QSV decode with Intel QSV encoders; qsv: prefer QSV decode
       # for supported H.264/HEVC sources; off: force software decoding.
       TSD_HW_DECODE: ${TSD_HW_DECODE:-auto}
+      # Adapter 0 is resolved by the patched HandBrake build to this Linux
+      # DRM render node instead of being passed to VAAPI as device "0".
+      TSD_QSV_ADAPTER: ${TSD_QSV_ADAPTER:-0}
+      TSD_QSV_RENDER_DEVICE: ${TSD_QSV_RENDER_DEVICE:-/dev/dri/renderD128}
+      LIBVA_DRIVER_NAME: ${LIBVA_DRIVER_NAME:-iHD}
       PYTHONDONTWRITEBYTECODE: "1"
     volumes:
       # Map a fast, durable host drive to /work. This preserves pairing state

@@ -44,7 +44,7 @@ from webui.app.presets import guess_preset_from_filename, load_preset_config
 from webui.app.settings import load_settings, save_settings
 
 
-WORKER_RELEASE = "2.5.2"
+WORKER_RELEASE = "2.5.3"
 
 
 def _public_encoding_policy() -> dict:
@@ -124,6 +124,13 @@ def _print_startup_diagnostics(work_dir: str) -> None:
     print(
         f"[WORKER] HandBrakeCLI={shutil.which('HandBrakeCLI') or 'NOT FOUND'} "
         f"ffprobe={shutil.which('ffprobe') or 'NOT FOUND'}",
+        flush=True,
+    )
+    print(
+        f"[WORKER] qsv_render_device="
+        f"{os.environ.get('TSD_QSV_RENDER_DEVICE') or '/dev/dri/renderD128'} "
+        f"va_driver={os.environ.get('LIBVA_DRIVER_NAME') or 'iHD'} "
+        f"qsv_adapter={os.environ.get('TSD_QSV_ADAPTER') or '0'}",
         flush=True,
     )
     print(

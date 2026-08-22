@@ -18,6 +18,11 @@ FROM ${PYTHON_IMAGE} AS handbrake-builder
 
 ARG HANDBRAKE_VERSION
 
+# HandBrake 1.11.2 passes the numeric QSV adapter index directly to FFmpeg as
+# child_device=0 on Linux. FFmpeg expects a DRM render-node path there. Keep
+# the correction in the image build so every rebuilt worker gets it.
+COPY patches/handbrake-1.11.2-qsv-linux-render-node.patch /tmp/handbrake-qsv-render-node.patch
+
 RUN set -eux; \
     if [ -f /etc/apt/sources.list.d/debian.sources ]; then \
       sed -i 's/^Components: .*/Components: main contrib non-free non-free-firmware/' /etc/apt/sources.list.d/debian.sources; \
@@ -85,6 +90,8 @@ RUN set -eux; \
       $qsv_build_deps; \
     git clone --depth 1 --branch "${HANDBRAKE_VERSION}" https://github.com/HandBrake/HandBrake.git /tmp/HandBrake; \
     cd /tmp/HandBrake; \
+    git apply --check /tmp/handbrake-qsv-render-node.patch; \
+    git apply /tmp/handbrake-qsv-render-node.patch; \
     ./configure --disable-gtk --enable-qsv --launch-jobs="$(nproc)" --launch; \
     install -m 0755 build/HandBrakeCLI /usr/local/bin/HandBrakeCLI; \
     strip --strip-unneeded /usr/local/bin/HandBrakeCLI; \
@@ -167,6 +174,8 @@ RUN set -eux; \
     rm -rf /var/lib/apt/lists/* /usr/share/doc/* /usr/share/man/* /usr/share/locale/*
 
 COPY --from=handbrake-builder /usr/local/bin/HandBrakeCLI /usr/local/bin/HandBrakeCLI
+COPY worker/qsv-preflight.sh /usr/local/bin/bytesqueeze-qsv-preflight
+COPY worker/container-entrypoint.sh /usr/local/bin/bytesqueeze-entrypoint
 
 WORKDIR /app
 
@@ -180,14 +189,12 @@ RUN pip install --no-cache-dir --no-compile flask gunicorn; \
 # QSV diagnostics helper
 # -------------------------------
 RUN set -eux; \
+    chmod 0755 /usr/local/bin/bytesqueeze-qsv-preflight /usr/local/bin/bytesqueeze-entrypoint; \
     printf '%s\n' \
       '#!/bin/sh' \
-      'set -eu' \
+      'set -u' \
       'echo "=== HandBrake ==="' \
       'HandBrakeCLI --version || true' \
-      'echo' \
-      'echo "=== /dev/dri ==="' \
-      'ls -l /dev/dri 2>/dev/null || echo "/dev/dri is not mounted into this container"' \
       'echo' \
       'echo "=== Intel media packages ==="' \
       'dpkg -l | grep -Ei "intel-media|intel-mediasdk|libmfx|libvpl|i965|igfx" || true' \
@@ -195,14 +202,13 @@ RUN set -eux; \
       'echo "=== VA drivers ==="' \
       'find /usr/lib -path "*/dri/*_drv_video.so" -print 2>/dev/null | sort || true' \
       'echo' \
-      'echo "=== VAAPI ==="' \
-      'vainfo --display drm --device /dev/dri/renderD128 2>&1 || true' \
-      'echo' \
-      'echo "=== VAAPI with i965 fallback ==="' \
-      'LIBVA_DRIVER_NAME=i965 vainfo --display drm --device /dev/dri/renderD128 2>&1 || true' \
+      'echo "=== Render-device preflight ==="' \
+      '/usr/local/bin/bytesqueeze-qsv-preflight manual' \
+      'status=$?' \
       'echo' \
       'echo "=== HandBrake encoders ==="' \
       'HandBrakeCLI --help 2>&1 | sed -n "/Select video encoder/,/Select audio encoder/p" | grep -i "qsv\\|265\\|264" || true' \
+      'exit "$status"' \
       > /usr/local/bin/check-qsv; \
     chmod +x /usr/local/bin/check-qsv
 
@@ -212,6 +218,8 @@ RUN set -eux; \
 ENV HB_DATA_DIR=/app/data
 ENV HB_PRESET_DIR=/presets
 ENV TSD_HW_DECODE=auto
+ENV TSD_QSV_RENDER_DEVICE=/dev/dri/renderD128
+ENV TSD_QSV_ADAPTER=0
 
 # Force Intel iHD driver. This is the normal VAAPI/QSV driver for modern Intel.
 ENV LIBVA_DRIVER_NAME=iHD
@@ -233,6 +241,8 @@ ENV LC_ALL=C.UTF-8
 EXPOSE 8080
 HEALTHCHECK --interval=60s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/api/health', timeout=4)" || exit 1
+
+ENTRYPOINT ["/usr/local/bin/bytesqueeze-entrypoint"]
 
 # -------------------------------
 # Headless remote-transfer worker

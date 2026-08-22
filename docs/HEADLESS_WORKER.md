@@ -177,6 +177,14 @@ of the selected encoder, or `off` to force software decode. Unsupported streams
 fall back to software automatically, and a failed QSV decode attempt is retried
 once with software decoding while preserving the selected QSV encoder.
 
+The worker defaults to QSV adapter `0`, `/dev/dri/renderD128`, and the Intel
+`iHD` VA driver. `TSD_QSV_ADAPTER`, `TSD_QSV_RENDER_DEVICE`, and
+`LIBVA_DRIVER_NAME` can override those values on unusual multi-GPU systems.
+At startup and before each QSV encode, logs show `ls -l /dev/dri`, the selected
+render node, active VA driver, selected adapter, and VAAPI/QSV preflight result.
+HandBrake's adapter index is resolved to the detected DRM render node, so VAAPI
+is never initialized with the invalid device name `0`.
+
 ## 5. Send work
 
 From Library or Queue on the main node, choose **Best worker** or select the

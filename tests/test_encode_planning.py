@@ -115,6 +115,7 @@ class EncodePlanningTests(unittest.TestCase):
         self.assertEqual(selected["VideoEncoder"], "qsv_h265_10bit")
         self.assertEqual(selected["VideoHWDecode"], 2)
         self.assertIs(selected["VideoQSVDecode"], True)
+        self.assertEqual(selected["VideoAdapterIndex"], 0)
         self.assertNotIn("VideoHWDecode", selected["AudioList"][0])
 
     def test_materialized_preset_enforces_qsv_decode_for_handbrake_import(self):
@@ -145,7 +146,18 @@ class EncodePlanningTests(unittest.TestCase):
         self.assertEqual(materialized["VideoEncoder"], "qsv_h265_10bit")
         self.assertEqual(materialized["VideoHWDecode"], 2)
         self.assertIs(materialized["VideoQSVDecode"], True)
+        self.assertEqual(materialized["VideoAdapterIndex"], 0)
         self.assertEqual(materialized["AudioList"][0]["AudioEncoder"], "copy")
+
+    def test_qsv_adapter_index_is_explicit_and_safely_normalized(self):
+        with mock.patch.dict(os.environ, {"TSD_QSV_ADAPTER": "3"}):
+            self.assertEqual(jobs._qsv_adapter_index(), 3)
+        for bad_value in ("", "-1", "device-zero"):
+            with self.subTest(value=bad_value), mock.patch.dict(
+                os.environ,
+                {"TSD_QSV_ADAPTER": bad_value},
+            ):
+                self.assertEqual(jobs._qsv_adapter_index(), 0)
 
     def test_decode_log_evidence_distinguishes_active_qsv_from_encode_only(self):
         positive = (
@@ -213,8 +225,31 @@ class EncodePlanningTests(unittest.TestCase):
         self.assertLess(script.index("${EXTRA_ARGS}"), script.index("${DIMENSION_OPTS}"))
         self.assertLess(script.index("${DIMENSION_OPTS}"), script.index("${HW_DECODE_OPTS}"))
         self.assertIn('HW_DECODE_OPTS="${HB_HW_DECODE_OPTS:---disable-hw-decoding}"', script)
+        self.assertIn("bytesqueeze-qsv-preflight encode", script)
+        self.assertIn('QSV_ADAPTER_OPTS="--qsv-adapter $QSV_ADAPTER"', script)
         self.assertIn('rm -f -- "$OUT"', script)
         self.assertIn("--disable-hw-decoding", script)
+
+    def test_container_build_patches_qsv_child_device_to_the_render_node(self):
+        root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+        with open(os.path.join(root, "Dockerfile"), "r", encoding="utf-8") as stream:
+            dockerfile = stream.read()
+        with open(
+            os.path.join(root, "patches", "handbrake-1.11.2-qsv-linux-render-node.patch"),
+            "r",
+            encoding="utf-8",
+        ) as stream:
+            handbrake_patch = stream.read()
+        with open(os.path.join(root, "worker", "qsv-preflight.sh"), "r", encoding="utf-8") as stream:
+            preflight = stream.read()
+
+        self.assertIn("git apply /tmp/handbrake-qsv-render-node.patch", dockerfile)
+        self.assertIn('ENTRYPOINT ["/usr/local/bin/bytesqueeze-entrypoint"]', dockerfile)
+        self.assertIn("hb_qsv_get_adapter_render_node(device_index)", handbrake_patch)
+        self.assertIn('"/dev/dri/renderD%u"', handbrake_patch)
+        self.assertIn('"child_device_type", "vaapi"', handbrake_patch)
+        self.assertIn('vainfo --display drm --device "$RENDER_DEVICE"', preflight)
+        self.assertIn("child_device=$RENDER_DEVICE,child_device_type=vaapi", preflight)
 
 
 if __name__ == "__main__":
