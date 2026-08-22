@@ -38,8 +38,8 @@ concurrency:
 env:
   IMAGE_NAME: kevina1724/handbrake-tsd-helper
   WORKER_IMAGE_NAME: kevina1724/handbrake-tsd-worker
-  CONTROLLER_VERSION: 3.15.5
-  WORKER_VERSION: 2.5.5
+  CONTROLLER_VERSION: 3.15.6
+  WORKER_VERSION: 2.5.6
 
 jobs:
   publish:

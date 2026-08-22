@@ -333,7 +333,7 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
         self.assertEqual(jobs._hardware_transcode_limit(job=stale_job), 3)
 
         health = self.client.get("/api/health").get_json()
-        self.assertEqual(health["release"], "2.5.5")
+        self.assertEqual(health["release"], "2.5.6")
         self.assertEqual(health["encoding_policy"]["hardware_transcode_concurrency"], 3)
 
     def test_hardware_preset_and_concurrency_limit_are_detected_safely(self):

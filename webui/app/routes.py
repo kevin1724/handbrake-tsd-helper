@@ -2900,7 +2900,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.15.5"
+APP_RELEASE = "3.15.6"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -8391,7 +8391,9 @@ def register_routes(app):
         if private:
             node = public_node(_refresh_linked_node(private))
         verified = bool(node.get("online"))
-        warning = "" if verified else (node.get("last_error") or "Paired, but the first worker status check did not complete.")
+        warning = node.get("pairing_notice") or (
+            "" if verified else (node.get("last_error") or "Paired, but the first worker status check did not complete.")
+        )
         log_event("node_paired", f"Paired worker node: {node.get('name') or node.get('url')}", level="info")
         return jsonify(ok=True, node=node, verified=verified, warning=warning)
 

@@ -420,6 +420,37 @@ def accept_pairing(code: str, controller: dict) -> dict:
         if used_at and not retrying_same_controller:
             raise ValueError("pairing code already used")
 
+        rotate_requested = bool(controller.get("rotate_worker_identity"))
+        expected_worker_id = str(controller.get("expected_worker_id") or "").strip()
+        identity_rotated = False
+        identity_rotated_from = ""
+        if rotate_requested:
+            current_worker_id = str(data.get("local_node_id") or "").strip()
+            retrying_completed_rotation = bool(
+                retrying_same_controller
+                and expected_worker_id
+                and str(pairing.get("identity_rotated_from") or "") == expected_worker_id
+                and str(pairing.get("identity_rotated_to") or "") == current_worker_id
+            )
+            if retrying_completed_rotation:
+                identity_rotated = True
+                identity_rotated_from = expected_worker_id
+            elif used_at:
+                raise ValueError("worker identity rotation cannot be changed after pairing")
+            else:
+                if expected_worker_id and current_worker_id != expected_worker_id:
+                    raise ValueError("worker identity changed before pairing; refresh and try again")
+                identity_rotated_from = current_worker_id
+                data["local_node_id"] = uuid.uuid4().hex
+                # A duplicated /work/state also duplicates trusted controller
+                # secrets. The valid one-time pairing code authorizes giving
+                # this physical worker its own clean identity and trust set.
+                data["trusted_controllers"] = {}
+                pairing["identity_rotated_from"] = identity_rotated_from
+                pairing["identity_rotated_to"] = data["local_node_id"]
+                pairing["identity_rotated_at"] = now
+                identity_rotated = True
+
         token = secrets.token_urlsafe(32)
         recovery_token = secrets.token_urlsafe(40)
         trusted = data.setdefault("trusted_controllers", {})
@@ -459,6 +490,8 @@ def accept_pairing(code: str, controller: dict) -> dict:
             "protocol_version": NODE_PROTOCOL_VERSION,
             "capabilities": NODE_CAPABILITIES,
             "retry_recovered": retrying_same_controller,
+            "identity_rotated": identity_rotated,
+            "identity_rotated_from": identity_rotated_from,
         }
 
     return _mutate_state(apply)
@@ -601,6 +634,9 @@ def public_node(row: dict) -> dict:
         "protocol_version": max(1, _safe_int(row.get("protocol_version"), 1)),
         "capabilities": row.get("capabilities") if isinstance(row.get("capabilities"), list) else [],
         "hardware": row.get("hardware") if isinstance(row.get("hardware"), dict) else {},
+        "pairing_notice": row.get("pairing_notice") or "",
+        "identity_rotated": bool(row.get("identity_rotated")),
+        "address_conflict_with": row.get("address_conflict_with") or "",
         "last_success_at": row.get("last_success_at") or 0,
         "consecutive_failures": _safe_int(row.get("consecutive_failures"), heartbeat_misses),
     }
@@ -706,22 +742,47 @@ def delete_node(node_id: str) -> bool:
     return _mutate_state(apply)
 
 
-def delete_nodes_by_url(url: str, *, keep_id: str = "") -> int:
+def _node_url_key(url: str) -> tuple[str, str, int | None, str]:
     value = str(url or "").strip().rstrip("/")
-    if not value:
-        return 0
-    def apply(data):
-        nodes = data.setdefault("nodes", {})
-        removed = 0
-        for node_id, row in list(nodes.items()):
-            if str(node_id) == str(keep_id or ""):
-                continue
-            if isinstance(row, dict) and str(row.get("url") or "").strip().rstrip("/") == value:
-                nodes.pop(node_id, None)
-                removed += 1
-        return removed
+    try:
+        parsed = urlparse(value)
+        default_port = 443 if parsed.scheme.lower() == "https" else 80
+        return (
+            parsed.scheme.lower(),
+            (parsed.hostname or "").lower(),
+            parsed.port or default_port,
+            (parsed.path or "").rstrip("/"),
+        )
+    except Exception:
+        return ("", value.casefold(), None, "")
 
-    return _mutate_state(apply)
+
+def _unique_worker_name(preferred: str, worker_id: str, worker_url: str) -> str:
+    base = str(preferred or "Worker").strip()[:80] or "Worker"
+    used = {
+        str(row.get("name") or "").strip().casefold()
+        for row in list_nodes_private()
+        if str(row.get("id") or "") != str(worker_id or "")
+    }
+    if base.casefold() not in used:
+        return base
+    try:
+        parsed = urlparse(str(worker_url or ""))
+        host = parsed.hostname or "node"
+        default_port = 443 if parsed.scheme == "https" else 80
+        label = f"{host}:{parsed.port}" if parsed.port and parsed.port != default_port else host
+    except Exception:
+        label = "node"
+    candidate = f"{base} ({label})"[:80]
+    if candidate.casefold() not in used:
+        return candidate
+    index = 2
+    while True:
+        suffix = f" ({index})"
+        candidate = f"{base[:max(1, 80 - len(suffix))]}{suffix}"
+        if candidate.casefold() not in used:
+            return candidate
+        index += 1
 
 
 def trusted_controller(controller_id: str) -> dict | None:
@@ -829,6 +890,12 @@ def pair_worker(
         # Protocol v1 workers predate discovery and remain pairable.
         discovery = {"protocol_version": 1, "capabilities": []}
     request_id = uuid.uuid4().hex
+    discovered_worker_id = str(discovery.get("node_id") or discovery.get("worker_id") or "").strip()
+    existing_discovered = get_node_private(discovered_worker_id) if discovered_worker_id else None
+    identity_collision = bool(
+        existing_discovered
+        and _node_url_key(existing_discovered.get("url") or "") != _node_url_key(url)
+    )
     raw_code = str(code or "").strip()
     negotiated_protocol = max(1, _safe_int(discovery.get("protocol_version"), 1))
     payload = {
@@ -841,6 +908,8 @@ def pair_worker(
         "protocol_version": NODE_PROTOCOL_VERSION,
         "capabilities": list(NODE_CAPABILITIES),
         "request_id": request_id,
+        "rotate_worker_identity": identity_collision,
+        "expected_worker_id": discovered_worker_id if identity_collision else "",
     }
     # v2 pairing is idempotent for this controller during a short recovery
     # window, so a lost response can safely be retried.
@@ -850,19 +919,55 @@ def pair_worker(
     worker_id = str(data.get("worker_id") or data.get("id") or "").strip()
     if not token or not worker_id:
         raise RuntimeError("pairing response missing worker token")
+    if identity_collision and worker_id == discovered_worker_id:
+        raise RuntimeError(
+            "worker identity duplicates an existing node; update the worker image and pair again "
+            "with a separate /work directory"
+        )
+    response_collision = get_node_private(worker_id)
+    if (
+        response_collision
+        and _node_url_key(response_collision.get("url") or "") != _node_url_key(url)
+        and not data.get("identity_rotated")
+    ):
+        raise RuntimeError(
+            "worker identity duplicates an existing linked node; the original record was retained. "
+            "Update the second worker, generate a new pairing code, and pair it again."
+        )
 
     stored_controller_url = str(data.get("controller_url") or controller_url or "").strip().rstrip("/")
     requires_remote_transfer = bool(data.get("requires_remote_transfer") or discovery.get("requires_remote_transfer"))
     selected_transfer_mode = "remote" if requires_remote_transfer else normalize_transfer_mode(transfer_mode)
     worker_mode = str(data.get("worker_mode") or discovery.get("worker_mode") or "full").strip().lower()
+    existing_same_id = get_node_private(worker_id)
+    response_name = str(data.get("worker_name") or discovery.get("node_name") or "Worker").strip()
+    preferred_name = str(name or "").strip() or (
+        str(existing_same_id.get("name") or "").strip()
+        if existing_same_id and _node_url_key(existing_same_id.get("url") or "") == _node_url_key(url)
+        else response_name
+    )
+    display_name = _unique_worker_name(preferred_name, worker_id, url)
+    notices = []
+    if data.get("identity_rotated"):
+        notices.append("A duplicate worker identity was detected and safely replaced with a new identity for this node.")
+    if display_name != preferred_name:
+        notices.append(f"The worker was named {display_name} so linked nodes remain distinguishable.")
+    address_conflicts = [
+        row
+        for row in list_nodes_private()
+        if str(row.get("id") or "") != worker_id
+        and _node_url_key(row.get("url") or "") == _node_url_key(url)
+    ]
+    if address_conflicts:
+        notices.append("An older worker record uses the same address and was retained instead of being deleted.")
     row = {
         "id": worker_id,
-        "name": str(name or data.get("worker_name") or "Worker")[:80],
+        "name": display_name,
         "url": url,
         "role": "worker",
         "token": token,
         "recovery_token": recovery_token,
-        "paired_at": _now(),
+        "paired_at": float((existing_same_id or {}).get("paired_at") or _now()),
         "last_heartbeat": 0,
         "heartbeat_misses": 0,
         "last_failed_at": 0,
@@ -889,9 +994,21 @@ def pair_worker(
         ),
         "pair_request_id": request_id,
         "pair_retry_recovered": bool(data.get("retry_recovered")),
+        "identity_rotated": bool(data.get("identity_rotated")),
+        "identity_rotated_from": str(data.get("identity_rotated_from") or ""),
+        "pairing_notice": " ".join(notices),
+        "address_conflict_with": str(address_conflicts[0].get("id") or "") if address_conflicts else "",
     }
-    delete_nodes_by_url(url, keep_id=worker_id)
     save_node(row)
+    for conflict in address_conflicts:
+        save_node({
+            **conflict,
+            "address_conflict_with": worker_id,
+            "pairing_notice": (
+                f"Another worker ({display_name}) was paired at this address. "
+                "This record was retained; update its URL or forget it when safe."
+            ),
+        })
     return public_node(row)
 
 

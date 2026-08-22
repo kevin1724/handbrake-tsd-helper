@@ -66,6 +66,163 @@ class NodePairingProtocolTests(unittest.TestCase):
         pairing_body = request_json.call_args_list[1].kwargs["body"]
         self.assertEqual(pairing_body["code"], "AbC_def-12")
 
+    def test_valid_pairing_can_rotate_a_cloned_worker_identity_once(self):
+        old_worker_id = node_linking.local_node_info()["id"]
+        node_linking._mutate_state(
+            lambda data: data.update({
+                "trusted_controllers": {
+                    "copied-controller": {
+                        "id": "copied-controller",
+                        "token": "copied-secret",
+                    },
+                },
+            })
+        )
+        pairing = node_linking.create_pairing_code()
+        request = {
+            "controller_id": "new-controller",
+            "controller_name": "Main",
+            "request_id": "rotate-first",
+            "protocol_version": 2,
+            "rotate_worker_identity": True,
+            "expected_worker_id": old_worker_id,
+        }
+
+        first = node_linking.accept_pairing(pairing["code"], request)
+        retry = node_linking.accept_pairing(pairing["code"], {**request, "request_id": "rotate-retry"})
+        state = node_linking._load_state()
+
+        self.assertTrue(first["identity_rotated"])
+        self.assertEqual(first["identity_rotated_from"], old_worker_id)
+        self.assertNotEqual(first["worker_id"], old_worker_id)
+        self.assertEqual(retry["worker_id"], first["worker_id"])
+        self.assertTrue(retry["retry_recovered"])
+        self.assertEqual(set(state["trusted_controllers"]), {"new-controller"})
+
+    def test_pairing_second_cloned_worker_keeps_original_and_requests_new_identity(self):
+        duplicated_id = "duplicated-worker-id"
+        node_linking.save_node({
+            "id": duplicated_id,
+            "name": "ByteSqueeze Worker",
+            "url": "http://worker-one:8080",
+            "token": "original-token",
+        })
+        responses = [
+            {
+                "node_id": duplicated_id,
+                "node_name": "ByteSqueeze Worker",
+                "protocol_version": 2,
+                "capabilities": ["pair-recovery"],
+            },
+            {
+                "token": "second-token",
+                "recovery_token": "second-recovery",
+                "worker_id": "rotated-worker-id",
+                "worker_name": "ByteSqueeze Worker",
+                "protocol_version": 2,
+                "identity_rotated": True,
+                "identity_rotated_from": duplicated_id,
+            },
+        ]
+
+        with mock.patch.object(node_linking, "_request_json", side_effect=responses) as request_json:
+            second = node_linking.pair_worker("http://worker-two:8080", "ABCDE-FGHJK")
+
+        pairing_body = request_json.call_args_list[1].kwargs["body"]
+        self.assertTrue(pairing_body["rotate_worker_identity"])
+        self.assertEqual(pairing_body["expected_worker_id"], duplicated_id)
+        self.assertIsNotNone(node_linking.get_node_private(duplicated_id))
+        self.assertIsNotNone(node_linking.get_node_private("rotated-worker-id"))
+        self.assertEqual(len(node_linking.list_nodes_private()), 2)
+        self.assertNotEqual(second["name"], "ByteSqueeze Worker")
+        self.assertIn("worker-two", second["name"])
+        self.assertTrue(second["identity_rotated"])
+
+    def test_pairing_same_address_retains_older_worker_record(self):
+        node_linking.save_node({
+            "id": "older-worker",
+            "name": "Older worker",
+            "url": "http://shared-address:8080",
+            "token": "older-token",
+            "online": True,
+            "status": "idle",
+        })
+        responses = [
+            {"node_id": "new-worker", "protocol_version": 2, "capabilities": []},
+            {
+                "token": "new-token",
+                "recovery_token": "new-recovery",
+                "worker_id": "new-worker",
+                "worker_name": "New worker",
+                "protocol_version": 2,
+            },
+        ]
+
+        with mock.patch.object(node_linking, "_request_json", side_effect=responses):
+            new_worker = node_linking.pair_worker("http://shared-address:8080", "ABCDE-FGHJK")
+
+        older = node_linking.get_node_private("older-worker")
+        self.assertIsNotNone(older)
+        self.assertEqual(older["name"], "Older worker")
+        self.assertTrue(older["online"])
+        self.assertEqual(older["address_conflict_with"], "new-worker")
+        self.assertIn("retained", older["pairing_notice"])
+        self.assertIn("retained", new_worker["pairing_notice"])
+
+    def test_legacy_pair_response_cannot_overwrite_existing_worker_identity(self):
+        node_linking.save_node({
+            "id": "legacy-duplicate",
+            "name": "Original legacy worker",
+            "url": "http://legacy-one:8080",
+            "token": "original-token",
+        })
+        responses = [
+            {"protocol_version": 1, "capabilities": []},
+            {
+                "token": "duplicate-token",
+                "recovery_token": "duplicate-recovery",
+                "worker_id": "legacy-duplicate",
+                "worker_name": "ByteSqueeze Worker",
+                "protocol_version": 1,
+            },
+        ]
+
+        with (
+            mock.patch.object(node_linking, "_request_json", side_effect=responses),
+            self.assertRaisesRegex(RuntimeError, "original record was retained"),
+        ):
+            node_linking.pair_worker("http://legacy-two:8080", "AbC_def-12")
+
+        original = node_linking.get_node_private("legacy-duplicate")
+        self.assertEqual(original["name"], "Original legacy worker")
+        self.assertEqual(original["url"], "http://legacy-one:8080")
+        self.assertEqual(original["token"], "original-token")
+
+    def test_repairing_same_worker_keeps_existing_friendly_name(self):
+        node_linking.save_node({
+            "id": "same-worker",
+            "name": "Garage Arc GPU",
+            "url": "http://garage-worker:8080",
+            "token": "old-token",
+            "paired_at": 123.0,
+        })
+        responses = [
+            {"node_id": "same-worker", "protocol_version": 2, "capabilities": []},
+            {
+                "token": "new-token",
+                "recovery_token": "new-recovery",
+                "worker_id": "same-worker",
+                "worker_name": "ByteSqueeze Worker",
+                "protocol_version": 2,
+            },
+        ]
+
+        with mock.patch.object(node_linking, "_request_json", side_effect=responses):
+            repaired = node_linking.pair_worker("http://garage-worker:8080", "ABCDE-FGHJK")
+
+        self.assertEqual(repaired["name"], "Garage Arc GPU")
+        self.assertEqual(node_linking.get_node_private("same-worker")["paired_at"], 123.0)
+
     def test_headless_discovery_requires_remote_transfer(self):
         with mock.patch.dict(os.environ, {"TSD_WORKER_MODE": "1"}):
             discovery = node_linking.node_discovery()

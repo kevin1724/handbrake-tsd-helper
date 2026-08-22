@@ -3227,6 +3227,12 @@
           error.textContent = node.last_error;
           main.appendChild(error);
         }
+        if (node.pairing_notice) {
+          const notice = document.createElement("div");
+          notice.className = "node-message";
+          notice.textContent = node.pairing_notice;
+          main.appendChild(notice);
+        }
         if (node.last_job_error) {
           const error = document.createElement("div");
           error.className = "node-error";
@@ -3398,10 +3404,10 @@
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || "Pairing failed");
-        if (status) status.textContent = data.verified ? "Paired and online." : (data.warning || "Paired; waiting for worker status.");
+        if (status) status.textContent = data.warning || (data.verified ? "Paired and online." : "Paired; waiting for worker status.");
         const codeInput = document.getElementById("pairWorkerCodeInput");
         if (codeInput) codeInput.value = "";
-        if (window.appToast) appToast(data.verified ? "Worker paired and verified." : "Worker paired; status check is retrying.", data.verified ? "success" : "info");
+        if (window.appToast) appToast(data.warning || (data.verified ? "Worker paired and verified." : "Worker paired; status check is retrying."), data.verified ? "success" : "info");
         await loadNodes();
       } catch (err) {
         if (status) status.textContent = err.message || "Pairing failed";
