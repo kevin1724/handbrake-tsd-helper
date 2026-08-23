@@ -80,7 +80,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.17.0")
+        self.assertEqual(status.get_json()["release"], "3.17.1")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -181,6 +181,21 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(cleared.get_json()["worker_removed"], 2)
         self.assertEqual(signed_request.call_args.args[1], "/api/node/jobs/clear")
         self.assertEqual(signed_request.call_args.kwargs["body"], {"target": "finished"})
+
+        with patch("webui.app.routes.clear_queued_jobs", return_value=1), patch(
+            "webui.app.routes.list_nodes_private",
+            return_value=[private_node],
+        ), patch(
+            "webui.app.routes.signed_json_request",
+            return_value={"ok": True, "removed": 2, "jobs": worker_jobs[:1], "summary": {"counts": {"running": 1}}},
+        ) as signed_request, patch("webui.app.routes.save_node"):
+            cleared = self.client.post("/clear_queued_jobs")
+
+        self.assertEqual(cleared.status_code, 200)
+        self.assertEqual(cleared.get_json()["removed"], 3)
+        self.assertEqual(cleared.get_json()["local_removed"], 1)
+        self.assertEqual(cleared.get_json()["worker_removed"], 2)
+        self.assertEqual(signed_request.call_args.kwargs["body"], {"target": "queued"})
 
     def test_v3_interface_can_fall_back_to_v2_without_touching_app_behavior(self):
         original = self.client.get("/api/settings").get_json()["settings"]
@@ -915,6 +930,12 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(hdr_metadata["hdr_reason"], "arib-std-b67")
         self.assertIn("--hdr-dynamic-metadata all", created[0][2]["extra_args"])
         self.assertNotIn("--hdr-dynamic-metadata", created[1][2]["extra_args"])
+        for _src, _preset, kwargs in created:
+            args = kwargs["extra_args"].split()
+            self.assertIn("--cfr", args)
+            self.assertNotIn("--vfr", args)
+            self.assertNotIn("--pfr", args)
+            self.assertEqual(args[args.index("--rate") + 1], "23.976")
         first_plan = hdr_metadata["smart_episode_plan"]
         second_plan = sdr_metadata["smart_episode_plan"]
         self.assertNotEqual(first_plan["fingerprint"], second_plan["fingerprint"])
@@ -1179,6 +1200,45 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertIn("Lifetime totals above are never reset", html)
         self.assertIn("if (dashboardAutopilotButton)", html)
         self.assertIn("if (operationsStatusLine)", html)
+
+    def test_clear_finished_removes_canceled_history_but_not_running_work(self):
+        original_jobs = dict(app_jobs.jobs)
+        original_queue = list(app_jobs.job_queue)
+        original_totals = dict(app_jobs.dashboard_totals)
+        original_cutoff = app_jobs.history_cleared_before
+        canceled_id = "canceled-worker-history"
+        running_id = "running-worker-history"
+        try:
+            app_jobs.jobs.clear()
+            app_jobs.jobs.update({
+                canceled_id: {
+                    "id": canceled_id,
+                    "src": os.path.join(TEST_MEDIA, "Canceled.Movie.mkv"),
+                    "status": "canceled",
+                    "duration_seconds": 42,
+                },
+                running_id: {
+                    "id": running_id,
+                    "src": os.path.join(TEST_MEDIA, "Running.Movie.mkv"),
+                    "status": "running",
+                },
+            })
+            app_jobs.job_queue[:] = [canceled_id]
+            app_jobs.dashboard_totals = app_jobs._empty_dashboard_totals()
+            with patch.object(app_jobs, "save_jobs"):
+                removed = app_jobs.clear_finished_jobs()
+            self.assertEqual(removed, 1)
+            self.assertNotIn(canceled_id, app_jobs.jobs)
+            self.assertNotIn(canceled_id, app_jobs.job_queue)
+            self.assertIn(running_id, app_jobs.jobs)
+            self.assertEqual(app_jobs.dashboard_totals["canceled"], 1)
+            self.assertEqual(app_jobs.dashboard_totals["canceled_runtime_seconds"], 42)
+        finally:
+            app_jobs.jobs.clear()
+            app_jobs.jobs.update(original_jobs)
+            app_jobs.job_queue[:] = original_queue
+            app_jobs.dashboard_totals = original_totals
+            app_jobs.history_cleared_before = original_cutoff
 
     def test_home_summary_uses_lightweight_catalog_and_autopilot_data(self):
         lightweight_library = {"movies": 12, "shows": 4, "episodes": 88, "updated_at": 123.0}
@@ -2059,7 +2119,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.17.0")
+        self.assertEqual(dashboard_payload["release"], "3.17.1")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)
@@ -2525,6 +2585,23 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertNotIn("--subtitle-lang-list", args)
         self.assertEqual(args[args.index("-E") + 1], "copy")
         self.assertEqual(args[args.index("--audio-fallback") + 1], "none")
+        self.assertIn("--cfr", args)
+        self.assertEqual(args[args.index("--rate") + 1], "23.976")
+        self.assertEqual(plan["episode_plan"]["target"]["framerate_mode"], "cfr")
+        self.assertEqual(plan["episode_plan"]["target"]["fps"], "23.976")
+
+    def test_smart_runtime_replaces_conflicting_frame_rate_options(self):
+        locked = app_jobs._smart_source_framerate_args(
+            "--encoder qsv_h265_10bit --vfr --rate 60 --pfr",
+            24000 / 1001,
+        )
+        args = app_jobs._split_extra_args(locked)
+        self.assertEqual(args.count("--cfr"), 1)
+        self.assertNotIn("--vfr", args)
+        self.assertNotIn("--pfr", args)
+        self.assertEqual(args.count("--rate"), 1)
+        self.assertEqual(args[args.index("--rate") + 1], "23.976")
+        self.assertEqual(args[args.index("--encoder") + 1], "qsv_h265_10bit")
 
 
 if __name__ == "__main__":

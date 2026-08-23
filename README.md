@@ -188,6 +188,7 @@ Smart Presets add a learning loop on top of that safe planner:
 - Require original audio passthrough, or opt into E-AC3 5.1 at 640 kbps when audio conversion is acceptable
 - Generate three source-aware candidates ranked by quality, savings, speed, compatibility, and prior feedback
 - Re-probe every episode independently for HDR transfer/primaries, bit depth, resolution, frame rate, and codec; complete-season/show queues never reuse another episode's media decision
+- Lock every Smart encode to a constant frame rate derived from that file's own source average; preset mappings, AI tuning, and worker adaptation cannot switch it to VFR/PFR or another FPS
 - Enforce a codec-aware per-episode quality floor, preserve supported HDR dynamic metadata, and keep HDR10+/Dolby Vision on a compatible 10-bit encoder
 - Optionally enable beta cloud scene analysis to classify each episode's motion, grain, darkness, and complexity from representative stills, with a bounded bitrate adjustment and deterministic fallback
 - Apply a candidate and inspect the same short HandBrake encode that a real job will use
@@ -476,14 +477,14 @@ docker run -d \
 ```
 
 The `latest` and `main` images are published automatically from `main`. Stable
-controller releases also publish `3.17.0` and `3.17` tags.
+controller releases also publish `3.17.1` and `3.17` tags.
 
 The encoding-only worker has its own public Docker Hub image:
 
 [kevina1724/handbrake-tsd-worker on Docker Hub](https://hub.docker.com/r/kevina1724/handbrake-tsd-worker)
 
 `latest` and `main` follow the main branch. Stable worker releases also publish
-`2.7.0` and `2.7` tags:
+`2.7.1` and `2.7` tags:
 
 ```bash
 docker pull kevina1724/handbrake-tsd-worker:latest

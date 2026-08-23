@@ -1130,7 +1130,7 @@ def _source_video_probe(src_path: str) -> dict:
         "-select_streams",
         "v:0",
         "-show_entries",
-        "stream=codec_name,profile,pix_fmt,width,height",
+        "stream=codec_name,profile,pix_fmt,width,height,avg_frame_rate,r_frame_rate",
         "-of",
         "json",
         src_path,
@@ -1158,12 +1158,16 @@ def _source_video_probe(src_path: str) -> dict:
         payload = json.loads(result.stdout or "{}")
         streams = payload.get("streams") if isinstance(payload, dict) else []
         stream = streams[0] if isinstance(streams, list) and streams and isinstance(streams[0], dict) else {}
+        average_fps = _parse_frame_rate(stream.get("avg_frame_rate"))
+        nominal_fps = _parse_frame_rate(stream.get("r_frame_rate"))
         return {
             "codec": str(stream.get("codec_name") or "").strip().lower(),
             "profile": str(stream.get("profile") or "").strip(),
             "pix_fmt": str(stream.get("pix_fmt") or "").strip().lower(),
             "width": max(0, int(stream.get("width") or 0)),
             "height": max(0, int(stream.get("height") or 0)),
+            "fps": average_fps or nominal_fps,
+            "nominal_fps": nominal_fps or average_fps,
             "error": "",
         }
     except Exception as exc:
@@ -1175,6 +1179,62 @@ def _split_extra_args(extra_args: str) -> list[str]:
         return shlex.split(str(extra_args or ""))
     except ValueError:
         return str(extra_args or "").split()
+
+
+def _parse_frame_rate(value) -> float:
+    """Parse an ffprobe frame-rate value without treating 0/0 as valid."""
+    text = str(value or "").strip()
+    try:
+        if "/" in text:
+            numerator, denominator = text.split("/", 1)
+            denominator_f = float(denominator)
+            return float(numerator) / denominator_f if denominator_f else 0.0
+        return float(text or 0.0)
+    except (TypeError, ValueError, ZeroDivisionError):
+        return 0.0
+
+
+def _format_handbrake_fps(value) -> str:
+    """Return a stable HandBrake rate string for the probed source average."""
+    try:
+        fps = float(value or 0.0)
+    except (TypeError, ValueError):
+        return ""
+    if fps < 1.0 or fps > 1000.0:
+        return ""
+    for standard in (23.976, 29.97, 47.952, 59.94, 119.88):
+        if abs(fps - standard) <= 0.01:
+            return str(standard)
+    if abs(fps - round(fps)) <= 0.001:
+        return str(int(round(fps)))
+    return f"{fps:.6f}".rstrip("0").rstrip(".")
+
+
+def _smart_source_framerate_args(extra_args: str, source_fps=0.0) -> str:
+    """Replace every conflicting rate option with source-average CFR."""
+    parts = _split_extra_args(extra_args)
+    clean: list[str] = []
+    skip_value = False
+    for part in parts:
+        if skip_value:
+            skip_value = False
+            continue
+        token = str(part or "")
+        if token in {"-r", "--rate"}:
+            skip_value = True
+            continue
+        if token.startswith("--rate=") or (token.startswith("-r") and len(token) > 2):
+            continue
+        if token in {"--vfr", "--pfr", "--cfr"}:
+            continue
+        clean.append(token)
+    rate = _format_handbrake_fps(source_fps)
+    if rate:
+        clean.extend(["--rate", rate])
+    # If ffprobe is unavailable, --cfr without --rate makes HandBrake use the
+    # source average, so the safety rule still applies.
+    clean.append("--cfr")
+    return shlex.join(clean)
 
 
 def _argument_value(args: list[str], *names: str) -> str:
@@ -2724,6 +2784,17 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
     env["HB_PRESET_NAME"] = preset_name
 
     source_video = _source_video_probe(encode_src_path)
+    smart_framerate_locked = bool(
+        job.get("smart_preset")
+        or str(job.get("preset_selection") or "").lower() == "smart"
+        or isinstance(job.get("smart_episode_plan"), dict)
+    )
+    launch_extra_args = str(job.get("extra_args") or "")
+    if smart_framerate_locked:
+        launch_extra_args = _smart_source_framerate_args(
+            launch_extra_args,
+            source_video.get("fps"),
+        )
     selected_encoder = _selected_video_encoder(job, preset_file, preset_name)
     resolution_plan = _resolution_plan(
         preset_key,
@@ -2786,7 +2857,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
 
     # Controlled arguments are placed after user/Smart Preset arguments by
     # encode-one.sh so a logical 1080/4K choice remains a hard no-upscale cap.
-    env["HB_EXTRA_ARGS"] = job.get("extra_args", "")
+    env["HB_EXTRA_ARGS"] = launch_extra_args
     env["HB_DIMENSION_OPTS"] = shlex.join(resolution_plan["cli_args"])
     env["HB_HW_DECODE_OPTS"] = shlex.join(hardware_decode["cli_args"])
     env["HB_HW_DECODE_LABEL"] = hardware_decode["label"]
@@ -2826,6 +2897,14 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             f"[ByteSqueeze] Episode scene analysis: {scene_mode}"
             f"{f' — {scene_summary}' if scene_summary else ''}\n"
         )
+    frame_rate_log = ""
+    if smart_framerate_locked:
+        source_fps = _format_handbrake_fps(source_video.get("fps"))
+        frame_rate_log = (
+            f"[ByteSqueeze] Source frame rate: {source_fps or 'source average'} fps\n"
+            "[ByteSqueeze] Frame rate policy: CFR locked to source average "
+            "(no scene-to-scene FPS changes)\n"
+        )
     qsv_diagnostics_log = (
         f"[ByteSqueeze] Selected render device: {qsv_render_device}\n"
         f"[ByteSqueeze] Intel VA driver: {qsv_va_driver}\n"
@@ -2845,6 +2924,7 @@ def run_encode(job_id: str, src_path: str, preset_key: str):
             f"[ByteSqueeze] Target resolution: {target_resolution_label}\n"
             f"[ByteSqueeze] Selected preset: {preset_name}\n"
             f"{smart_episode_log}"
+            f"{frame_rate_log}"
             f"{qsv_diagnostics_log}"
             f"[ByteSqueeze] Preset decode policy: {preset_decode_policy}\n"
             f"[ByteSqueeze] Encoder launch: /worker/encode-one.sh\n"
@@ -3776,7 +3856,7 @@ def remove_queued_job(job_id: str) -> tuple[bool, str | None]:
 
 def clear_finished_jobs() -> int:
     """
-    Remove all jobs that are finished: status in {"done", "error"}.
+    Remove all terminal jobs: status in {"done", "error", "canceled"}.
 
     - Does NOT touch queued or running jobs
     - Deletes the log files corresponding to removed jobs
@@ -3792,7 +3872,7 @@ def clear_finished_jobs() -> int:
 
     to_remove = []
     for jid, j in list(jobs.items()):
-        if j.get("status") in ("done", "error"):
+        if str(j.get("status") or "").lower() in {"done", "error", "canceled"}:
             to_remove.append(jid)
 
     archived = _normalize_dashboard_totals(dashboard_totals)
@@ -3800,7 +3880,7 @@ def clear_finished_jobs() -> int:
     for jid in to_remove:
         job = jobs.get(jid) or {}
         status = str(job.get("status") or "").lower()
-        if status in ("done", "error"):
+        if status in ("done", "error", "canceled"):
             archived[status] = int(archived.get(status) or 0) + 1
         try:
             duration_seconds = float(job.get("duration_seconds") or 0.0)
@@ -3818,6 +3898,10 @@ def clear_finished_jobs() -> int:
             archived["done_runtime_seconds"] = float(archived.get("done_runtime_seconds") or 0.0) + duration_seconds
         elif status == "error":
             archived["error_runtime_seconds"] = float(archived.get("error_runtime_seconds") or 0.0) + duration_seconds
+        elif status == "canceled":
+            archived["canceled_runtime_seconds"] = float(
+                archived.get("canceled_runtime_seconds") or 0.0
+            ) + duration_seconds
 
         # Remove from jobs dict
         jobs.pop(jid, None)

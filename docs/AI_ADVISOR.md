@@ -119,6 +119,8 @@ Open **Settings > Smart Presets** and enable **Beta: analyze every episode’s s
 
 When a movie, season, or complete show is Smart Queued, ByteSqueeze now creates a separate immutable plan for every file. It probes that episode’s actual color transfer, primaries, bit depth, resolution, frame rate, duration, and codec. HDR/color decisions are never copied from another episode. Each plan also enforces a codec-aware minimum quality floor so a tight season target cannot starve a 4K HDR episode.
 
+Smart Presets always lock the output to CFR at that file's own source-average frame rate. The same lock is re-applied when encoding begins, including on linked workers, so a mapped preset, AI adjustment, or node-specific encoder substitution cannot introduce scene-to-scene FPS changes.
+
 With the beta option enabled, ByteSqueeze additionally:
 
 - Samples 3–8 stills spread across that episode, avoiding the opening and ending where practical

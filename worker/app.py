@@ -52,7 +52,7 @@ from webui.app.presets import guess_preset_from_filename, load_preset_config
 from webui.app.settings import load_settings, save_settings
 
 
-WORKER_RELEASE = "2.7.0"
+WORKER_RELEASE = "2.7.1"
 
 
 def _public_encoding_policy() -> dict:
@@ -514,7 +514,7 @@ def create_worker_app(*, announce_pairing: bool = True) -> Flask:
             return jsonify(error="target must be finished or queued"), 400
         log_event(
             "worker_jobs_cleared",
-            f"{controller.get('name') or 'Controller'} cleared {removed} finished worker job(s).",
+            f"{controller.get('name') or 'Controller'} cleared {removed} {target} worker job(s).",
             level="info",
         )
         return jsonify(

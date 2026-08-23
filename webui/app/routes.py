@@ -100,6 +100,7 @@ from .jobs import (
     activate_auto_dispatch_locally,
     replace_queued_job_preset,
     _encoded_output_is_valid,
+    _format_handbrake_fps,
 )
 
 from .presets import (
@@ -1022,6 +1023,7 @@ WIZARD_DEFAULT_OPTIONS = {
     "subtitle_mode": "all",
     "framerate_mode": "same",
     "framerate": "23.976",
+    "smart_lock_source_framerate": False,
     "deinterlace": "off",
     "crop_mode": "auto",
     "two_pass": False,
@@ -2080,6 +2082,10 @@ def _wizard_normalize_options(data: dict) -> dict:
             "subtitle_mode": _choice(data.get("subtitle_mode"), WIZARD_SUBTITLE_MODES, options["subtitle_mode"]),
             "framerate_mode": _choice(data.get("framerate_mode"), WIZARD_FRAMERATE_MODES, options["framerate_mode"]),
             "framerate": _choice(data.get("framerate"), WIZARD_FRAMERATES, options["framerate"]),
+            "smart_lock_source_framerate": _truthy(
+                data.get("smart_lock_source_framerate"),
+                options["smart_lock_source_framerate"],
+            ),
             "deinterlace": _choice(data.get("deinterlace"), WIZARD_DEINTERLACE_MODES, options["deinterlace"]),
             "crop_mode": _choice(data.get("crop_mode"), WIZARD_CROP_MODES, options["crop_mode"]),
             "two_pass": _truthy(data.get("two_pass"), options["two_pass"]),
@@ -2131,6 +2137,10 @@ def _enforce_smart_guardrails(options: dict) -> dict:
         out["subtitle_mode"] = "all"
         out["ai_subtitle_scope"] = "all"
         out["smart_subtitle_strategy"] = "all"
+    if out.get("smart_lock_source_framerate"):
+        # AI, preset mapping, and node adaptation may never change the frame
+        # rate policy selected for a Smart source.
+        out["framerate_mode"] = "same"
     return out
 
 
@@ -2163,7 +2173,7 @@ def _wizard_resolution_decision(options: dict, src_w: int, src_h: int, fps: floa
     return out_w, out_h, decision, note
 
 
-def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h: int, src_w: int, src_h: int, *, preview: bool = False) -> list[str]:
+def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h: int, src_w: int, src_h: int, *, source_fps: float = 0.0, preview: bool = False) -> list[str]:
     args = [
         "-b",
         str(int(video_kbps)),
@@ -2189,7 +2199,12 @@ def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h
     if options.get("smart_keep_aspect_ratio"):
         args.append("--keep-display-aspect")
 
-    if options["framerate_mode"] in {"pfr", "cfr"}:
+    if options.get("smart_lock_source_framerate"):
+        rate = _format_handbrake_fps(source_fps)
+        if rate:
+            args += ["--rate", rate]
+        args.append("--cfr")
+    elif options["framerate_mode"] in {"pfr", "cfr"}:
         args += ["-r", options["framerate"], f"--{options['framerate_mode']}"]
 
     if options["deinterlace"] == "decomb":
@@ -2348,7 +2363,16 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
 
     encoder_preset = _wizard_encoder_preset(options)
     encoder_name = _wizard_encoder_name(options)
-    extra_args = _wizard_build_extra_args(options, video_kbps, out_w, out_h, src_w, src_h, preview=preview)
+    extra_args = _wizard_build_extra_args(
+        options,
+        video_kbps,
+        out_w,
+        out_h,
+        src_w,
+        src_h,
+        source_fps=fps,
+        preview=preview,
+    )
 
     base_est_fps = _estimate_encode_fps(out_w, out_h, encoder_preset)
     if options["encoder_family"] == "qsv":
@@ -2693,6 +2717,7 @@ def _smart_profile_options(data: dict, profile: dict) -> dict:
             "smart_keep_all_audio_languages": keep_all_audio_languages,
             "smart_keep_all_subtitle_languages": keep_all_subtitle_languages,
             "smart_never_transcode_audio": never_transcode_audio,
+            "smart_lock_source_framerate": True,
         }
     )
     return _enforce_smart_guardrails(options)
@@ -2873,6 +2898,8 @@ def _smart_episode_snapshot(plan: dict, scene_analysis: dict, quality_floor: dic
             "target_mb": round(float((plan.get("inputs") or {}).get("target_mb") or 0.0), 1),
             "video_bitrate_kbps": round(float(estimates.get("video_bitrate_kbps") or 0.0), 1),
             "encoder": str(estimates.get("encoder") or "")[:50],
+            "fps": _format_handbrake_fps(probe.get("fps")),
+            "framerate_mode": "cfr",
         },
         "quality_floor": quality_floor,
         "scene_analysis": scene_analysis,
@@ -3181,7 +3208,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.17.0"
+APP_RELEASE = "3.17.1"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -10717,7 +10744,7 @@ def register_routes(app):
 
     @app.route("/clear_finished_jobs", methods=["POST"])
     def clear_finished_jobs_route():
-        """Delete all finished jobs (done/error) from history and remove their logs."""
+        """Delete all terminal jobs (done/error/canceled), including worker rows."""
         local_removed = clear_finished_jobs_core()
         worker_clear = _clear_linked_worker_jobs(target="finished")
         return jsonify(
@@ -10732,8 +10759,14 @@ def register_routes(app):
     @app.route("/clear_queued_jobs", methods=["POST"])
     def clear_queued_jobs_route():
         """Delete queued and canceled jobs without touching running jobs."""
-        removed = clear_queued_jobs()
-        return jsonify(removed=removed)
+        local_removed = clear_queued_jobs()
+        worker_clear = _clear_linked_worker_jobs(target="queued")
+        return jsonify(
+            removed=local_removed + int(worker_clear.get("removed") or 0),
+            local_removed=local_removed,
+            worker_removed=int(worker_clear.get("removed") or 0),
+            workers=worker_clear.get("workers") or [],
+        )
 
     # ------------- Preset config (1080 / 4k mapping) -------------
 
