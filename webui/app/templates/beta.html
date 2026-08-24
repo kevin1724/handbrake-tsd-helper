@@ -1880,12 +1880,14 @@
       return poster;
     }
 
-    async function setShowTracking(item, tracked, button) {
+    async function setShowTracking(item, tracked, button, rebuildSmart = false) {
       const key = showKey(item);
       if (trackingBusy.has(key)) return;
       trackingBusy.add(key);
       if (button) button.disabled = true;
-      el("betaStatus").textContent = tracked ? `Tracking ${item.title}...` : `Stopping tracking for ${item.title}...`;
+      el("betaStatus").textContent = rebuildSmart
+        ? `Refreshing saved Smart plans for ${item.title}...`
+        : (tracked ? `Tracking ${item.title}...` : `Stopping tracking for ${item.title}...`);
       try {
         const res = await fetch("/api/beta/tracked_show", {
           method: "POST",
@@ -1897,7 +1899,8 @@
             tmdb_id: item.tmdb_id,
             poster_url: item.poster_url,
             paths: itemPaths(item),
-            tracked
+            tracked,
+            rebuild_smart: rebuildSmart
           })
         });
         const data = await res.json();
@@ -1908,7 +1911,9 @@
           tracked,
           known_episode_count: tracked ? itemPaths(item).length : 0,
           new_episode_count: 0,
-          new_paths: []
+          new_paths: [],
+          smart_plan_status: data.smart_plan_status || (tracked ? "planning" : ""),
+          smart_profile_name: data.smart_profile_name || item.tracking?.smart_profile_name || "My smart preset"
         };
         libraryData.tracking = {
           ...(libraryData.tracking || {}),
@@ -1917,9 +1922,12 @@
         renderStats(libraryData.stats || {}, libraryData.tracking || {});
         renderLibrary();
         el("betaStatus").textContent = tracked
-          ? `${item.title} will auto-queue new episodes on future scans.`
+          ? `${item.title} is saving one aligned Smart profile and a tailored plan for every episode.`
           : `${item.title} tracking is off.`;
-        if (window.appToast) appToast(tracked ? `${item.title} tracking enabled.` : `${item.title} tracking disabled.`, "success");
+        if (window.appToast) appToast(
+          rebuildSmart ? `${item.title} Smart plans are rebuilding.` : (tracked ? `${item.title} tracking enabled.` : `${item.title} tracking disabled.`),
+          "success"
+        );
       } catch (e) {
         el("betaStatus").textContent = e.message || "Tracking update failed";
         if (window.appToast) appToast(e.message || "Tracking update failed.", "error");
@@ -2506,6 +2514,15 @@
       track.textContent = item.tracked ? "Tracked" : "Track new episodes";
       track.onclick = () => setShowTracking(item, !item.tracked, track);
       controls.appendChild(track);
+      if (item.tracked) {
+        const rebuild = document.createElement("button");
+        rebuild.type = "button";
+        rebuild.className = "beta-track-button";
+        rebuild.textContent = "Refresh Smart plans";
+        rebuild.title = "Snapshot your current Smart preferences for this show and rebuild each episode's tailored plan";
+        rebuild.onclick = () => setShowTracking(item, true, rebuild, true);
+        controls.appendChild(rebuild);
+      }
       top.appendChild(controls);
       body.appendChild(top);
 
@@ -2523,9 +2540,19 @@
         const note = document.createElement("div");
         note.className = "beta-show-note";
         const newCount = Number(item.tracking?.new_episode_count || 0);
-        note.textContent = newCount > 0
-          ? `${newCount} new episode${newCount === 1 ? "" : "s"} detected for queueing.`
-          : "New episodes will be detected and queued according to your auto-scan settings.";
+        const planned = Number(item.tracking?.smart_planned_episode_count || 0);
+        const total = Number(item.tracking?.smart_episode_count || item.episode_count || 0);
+        const profileName = item.tracking?.smart_profile_name || "My smart preset";
+        const planStatus = item.tracking?.smart_plan_status || "pending";
+        if (planStatus === "planning") {
+          note.textContent = `Building tailored Smart plans for ${total} episode${total === 1 ? "" : "s"} under “${profileName}”.`;
+        } else if (planStatus === "partial" || planStatus === "error") {
+          note.textContent = `${planned} of ${total} episode Smart plans are saved. Failed episodes will retry on the next scan.`;
+        } else if (newCount > 0) {
+          note.textContent = `${newCount} new episode${newCount === 1 ? "" : "s"} detected; each will get its own Smart analysis before queueing.`;
+        } else {
+          note.textContent = `${planned} tailored episode plan${planned === 1 ? "" : "s"} saved and aligned to “${profileName}”. New episodes are planned independently.`;
+        }
         body.appendChild(note);
       }
 

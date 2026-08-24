@@ -477,7 +477,7 @@ docker run -d \
 ```
 
 The `latest` and `main` images are published automatically from `main`. Stable
-controller releases also publish `3.17.1` and `3.17` tags.
+controller releases also publish `3.18.0` and `3.18` tags.
 
 The encoding-only worker has its own public Docker Hub image:
 

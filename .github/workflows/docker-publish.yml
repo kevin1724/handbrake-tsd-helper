@@ -38,7 +38,7 @@ concurrency:
 env:
   IMAGE_NAME: kevina1724/handbrake-tsd-helper
   WORKER_IMAGE_NAME: kevina1724/handbrake-tsd-worker
-  CONTROLLER_VERSION: 3.17.1
+  CONTROLLER_VERSION: 3.18.0
   WORKER_VERSION: 2.7.1
 
 jobs:
@@ -69,7 +69,7 @@ jobs:
             type=raw,value=latest,enable={{is_default_branch}}
             type=raw,value=main,enable={{is_default_branch}}
             type=raw,value=${{ env.CONTROLLER_VERSION }},enable={{is_default_branch}}
-            type=raw,value=3.17,enable={{is_default_branch}}
+            type=raw,value=3.18,enable={{is_default_branch}}
             type=raw,value=beta,enable=${{ github.event_name == 'workflow_dispatch' && inputs.channel == 'beta' }}
             type=raw,value=${{ inputs.controller_version_tag }},enable=${{ github.event_name == 'workflow_dispatch' && inputs.controller_version_tag != '' }}
             type=semver,pattern={{version}}

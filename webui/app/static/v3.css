@@ -183,7 +183,7 @@
 
 .ui-v3 .v3-nav-icon svg { width: 17px; height: 17px; fill: currentColor; stroke: none; }
 .ui-v3 .nav-link-active .v3-nav-icon { color: var(--v3-cyan-strong); background: rgba(77, 215, 231, 0.1); }
-.ui-v3 .nav-link[href="/size_wizard"] { display: none; }
+.ui-v3 .nav-link[href="/size_wizard"] { display: grid; }
 
 .ui-v3 .app-status-actions,
 .ui-v3 .top-nav > .app-status {
@@ -679,7 +679,7 @@
   .ui-v3 .app-status-actions,
   .ui-v3 .top-nav > .app-status,
   .ui-v3 .v3-sidebar-footer { display: none; }
-  .ui-v3 .nav-links { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 2px; height: 100%; }
+  .ui-v3 .nav-links { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 2px; height: 100%; }
   .ui-v3 .nav-link { display: flex; flex-direction: column; justify-content: center; gap: 2px; min-width: 0; min-height: 60px; padding: 4px 2px; font-size: 9px; }
   .ui-v3 .nav-link:hover { transform: none; }
   .ui-v3 .nav-link::after { display: none; }
@@ -1188,7 +1188,7 @@ body.ui-v3.beta-page .beta-poster { border-radius: 13px; }
 
   body.ui-v3 .nav-links {
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 2px;
     height: 100%;
   }
@@ -1206,7 +1206,7 @@ body.ui-v3.beta-page .beta-poster { border-radius: 13px; }
     font-size: 9px;
   }
 
-  body.ui-v3 .nav-link[href="/size_wizard"] { display: none; }
+  body.ui-v3 .nav-link[href="/size_wizard"] { display: flex; }
 
   body.ui-v3 .nav-link:hover { transform: none; }
   body.ui-v3 .nav-link::after { display: none; }

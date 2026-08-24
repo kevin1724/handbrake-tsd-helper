@@ -80,7 +80,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.17.1")
+        self.assertEqual(status.get_json()["release"], "3.18.0")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -260,6 +260,8 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(v3_css.status_code, 200)
         self.assertIn(b"body.ui-v3 .nav-link::before", v3_css.data)
         self.assertIn(b"content: none !important", v3_css.data)
+        self.assertIn(b"repeat(6, minmax(0, 1fr))", v3_css.data)
+        self.assertIn(b'body.ui-v3 .nav-link[href="/size_wizard"] { display: flex; }', v3_css.data)
         v3_css.close()
 
         v3_js = self.client.get("/static/v3.js")
@@ -267,6 +269,131 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertIn(b'link.classList.remove("nav-library"', v3_js.data)
         self.assertIn(b'body.dataset.v3Enhanced === "true"', v3_js.data)
         v3_js.close()
+
+        wizard_page = self.client.get("/size_wizard?ui=v3")
+        self.assertEqual(wizard_page.status_code, 200)
+        self.assertIn(b'href="/size_wizard"', wizard_page.data)
+
+    def test_tracked_show_saves_one_profile_and_independent_episode_plans(self):
+        episode_a = os.path.join(TEST_MEDIA, "Tracked.Show.S01E01.mkv")
+        episode_b = os.path.join(TEST_MEDIA, "Tracked.Show.S01E02.HDR.mkv")
+        for path, payload in ((episode_a, b"episode-a"), (episode_b, b"episode-b-hdr")):
+            with open(path, "wb") as handle:
+                handle.write(payload)
+
+        def recommendations(paths, tuning=None, smart_profile=None):
+            planned = {}
+            for path in paths:
+                is_hdr = "HDR" in path
+                fingerprint = app_wizard_llm.episode_scene_fingerprint(path)
+                planned[path] = {
+                    "recommended_id": "quality" if is_hdr else "balanced",
+                    "selected_plan": {
+                        "src": path,
+                        "preset": "4k" if is_hdr else "1080",
+                        "extra_args": [],
+                        "inputs": {"target_mb": 700 if is_hdr else 300},
+                        "options": {"video_codec": "h265", "encoder_family": "qsv"},
+                        "estimates": {"encoder": "qsv_h265_10bit"},
+                        "probe": {"is_hdr": is_hdr},
+                        "episode_plan": {
+                            "fingerprint": fingerprint,
+                            "source": {"is_hdr": is_hdr},
+                        },
+                    },
+                }
+            return planned, {}
+
+        row = {"id": "tracked-show", "tracked": True, "known_paths": []}
+        try:
+            with patch.object(app_routes, "_smart_recommendations_for_paths", side_effect=recommendations) as planner:
+                records, errors = app_routes._beta_plan_episode_records(row, [episode_a, episode_b])
+            self.assertFalse(errors)
+            self.assertEqual(len(records), 2)
+            self.assertEqual(row["smart_plan_status"], "ready")
+            self.assertEqual(row["smart_planned_episode_count"], 2)
+            self.assertEqual(records[episode_a]["preset"], "1080")
+            self.assertEqual(records[episode_b]["preset"], "4k")
+            self.assertFalse(records[episode_a]["is_hdr"])
+            self.assertTrue(records[episode_b]["is_hdr"])
+            self.assertEqual(
+                records[episode_a]["profile_revision"],
+                records[episode_b]["profile_revision"],
+            )
+            self.assertIsNot(records[episode_a]["episode_plan"], records[episode_b]["episode_plan"])
+            planner.assert_called_once()
+
+            tracking_file = os.path.join(TEST_DATA, "tracked-show-plan-roundtrip.json")
+            with patch.object(app_routes, "BETA_TRACKED_SHOWS_FILE", tracking_file):
+                app_routes._beta_save_tracking({"shows": {"tracked-show": row}})
+                roundtrip = app_routes._beta_load_tracking()["shows"]["tracked-show"]
+            os.remove(tracking_file)
+            self.assertEqual(roundtrip["smart_profile_revision"], row["smart_profile_revision"])
+            self.assertEqual(set(roundtrip["episode_plans"]), {episode_a, episode_b})
+            self.assertEqual(roundtrip["episode_plans"][episode_b]["preset"], "4k")
+
+            with patch.object(app_routes, "_smart_recommendations_for_paths") as planner:
+                cached, cached_errors = app_routes._beta_plan_episode_records(row, [episode_a, episode_b])
+            self.assertFalse(cached_errors)
+            self.assertEqual(len(cached), 2)
+            planner.assert_not_called()
+
+            with patch.object(app_routes, "_create_smart_job", return_value=("smart-job", {})) as create_smart:
+                queued = app_routes._beta_queue_tracked_episode_paths(
+                    row,
+                    [episode_a, episode_b],
+                    automation_source="tracked_show_test",
+                )
+            self.assertEqual(queued["queued_count"], 2)
+            self.assertEqual(set(row["known_paths"]), {episode_a, episode_b})
+            self.assertEqual(create_smart.call_count, 2)
+            for call in create_smart.call_args_list:
+                self.assertEqual(call.kwargs["automation_source"], "tracked_show_test")
+                self.assertIn("selected_plan", call.kwargs["recommendation"])
+        finally:
+            for path in (episode_a, episode_b):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
+
+    def test_tracking_api_preserves_saved_profile_and_known_episode_history(self):
+        episode_a = os.path.join(TEST_MEDIA, "Tracked.Api.S01E01.mkv")
+        episode_b = os.path.join(TEST_MEDIA, "Tracked.Api.S01E02.mkv")
+        for path in (episode_a, episode_b):
+            with open(path, "wb") as handle:
+                handle.write(path.encode("utf-8"))
+        show_id = "tracked-api-show"
+        try:
+            with patch.object(app_routes, "_beta_schedule_tracked_show_planning", return_value=True) as schedule:
+                first = self.client.post(
+                    "/api/beta/tracked_show",
+                    json={"show_id": show_id, "title": "Tracked API", "paths": [episode_a], "tracked": True},
+                )
+                self.assertEqual(first.status_code, 200)
+                self.assertTrue(first.get_json()["smart_planning"])
+                saved_first = app_routes._beta_load_tracking()["shows"][show_id]
+                revision = saved_first["smart_profile_revision"]
+
+                second = self.client.post(
+                    "/api/beta/tracked_show",
+                    json={"show_id": show_id, "title": "Tracked API", "paths": [episode_b], "tracked": True},
+                )
+                self.assertEqual(second.status_code, 200)
+                saved_second = app_routes._beta_load_tracking()["shows"][show_id]
+                self.assertEqual(saved_second["smart_profile_revision"], revision)
+                self.assertEqual(set(saved_second["known_paths"]), {episode_a, episode_b})
+                self.assertEqual(schedule.call_count, 2)
+        finally:
+            self.client.post(
+                "/api/beta/tracked_show",
+                json={"show_id": show_id, "title": "Tracked API", "tracked": False},
+            )
+            for path in (episode_a, episode_b):
+                try:
+                    os.remove(path)
+                except FileNotFoundError:
+                    pass
 
     def test_v3_operations_console_has_live_queue_and_customizable_overview(self):
         home_page = self.client.get("/?ui=v3")
@@ -2119,7 +2246,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.17.1")
+        self.assertEqual(dashboard_payload["release"], "3.18.0")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

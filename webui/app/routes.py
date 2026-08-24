@@ -139,6 +139,7 @@ from .smart_presets import (
     feedback_context as smart_feedback_context,
     learning_status as smart_learning_status,
     load_state as load_smart_preset_state,
+    normalize_profile as normalize_smart_profile,
     public_state as public_smart_preset_state,
     record_feedback as record_smart_preset_feedback,
     save_profile as save_smart_preset_profile,
@@ -2910,7 +2911,15 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
     """Build and rank three safe plans for one source."""
     data = dict(data or {})
     state = load_smart_preset_state()
-    profile = dict(state.get("profile")) if isinstance(state.get("profile"), dict) else {}
+    profile_override = data.get("smart_profile")
+    if isinstance(profile_override, dict):
+        profile = normalize_smart_profile(profile_override, profile_override)
+        # A tracked show owns a stable profile snapshot. Normalization validates
+        # it, but must not make the saved profile appear to change on every plan.
+        profile["created_at"] = float(profile_override.get("created_at") or profile.get("created_at") or time.time())
+        profile["updated_at"] = float(profile_override.get("updated_at") or profile.get("updated_at") or time.time())
+    else:
+        profile = dict(state.get("profile")) if isinstance(state.get("profile"), dict) else {}
     learning = smart_learning_status(state)
     tuning = _normalize_smart_tuning(data.get("smart_tuning"))
 
@@ -3063,7 +3072,11 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
     }
 
 
-def _smart_recommendations_for_paths(paths: list[str], tuning: dict | None = None) -> tuple[dict, dict]:
+def _smart_recommendations_for_paths(
+    paths: list[str],
+    tuning: dict | None = None,
+    smart_profile: dict | None = None,
+) -> tuple[dict, dict]:
     """Plan a season/show concurrently while retaining one result per path."""
     clean_paths = list(dict.fromkeys(str(path or "").strip() for path in paths if str(path or "").strip()))
     if not clean_paths:
@@ -3077,7 +3090,12 @@ def _smart_recommendations_for_paths(paths: list[str], tuning: dict | None = Non
 
     def build(path: str) -> dict:
         return _smart_recommendation(
-            {"src": path, "preset": "auto", "smart_tuning": tuning or {}}
+            {
+                "src": path,
+                "preset": "auto",
+                "smart_tuning": tuning or {},
+                "smart_profile": smart_profile,
+            }
         )
 
     if worker_count == 1:
@@ -3179,6 +3197,8 @@ BETA_AUTOSCAN_STATUS_FILE = os.path.join(DATA_DIR, "beta_autoscan_status.json")
 NODE_TRANSFER_TMP_DIR = os.path.join(DATA_DIR, "node_transfer_uploads")
 BETA_POSTER_CACHE: dict[tuple, dict] = {}
 BETA_LIBRARY_CACHE_LOCK = threading.RLock()
+BETA_TRACKING_LOCK = threading.RLock()
+BETA_TRACKING_PLAN_ACTIVE: set[str] = set()
 BETA_LIBRARY_MEMORY_CACHE = {"signature": None, "data": None}
 BETA_LIBRARY_SUMMARY_CACHE = {"signature": None, "data": None}
 BETA_AUTOSCAN_THREAD = None
@@ -3208,7 +3228,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.17.1"
+APP_RELEASE = "3.18.0"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -3716,6 +3736,242 @@ def _beta_clean_path_list(paths) -> list[str]:
     return cleaned
 
 
+def _beta_clean_episode_plans(value) -> dict:
+    """Keep only valid, queueable episode-plan snapshots from tracked-show state."""
+    rows = value if isinstance(value, dict) else {}
+    cleaned = {}
+    for key, raw in rows.items():
+        if not isinstance(raw, dict):
+            continue
+        path = str(raw.get("path") or key or "").strip()
+        queue_plan = raw.get("queue_plan") if isinstance(raw.get("queue_plan"), dict) else None
+        if not path or queue_plan is None:
+            continue
+        cleaned[path] = {
+            "version": max(1, int(raw.get("version") or 1)),
+            "path": path,
+            "fingerprint": str(raw.get("fingerprint") or "")[:128],
+            "profile_revision": str(raw.get("profile_revision") or "")[:128],
+            "planned_at": float(raw.get("planned_at") or 0),
+            "recommended_id": str(raw.get("recommended_id") or "balanced")[:80],
+            "preset": str(raw.get("preset") or queue_plan.get("preset") or "")[:160],
+            "encoder": str(raw.get("encoder") or (queue_plan.get("estimates") or {}).get("encoder") or "")[:160],
+            "is_hdr": bool(raw.get("is_hdr", (queue_plan.get("probe") or {}).get("is_hdr"))),
+            "episode_plan": deepcopy(raw.get("episode_plan")) if isinstance(raw.get("episode_plan"), dict) else {},
+            "queue_plan": deepcopy(queue_plan),
+        }
+    return cleaned
+
+
+def _beta_smart_profile_revision(profile: dict) -> str:
+    meaningful = {
+        key: value
+        for key, value in (profile if isinstance(profile, dict) else {}).items()
+        if key not in {"created_at", "updated_at"}
+    }
+    encoded = json.dumps(meaningful, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _beta_show_smart_profile(row: dict, *, refresh: bool = False) -> tuple[dict, str]:
+    row = row if isinstance(row, dict) else {}
+    saved = row.get("smart_profile") if isinstance(row.get("smart_profile"), dict) else None
+    if refresh or saved is None:
+        state = load_smart_preset_state()
+        source = state.get("profile") if isinstance(state.get("profile"), dict) else {}
+    else:
+        source = saved
+    profile = normalize_smart_profile(source, source)
+    profile["created_at"] = float(source.get("created_at") or profile.get("created_at") or time.time())
+    profile["updated_at"] = float(source.get("updated_at") or profile.get("updated_at") or time.time())
+    return profile, _beta_smart_profile_revision(profile)
+
+
+def _beta_episode_plan_record(path: str, recommendation: dict, profile_revision: str) -> dict:
+    recommendation = recommendation if isinstance(recommendation, dict) else {}
+    plan = recommendation.get("selected_plan") if isinstance(recommendation.get("selected_plan"), dict) else {}
+    if not plan:
+        raise ValueError("smart recommendation has no queue plan")
+    episode_plan = plan.get("episode_plan") if isinstance(plan.get("episode_plan"), dict) else {}
+    fingerprint = str(episode_plan.get("fingerprint") or "")
+    if not fingerprint:
+        fingerprint = episode_scene_fingerprint(path)
+    return {
+        "version": 1,
+        "path": path,
+        "fingerprint": fingerprint,
+        "profile_revision": profile_revision,
+        "planned_at": time.time(),
+        "recommended_id": str(recommendation.get("recommended_id") or "balanced")[:80],
+        "preset": str(plan.get("preset") or "")[:160],
+        "encoder": str((plan.get("estimates") or {}).get("encoder") or "")[:160],
+        "is_hdr": bool((plan.get("probe") or {}).get("is_hdr")),
+        "episode_plan": deepcopy(episode_plan),
+        "queue_plan": deepcopy(plan),
+    }
+
+
+def _beta_saved_episode_recommendation(record: dict, path: str, profile_revision: str) -> dict | None:
+    if not isinstance(record, dict) or str(record.get("profile_revision") or "") != profile_revision:
+        return None
+    try:
+        current_fingerprint = episode_scene_fingerprint(path)
+    except OSError:
+        return None
+    if str(record.get("fingerprint") or "") != current_fingerprint:
+        return None
+    plan = record.get("queue_plan") if isinstance(record.get("queue_plan"), dict) else None
+    if not plan:
+        return None
+    plan = deepcopy(plan)
+    plan["src"] = path
+    return {
+        "recommended_id": str(record.get("recommended_id") or "balanced"),
+        "episode_plan": deepcopy(record.get("episode_plan") or {}),
+        "selected_plan": plan,
+    }
+
+
+def _beta_show_plan_needs_refresh(row: dict, paths: list[str]) -> bool:
+    if not isinstance(row, dict) or not row.get("smart_profile"):
+        return True
+    records = _beta_clean_episode_plans(row.get("episode_plans"))
+    profile_revision = str(row.get("smart_profile_revision") or "")
+    if not profile_revision:
+        return True
+    for path in _beta_clean_path_list(paths):
+        if (
+            os.path.isfile(path)
+            and is_allowed_path(path)
+            and path.lower().endswith(VIDEO_EXTS)
+            and not os.path.splitext(os.path.basename(path))[0].lower().endswith("-tsd")
+            and _beta_saved_episode_recommendation(records.get(path), path, profile_revision) is None
+        ):
+            return True
+    return False
+
+
+def _beta_plan_episode_records(row: dict, paths: list[str], *, force: bool = False) -> tuple[dict, dict]:
+    """Build independent episode plans under one durable show-level policy."""
+    clean_paths = _beta_clean_path_list(paths)
+    profile, profile_revision = _beta_show_smart_profile(row)
+    records = _beta_clean_episode_plans(row.get("episode_plans"))
+    to_plan = []
+    errors = {}
+    for path in clean_paths:
+        reason = ""
+        if not os.path.isfile(path):
+            reason = "not a file"
+        elif not is_allowed_path(path):
+            reason = "path not allowed"
+        elif not path.lower().endswith(VIDEO_EXTS):
+            reason = "not a video"
+        elif os.path.splitext(os.path.basename(path))[0].lower().endswith("-tsd"):
+            reason = "already tagged -TSD"
+        if reason:
+            errors[path] = reason
+            continue
+        if force or _beta_saved_episode_recommendation(records.get(path), path, profile_revision) is None:
+            to_plan.append(path)
+
+    if to_plan:
+        planned, planning_errors = _smart_recommendations_for_paths(
+            to_plan,
+            smart_profile=profile,
+        )
+        errors.update(planning_errors)
+        for path, recommendation in planned.items():
+            try:
+                records[path] = _beta_episode_plan_record(path, recommendation, profile_revision)
+            except Exception as exc:
+                errors[path] = str(exc)[:240]
+
+    current_records = {path: records[path] for path in clean_paths if path in records}
+    tracked_paths = sorted(set(_beta_clean_path_list(row.get("tracked_paths"))) | set(clean_paths))
+    tracked_record_count = sum(1 for path in tracked_paths if path in records)
+    row["smart_profile"] = profile
+    row["smart_profile_revision"] = profile_revision
+    row["smart_profile_saved_at"] = float(row.get("smart_profile_saved_at") or time.time())
+    row["episode_plans"] = records
+    row["tracked_paths"] = tracked_paths
+    row["smart_episode_count"] = len(tracked_paths)
+    row["smart_planned_episode_count"] = tracked_record_count
+    row["smart_plan_errors"] = {path: str(reason)[:240] for path, reason in errors.items()}
+    row["smart_plan_error"] = next(iter(row["smart_plan_errors"].values()), "")
+    if errors:
+        row["smart_plan_status"] = "partial" if tracked_record_count else "error"
+    else:
+        row["smart_plan_status"] = "ready" if tracked_record_count >= len(tracked_paths) else "partial"
+    row["smart_plan_updated_at"] = time.time()
+    return current_records, errors
+
+
+def _beta_plan_tracked_show_episodes(show_id: str, paths: list[str], *, force: bool = False) -> tuple[dict, dict]:
+    with BETA_TRACKING_LOCK:
+        tracking = _beta_load_tracking()
+        shows = tracking.get("shows") if isinstance(tracking.get("shows"), dict) else {}
+        row = shows.get(str(show_id or ""))
+        if not isinstance(row, dict) or not row.get("tracked"):
+            return {}, {"show": "show is no longer tracked"}
+        records, errors = _beta_plan_episode_records(row, paths, force=force)
+        row["updated_at"] = time.time()
+        shows[str(show_id)] = row
+        tracking["shows"] = shows
+        _beta_save_tracking(tracking)
+        log_event(
+            "tracked_show_smart_plans",
+            (
+                f"Saved {len(records)} tailored episode Smart plan(s) for "
+                f"{row.get('title') or show_id} under {str((row.get('smart_profile') or {}).get('name') or 'My smart preset')}."
+            ),
+            level="warn" if errors else "info",
+            extra={"show_id": str(show_id), "planned": len(records), "errors": len(errors)},
+        )
+        return records, errors
+
+
+def _beta_schedule_tracked_show_planning(show_id: str, paths: list[str], *, force: bool = False) -> bool:
+    show_id = str(show_id or "").strip()
+    clean_paths = _beta_clean_path_list(paths)
+    with BETA_TRACKING_LOCK:
+        if not show_id or show_id in BETA_TRACKING_PLAN_ACTIVE:
+            return False
+        tracking = _beta_load_tracking()
+        shows = tracking.get("shows") if isinstance(tracking.get("shows"), dict) else {}
+        row = shows.get(show_id)
+        if not isinstance(row, dict) or not row.get("tracked"):
+            return False
+        row["smart_plan_status"] = "planning"
+        row["smart_episode_count"] = len(clean_paths)
+        row["updated_at"] = time.time()
+        shows[show_id] = row
+        tracking["shows"] = shows
+        BETA_TRACKING_PLAN_ACTIVE.add(show_id)
+        _beta_save_tracking(tracking)
+
+    def run() -> None:
+        try:
+            _beta_plan_tracked_show_episodes(show_id, clean_paths, force=force)
+        except Exception as exc:
+            with BETA_TRACKING_LOCK:
+                failed = _beta_load_tracking()
+                failed_shows = failed.get("shows") if isinstance(failed.get("shows"), dict) else {}
+                failed_row = failed_shows.get(show_id)
+                if isinstance(failed_row, dict):
+                    failed_row["smart_plan_status"] = "error"
+                    failed_row["smart_plan_error"] = str(exc)[:240]
+                    failed_row["updated_at"] = time.time()
+                    failed_shows[show_id] = failed_row
+                    failed["shows"] = failed_shows
+                    _beta_save_tracking(failed)
+        finally:
+            with BETA_TRACKING_LOCK:
+                BETA_TRACKING_PLAN_ACTIVE.discard(show_id)
+
+    threading.Thread(target=run, name=f"tracked-show-{show_id[:12]}", daemon=True).start()
+    return True
+
+
 def _beta_load_tracking() -> dict:
     try:
         with open(BETA_TRACKED_SHOWS_FILE, "r", encoding="utf-8") as f:
@@ -3738,6 +3994,9 @@ def _beta_load_tracking() -> dict:
         if not row_id:
             continue
         known_paths = _beta_clean_path_list(row.get("known_paths"))
+        tracked_paths = _beta_clean_path_list(row.get("tracked_paths"))
+        smart_profile = row.get("smart_profile") if isinstance(row.get("smart_profile"), dict) else None
+        episode_plans = _beta_clean_episode_plans(row.get("episode_plans"))
         cleaned[row_id] = {
             "id": row_id,
             "title": str(row.get("title") or "Unknown Title"),
@@ -3749,6 +4008,17 @@ def _beta_load_tracking() -> dict:
             "monitor_releases": bool(row.get("monitor_releases", True)),
             "auto_queue": bool(row.get("auto_queue", True)),
             "known_paths": known_paths,
+            "tracked_paths": tracked_paths,
+            "smart_profile": deepcopy(smart_profile) if smart_profile else None,
+            "smart_profile_revision": str(row.get("smart_profile_revision") or "")[:128],
+            "smart_profile_saved_at": float(row.get("smart_profile_saved_at") or 0),
+            "episode_plans": episode_plans,
+            "smart_episode_count": max(0, int(row.get("smart_episode_count") or 0)),
+            "smart_planned_episode_count": max(0, int(row.get("smart_planned_episode_count") or len(episode_plans))),
+            "smart_plan_status": str(row.get("smart_plan_status") or ("ready" if episode_plans else "pending"))[:24],
+            "smart_plan_error": str(row.get("smart_plan_error") or "")[:240],
+            "smart_plan_errors": deepcopy(row.get("smart_plan_errors")) if isinstance(row.get("smart_plan_errors"), dict) else {},
+            "smart_plan_updated_at": float(row.get("smart_plan_updated_at") or 0),
             "created_at": float(row.get("created_at") or 0),
             "updated_at": float(row.get("updated_at") or 0),
         }
@@ -3794,6 +4064,13 @@ def _beta_apply_tracking(data: dict, tracking: dict | None = None) -> dict:
             "updated_at": row.get("updated_at") if row else 0,
             "monitor_releases": bool(row.get("monitor_releases", True)) if row else False,
             "auto_queue": bool(row.get("auto_queue", True)) if row else False,
+            "smart_profile_name": str((row.get("smart_profile") or {}).get("name") or "") if row else "",
+            "smart_profile_revision": str(row.get("smart_profile_revision") or "")[:12] if row else "",
+            "smart_plan_status": str(row.get("smart_plan_status") or "pending") if row else "",
+            "smart_episode_count": int(row.get("smart_episode_count") or len(paths)) if row else 0,
+            "smart_planned_episode_count": int(row.get("smart_planned_episode_count") or 0) if row else 0,
+            "smart_plan_error": str(row.get("smart_plan_error") or "") if row else "",
+            "smart_plan_updated_at": float(row.get("smart_plan_updated_at") or 0) if row else 0,
         }
         if is_tracked:
             tracked_count += 1
@@ -3814,11 +4091,63 @@ def _beta_apply_tracking(data: dict, tracking: dict | None = None) -> dict:
     return data
 
 
+def _beta_queue_tracked_episode_paths(row: dict, paths: list[str], *, automation_source: str) -> dict:
+    """Queue tracked episodes from their saved per-episode Smart plans."""
+    result = {"queued_count": 0, "planned_count": 0, "known_paths": [], "queued_paths": [], "skipped": []}
+    clean_paths = _beta_clean_path_list(paths)
+    records, planning_errors = _beta_plan_episode_records(row, clean_paths)
+    result["planned_count"] = len(records)
+    profile_revision = str(row.get("smart_profile_revision") or "")
+    active_paths = _beta_active_job_paths()
+    known = set(_beta_clean_path_list(row.get("known_paths")))
+
+    for path in clean_paths:
+        if path in active_paths:
+            known.add(path)
+            result["known_paths"].append(path)
+            result["skipped"].append({"path": path, "reason": "already queued"})
+            continue
+        if path in planning_errors:
+            reason = str(planning_errors[path])[:240]
+            # A completed -TSD source should not be retried on every scan. All
+            # real planning/IO failures remain unknown so the next scan retries.
+            if reason == "already tagged -TSD":
+                known.add(path)
+                result["known_paths"].append(path)
+            result["skipped"].append({"path": path, "reason": reason})
+            continue
+        recommendation = _beta_saved_episode_recommendation(records.get(path), path, profile_revision)
+        if recommendation is None:
+            result["skipped"].append({"path": path, "reason": "saved Smart episode plan is stale"})
+            continue
+        try:
+            job_id, _recommendation = _create_smart_job(
+                path,
+                automation_source=automation_source,
+                recommendation=recommendation,
+            )
+            record = row.get("episode_plans", {}).get(path)
+            if isinstance(record, dict):
+                record["last_queued_at"] = time.time()
+                record["last_job_id"] = str(job_id or "")
+            known.add(path)
+            result["known_paths"].append(path)
+            result["queued_paths"].append(path)
+            result["queued_count"] += 1
+        except Exception as exc:
+            result["skipped"].append({"path": path, "reason": f"Smart queue failed: {str(exc)[:180]}"})
+
+    row["known_paths"] = sorted(known)
+    row["updated_at"] = time.time()
+    return result
+
+
 def _beta_auto_queue_tracked_episodes(data: dict, tracking: dict) -> dict:
     result = {
         "detected_count": 0,
         "queued_count": 0,
         "skipped": [],
+        "_planning_requests": [],
     }
     tracking = tracking if isinstance(tracking, dict) else _beta_empty_tracking()
     tracked_rows = tracking.get("shows") if isinstance(tracking.get("shows"), dict) else {}
@@ -3833,6 +4162,9 @@ def _beta_auto_queue_tracked_episodes(data: dict, tracking: dict) -> dict:
             continue
 
         current_paths = _beta_show_paths(show)
+        row["tracked_paths"] = current_paths
+        if _beta_show_plan_needs_refresh(row, current_paths):
+            result["_planning_requests"].append((show_id, current_paths))
         known = set(_beta_clean_path_list(row.get("known_paths")))
         new_paths = [path for path in current_paths if path not in known]
         if not new_paths:
@@ -3840,27 +4172,13 @@ def _beta_auto_queue_tracked_episodes(data: dict, tracking: dict) -> dict:
             continue
 
         result["detected_count"] += len(new_paths)
-        to_create = []
-        for path in new_paths:
-            reason = ""
-            if not os.path.isfile(path):
-                reason = "not a file"
-            elif not is_allowed_path(path):
-                reason = "path not allowed"
-            elif not path.lower().endswith(VIDEO_EXTS):
-                reason = "not a video"
-            elif os.path.splitext(os.path.basename(path))[0].lower().endswith("-tsd"):
-                reason = "already tagged -TSD"
-
-            if reason:
-                result["skipped"].append({"path": path, "reason": reason})
-                continue
-            to_create.append((path, guess_preset_from_filename(os.path.basename(path))))
-
-        if to_create:
-            result["queued_count"] += int(create_jobs_batch(to_create) or 0)
-
-        row["known_paths"] = sorted(set(current_paths) | known)
+        queued = _beta_queue_tracked_episode_paths(
+            row,
+            new_paths,
+            automation_source="tracked_show_library_scan",
+        )
+        result["queued_count"] += int(queued.get("queued_count") or 0)
+        result["skipped"].extend(queued.get("skipped") or [])
         row["title"] = show.get("title") or row.get("title") or "Unknown Title"
         row["year"] = show.get("year")
         row["tmdb_id"] = show.get("tmdb_id") or row.get("tmdb_id")
@@ -5048,61 +5366,89 @@ def _beta_update_scan_index(settings: dict) -> tuple[dict, dict]:
 
 
 def _beta_queue_stable_tracked_episodes(data: dict, index: dict, settings: dict) -> dict:
-    result = {"queued": 0, "skipped_unstable": 0, "skipped_active": 0, "skipped_missing_mapping": 0}
+    result = {
+        "queued": 0,
+        "smart_planned": 0,
+        "skipped_unstable": 0,
+        "skipped_active": 0,
+        "skipped_missing_mapping": 0,
+        "skipped": [],
+    }
     if not settings.get("beta_auto_scan_auto_queue_tracked", True):
         return result
     now = time.time()
-    tracking = _beta_load_tracking()
-    tracked_rows = tracking.get("shows") if isinstance(tracking.get("shows"), dict) else {}
-    index_files = index.get("files") if isinstance(index.get("files"), dict) else {}
-    active_paths = _beta_active_job_paths()
-    changed_tracking = False
+    planning_requests = []
+    with BETA_TRACKING_LOCK:
+        tracking = _beta_load_tracking()
+        tracked_rows = tracking.get("shows") if isinstance(tracking.get("shows"), dict) else {}
+        index_files = index.get("files") if isinstance(index.get("files"), dict) else {}
+        active_paths = _beta_active_job_paths()
+        changed_tracking = False
 
-    for show in data.get("shows") or []:
-        if not isinstance(show, dict):
-            continue
-        show_id = _beta_show_tracking_key(show)
-        row = tracked_rows.get(show_id)
-        if not isinstance(row, dict) or not row.get("tracked"):
-            continue
-
-        known = set(_beta_clean_path_list(row.get("known_paths")))
-        to_create = []
-        newly_known = set()
-        for ep in show.get("files") or []:
-            if not isinstance(ep, dict):
+        for show in data.get("shows") or []:
+            if not isinstance(show, dict):
                 continue
-            path = str(ep.get("path") or "")
-            if not path or path in known:
+            show_id = _beta_show_tracking_key(show)
+            row = tracked_rows.get(show_id)
+            if (
+                not isinstance(row, dict)
+                or not row.get("tracked")
+                or not row.get("auto_queue", True)
+            ):
                 continue
-            idx_row = index_files.get(path) if isinstance(index_files.get(path), dict) else {}
-            if path in active_paths:
-                newly_known.add(path)
-                result["skipped_active"] += 1
-                continue
-            if not _beta_file_is_stable(idx_row, settings, now):
-                result["skipped_unstable"] += 1
-                continue
-            to_create.append((path, guess_preset_from_filename(os.path.basename(path))))
-            newly_known.add(path)
 
-        if to_create:
-            result["queued"] += int(create_jobs_batch(to_create) or 0)
-            for path, _preset in to_create:
-                if isinstance(index_files.get(path), dict):
-                    index_files[path]["queued_at"] = now
-            changed_tracking = True
+            known = set(_beta_clean_path_list(row.get("known_paths")))
+            current_show_paths = _beta_show_paths(show)
+            if _beta_clean_path_list(row.get("tracked_paths")) != current_show_paths:
+                row["tracked_paths"] = current_show_paths
+                changed_tracking = True
+            if _beta_show_plan_needs_refresh(row, current_show_paths):
+                planning_requests.append((show_id, current_show_paths))
+            ready_paths = []
+            newly_known = set()
+            for ep in show.get("files") or []:
+                if not isinstance(ep, dict):
+                    continue
+                path = str(ep.get("path") or "")
+                if not path or path in known:
+                    continue
+                idx_row = index_files.get(path) if isinstance(index_files.get(path), dict) else {}
+                if path in active_paths:
+                    newly_known.add(path)
+                    result["skipped_active"] += 1
+                    continue
+                if not _beta_file_is_stable(idx_row, settings, now):
+                    result["skipped_unstable"] += 1
+                    continue
+                ready_paths.append(path)
 
-        if newly_known:
-            row["known_paths"] = sorted(set(_beta_clean_path_list(row.get("known_paths"))) | newly_known)
-            row["updated_at"] = now
-            tracked_rows[show_id] = row
-            changed_tracking = True
+            if ready_paths:
+                queued = _beta_queue_tracked_episode_paths(
+                    row,
+                    ready_paths,
+                    automation_source="tracked_show_auto_scan",
+                )
+                result["queued"] += int(queued.get("queued_count") or 0)
+                result["smart_planned"] += int(queued.get("planned_count") or 0)
+                result["skipped"].extend(queued.get("skipped") or [])
+                newly_known.update(queued.get("known_paths") or [])
+                for path in queued.get("queued_paths") or []:
+                    if isinstance(index_files.get(path), dict):
+                        index_files[path]["queued_at"] = now
+                changed_tracking = True
 
-    if changed_tracking:
-        tracking["shows"] = tracked_rows
-        _beta_save_tracking(tracking)
-        _beta_save_scan_index(index)
+            if newly_known:
+                row["known_paths"] = sorted(set(_beta_clean_path_list(row.get("known_paths"))) | newly_known)
+                row["updated_at"] = now
+                tracked_rows[show_id] = row
+                changed_tracking = True
+
+        if changed_tracking:
+            tracking["shows"] = tracked_rows
+            _beta_save_tracking(tracking)
+            _beta_save_scan_index(index)
+    for planning_show_id, planning_paths in planning_requests:
+        _beta_schedule_tracked_show_planning(planning_show_id, planning_paths)
     return result
 
 
@@ -7492,11 +7838,15 @@ def register_routes(app):
                     root_kind=mapped_root.get("kind") or "",
                 )
             data = _beta_refresh_predictions(data)
-            tracking = _beta_load_tracking()
-            data = _beta_apply_tracking(data, tracking)
-            auto_queue = _beta_auto_queue_tracked_episodes(data, tracking)
-            _beta_save_tracking(tracking)
-            data = _beta_apply_tracking(data, tracking)
+            with BETA_TRACKING_LOCK:
+                tracking = _beta_load_tracking()
+                data = _beta_apply_tracking(data, tracking)
+                auto_queue = _beta_auto_queue_tracked_episodes(data, tracking)
+                _beta_save_tracking(tracking)
+                data = _beta_apply_tracking(data, tracking)
+            planning_requests = auto_queue.pop("_planning_requests", [])
+            for planning_show_id, planning_paths in planning_requests:
+                _beta_schedule_tracked_show_planning(planning_show_id, planning_paths)
             data.setdefault("tracking", {})["auto_queue"] = auto_queue
             data = _beta_stamp_library_scan(data)
             _beta_save_library_cache(data)
@@ -7615,43 +7965,61 @@ def register_routes(app):
 
     @app.route("/api/beta/tracked_show", methods=["POST"])
     def beta_tracked_show_api():
-        """Enable or disable auto-queue tracking for a Beta show group."""
+        """Persist a show Smart policy and independently plan each episode."""
         data = request.get_json(force=True) or {}
         tracked = bool(data.get("tracked"))
+        rebuild_smart = bool(data.get("rebuild_smart"))
         show_id = str(data.get("show_id") or data.get("id") or "").strip()
         if not show_id:
             show_id = _beta_show_tracking_key(data)
         title = str(data.get("title") or "Unknown Title").strip() or "Unknown Title"
         paths = _beta_clean_path_list(data.get("paths"))
 
-        tracking = _beta_load_tracking()
-        shows = tracking.setdefault("shows", {})
-        now = time.time()
-        if tracked:
-            existing = shows.get(show_id) if isinstance(shows.get(show_id), dict) else {}
-            shows[show_id] = {
-                **existing,
-                "id": show_id,
-                "title": title,
-                "year": data.get("year"),
-                "tmdb_id": data.get("tmdb_id"),
-                "tvmaze_id": data.get("tvmaze_id"),
-                "poster_url": str(data.get("poster_url") or ""),
-                "tracked": True,
-                "monitor_releases": bool(data.get("monitor_releases", existing.get("monitor_releases", True))),
-                "auto_queue": bool(data.get("auto_queue", existing.get("auto_queue", True))),
-                "known_paths": paths,
-                "created_at": float(existing.get("created_at") or now),
-                "updated_at": now,
-            }
-        else:
-            shows.pop(show_id, None)
+        with BETA_TRACKING_LOCK:
+            tracking = _beta_load_tracking()
+            shows = tracking.setdefault("shows", {})
+            now = time.time()
+            if tracked:
+                existing = shows.get(show_id) if isinstance(shows.get(show_id), dict) else {}
+                profile, profile_revision = _beta_show_smart_profile(
+                    existing,
+                    refresh=rebuild_smart,
+                )
+                known_paths = sorted(set(_beta_clean_path_list(existing.get("known_paths"))) | set(paths))
+                shows[show_id] = {
+                    **existing,
+                    "id": show_id,
+                    "title": title,
+                    "year": data.get("year"),
+                    "tmdb_id": data.get("tmdb_id"),
+                    "tvmaze_id": data.get("tvmaze_id"),
+                    "poster_url": str(data.get("poster_url") or ""),
+                    "tracked": True,
+                    "monitor_releases": bool(data.get("monitor_releases", existing.get("monitor_releases", True))),
+                    "auto_queue": bool(data.get("auto_queue", existing.get("auto_queue", True))),
+                    "known_paths": known_paths,
+                    "tracked_paths": sorted(set(_beta_clean_path_list(existing.get("tracked_paths"))) | set(paths)),
+                    "smart_profile": profile,
+                    "smart_profile_revision": profile_revision,
+                    "smart_profile_saved_at": now if rebuild_smart or not existing.get("smart_profile") else float(existing.get("smart_profile_saved_at") or now),
+                    "smart_plan_status": "planning",
+                    "smart_episode_count": len(paths),
+                    "created_at": float(existing.get("created_at") or now),
+                    "updated_at": now,
+                }
+            else:
+                shows.pop(show_id, None)
+            _beta_save_tracking(tracking)
 
-        _beta_save_tracking(tracking)
+        planning_started = _beta_schedule_tracked_show_planning(show_id, paths, force=rebuild_smart) if tracked else False
+        saved_row = shows.get(show_id) if isinstance(shows.get(show_id), dict) else {}
         return jsonify(
             ok=True,
             show_id=show_id,
             tracked=tracked,
+            smart_planning=planning_started or show_id in BETA_TRACKING_PLAN_ACTIVE,
+            smart_plan_status=saved_row.get("smart_plan_status") if tracked else "",
+            smart_profile_name=(saved_row.get("smart_profile") or {}).get("name") if tracked else "",
             tracked_count=sum(1 for row in shows.values() if isinstance(row, dict) and row.get("tracked")),
         )
 
@@ -8276,33 +8644,45 @@ def register_routes(app):
             return jsonify(error="control permission required"), 403
         data = request.get_json(silent=True) or {}
         tracked = bool(data.get("tracked"))
+        rebuild_smart = bool(data.get("rebuild_smart"))
         show_id = str(data.get("show_id") or data.get("id") or "").strip() or _beta_show_tracking_key(data)
         if not show_id:
             return jsonify(error="missing show id"), 400
-        tracking = _beta_load_tracking()
-        shows = tracking.setdefault("shows", {})
-        if tracked:
-            existing = shows.get(show_id) if isinstance(shows.get(show_id), dict) else {}
-            shows[show_id] = {
-                **existing,
-                "id": show_id,
-                "title": str(data.get("title") or "Unknown Title").strip()[:160],
-                "year": data.get("year"),
-                "tmdb_id": data.get("tmdb_id"),
-                "tvmaze_id": data.get("tvmaze_id"),
-                "poster_url": str(data.get("poster_url") or ""),
-                "tracked": True,
-                "monitor_releases": bool(data.get("monitor_releases", existing.get("monitor_releases", True))),
-                "auto_queue": bool(data.get("auto_queue", existing.get("auto_queue", True))),
-                "known_paths": _beta_clean_path_list(data.get("paths")),
-                "created_at": float(existing.get("created_at") or time.time()),
-                "updated_at": time.time(),
-            }
-        else:
-            shows.pop(show_id, None)
-        _beta_save_tracking(tracking)
+        paths = _beta_clean_path_list(data.get("paths"))
+        with BETA_TRACKING_LOCK:
+            tracking = _beta_load_tracking()
+            shows = tracking.setdefault("shows", {})
+            now = time.time()
+            if tracked:
+                existing = shows.get(show_id) if isinstance(shows.get(show_id), dict) else {}
+                profile, profile_revision = _beta_show_smart_profile(existing, refresh=rebuild_smart)
+                shows[show_id] = {
+                    **existing,
+                    "id": show_id,
+                    "title": str(data.get("title") or "Unknown Title").strip()[:160],
+                    "year": data.get("year"),
+                    "tmdb_id": data.get("tmdb_id"),
+                    "tvmaze_id": data.get("tvmaze_id"),
+                    "poster_url": str(data.get("poster_url") or ""),
+                    "tracked": True,
+                    "monitor_releases": bool(data.get("monitor_releases", existing.get("monitor_releases", True))),
+                    "auto_queue": bool(data.get("auto_queue", existing.get("auto_queue", True))),
+                    "known_paths": sorted(set(_beta_clean_path_list(existing.get("known_paths"))) | set(paths)),
+                    "tracked_paths": sorted(set(_beta_clean_path_list(existing.get("tracked_paths"))) | set(paths)),
+                    "smart_profile": profile,
+                    "smart_profile_revision": profile_revision,
+                    "smart_profile_saved_at": now if rebuild_smart or not existing.get("smart_profile") else float(existing.get("smart_profile_saved_at") or now),
+                    "smart_plan_status": "planning",
+                    "smart_episode_count": len(paths),
+                    "created_at": float(existing.get("created_at") or now),
+                    "updated_at": now,
+                }
+            else:
+                shows.pop(show_id, None)
+            _beta_save_tracking(tracking)
+        planning_started = _beta_schedule_tracked_show_planning(show_id, paths, force=rebuild_smart) if tracked else False
         log_event("mobile_show_tracking", f"{device.get('name')} {'tracked' if tracked else 'untracked'} {data.get('title') or show_id}.", level="info")
-        return jsonify(ok=True, show_id=show_id, tracked=tracked)
+        return jsonify(ok=True, show_id=show_id, tracked=tracked, smart_planning=planning_started)
 
     @app.route("/api/mobile/v1/nodes")
     def mobile_nodes_api():
