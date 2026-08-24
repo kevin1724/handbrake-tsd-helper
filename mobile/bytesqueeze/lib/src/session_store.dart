@@ -57,6 +57,8 @@ class SessionStore {
   static const _refreshKey = 'bytesqueeze.refresh_token';
   static const _interfaceVersionKey = 'bytesqueeze.interface_version';
   static const _interfaceDensityKey = 'bytesqueeze.interface_density';
+  static const _showSecondaryUiKey = 'bytesqueeze.ui.show_secondary';
+  static const _showStatsForNerdsKey = 'bytesqueeze.ui.stats_for_nerds';
 
   Future<String> loadInterfaceVersion() async {
     final prefs = await SharedPreferences.getInstance();
@@ -81,6 +83,29 @@ class SessionStore {
       _interfaceDensityKey,
       density == 'compact' ? 'compact' : 'comfortable',
     );
+  }
+
+  Future<bool> loadShowSecondaryUi() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_showSecondaryUiKey) ?? false;
+  }
+
+  Future<bool> loadStatsForNerds() async {
+    final prefs = await SharedPreferences.getInstance();
+    return prefs.getBool(_showStatsForNerdsKey) ?? false;
+  }
+
+  Future<void> saveUiVisibility({
+    bool? showSecondaryUi,
+    bool? statsForNerds,
+  }) async {
+    final prefs = await SharedPreferences.getInstance();
+    if (showSecondaryUi != null) {
+      await prefs.setBool(_showSecondaryUiKey, showSecondaryUi);
+    }
+    if (statsForNerds != null) {
+      await prefs.setBool(_showStatsForNerdsKey, statsForNerds);
+    }
   }
 
   Future<ServerSession?> load() async {

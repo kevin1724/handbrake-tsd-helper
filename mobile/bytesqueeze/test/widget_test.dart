@@ -25,6 +25,7 @@ void main() {
   testWidgets('V3 command center exposes navigation and safe actions',
       (tester) async {
     final controller = AppController()..enterDemo();
+    controller.showSecondaryUi = true;
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
     await tester.pumpAndSettle();
 
@@ -48,9 +49,9 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.tune_outlined));
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('Interface & layout'), 220,
+    await tester.scrollUntilVisible(find.text('Interface & UI'), 220,
         scrollable: find.byType(Scrollable).first);
-    await tester.tap(find.text('Interface & layout'));
+    await tester.tap(find.text('Interface & UI'));
     await tester.pumpAndSettle();
 
     expect(find.text('V3'), findsOneWidget);
@@ -107,6 +108,7 @@ void main() {
   testWidgets('queue prioritizes running work and hardware capacity',
       (tester) async {
     final controller = AppController()..enterDemo();
+    controller.statsForNerds = true;
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
     await tester.pumpAndSettle();
 
@@ -182,6 +184,7 @@ void main() {
   testWidgets('library exposes friendly Smart preview and season actions',
       (tester) async {
     final controller = AppController()..enterDemo();
+    controller.showSecondaryUi = true;
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
     await tester.pumpAndSettle();
 
@@ -222,5 +225,69 @@ void main() {
     await tester.scrollUntilVisible(find.text('Season 1'), 220,
         scrollable: detailsScroll);
     expect(find.text('Season 1'), findsOneWidget);
+  });
+
+  testWidgets('default UI is focused and optional detail is restored in settings',
+      (tester) async {
+    final controller = AppController()..enterDemo();
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.video_library_outlined));
+    await tester.pumpAndSettle();
+    expect(find.text('Preview, tune, then queue'), findsNothing);
+    expect(find.text('Best savings'), findsNothing);
+
+    await tester.tap(find.byIcon(Icons.tune_outlined));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Interface & UI'), 220,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Interface & UI'));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Show secondary controls'), 220,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Show secondary controls'));
+    await tester.tap(find.text('Stats for nerds'));
+    await tester.pumpAndSettle();
+
+    expect(controller.showSecondaryUi, isTrue);
+    expect(controller.statsForNerds, isTrue);
+    expect(await controller.store.loadShowSecondaryUi(), isTrue);
+    expect(await controller.store.loadStatsForNerds(), isTrue);
+  });
+
+  testWidgets('movie opens the native Size Wizard and learned queue flow',
+      (tester) async {
+    tester.view.physicalSize = const Size(800, 1200);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    final controller = AppController()..enterDemo();
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.byIcon(Icons.video_library_outlined));
+    await tester.pumpAndSettle();
+    await tester.scrollUntilVisible(find.text('Arrival').last, 240,
+        scrollable: find.byType(Scrollable).first);
+    await tester.tap(find.text('Arrival').last);
+    await tester.pumpAndSettle();
+    final detailsScroll = find
+        .descendant(
+          of: find.byType(DraggableScrollableSheet),
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    await tester.scrollUntilVisible(find.text('Open in Size Wizard'), 220,
+        scrollable: detailsScroll);
+    await tester.tap(find.text('Open in Size Wizard'));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Size Wizard'), findsOneWidget);
+    expect(find.textContaining('source FPS preserved'), findsOneWidget);
+    expect(find.text('Queue this Wizard plan'), findsOneWidget);
+    expect(find.text('Next available node'), findsOneWidget);
   });
 }

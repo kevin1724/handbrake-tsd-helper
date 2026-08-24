@@ -61,7 +61,7 @@ ByteSqueeze is the Android-first Flutter companion for managing a TSD controller
 The mobile V3 interface mirrors the web workspace with an adaptive desktop
 sidebar, polished phone navigation, a searchable command center, real Smart
 comparison previews, full-season queues, mobile GPU-capacity controls, and a
-persistent **Settings → Interface & layout → V2 Classic** fallback. Interface
+persistent **Settings → Interface & UI → V2 Classic** fallback. Interface
 density and V3/V2 selection are local to each device and never alter encoding
 settings.
 
@@ -357,8 +357,10 @@ encode.
 - Token rotation: `POST /api/mobile/v1/token/refresh`
 - Read endpoints for status, jobs, nodes, events, library, release calendar, and Library preview progress
 - Scoped queue, node-target, show-monitoring, and Autopilot controls
+- Native Size Wizard planning and queueing for Library movies and individual episodes
 - Matched Library preview frames, per-season Smart Queue actions, and transient tuning from the phone
 - Shared accurate-preview review and Smart Preset feedback from the phone
+- Focused default screens with optional secondary controls and Stats for nerds under Interface & UI
 - Primary home address plus an optional Tailscale/away address with automatic connection failover
 - Browser-admin controls for creating pairing codes and revoking devices
 
@@ -477,7 +479,7 @@ docker run -d \
 ```
 
 The `latest` and `main` images are published automatically from `main`. Stable
-controller releases also publish `3.19.0` and `3.19` tags.
+controller releases also publish `3.20.0` and `3.20` tags.
 
 The encoding-only worker has its own public Docker Hub image:
 

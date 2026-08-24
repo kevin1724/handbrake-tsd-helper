@@ -81,7 +81,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.19.0")
+        self.assertEqual(status.get_json()["release"], "3.20.0")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -322,12 +322,18 @@ class ApiRouteSmokeTests(unittest.TestCase):
         ):
             response = self.client.post(
                 "/encode_wizard",
-                json={"src": media_path, "smart_profile_id": "default", "smart_candidate_id": "detail"},
+                json={
+                    "src": media_path,
+                    "smart_profile_id": "default",
+                    "smart_candidate_id": "detail",
+                    "mode": "best",
+                },
             )
         self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
         payload = response.get_json()
         self.assertTrue(payload["learning_recorded"])
         self.assertEqual(payload["learning"], learned)
+        self.assertEqual(payload["dispatch_mode"], "best")
         context = record.call_args.args[0]
         self.assertEqual(context["candidate_id"], "detail")
         self.assertEqual(context["features"]["quality"], "high")
@@ -340,6 +346,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(metadata["automation_source"], "size_wizard")
         self.assertEqual(metadata["smart_feedback_context"], context)
         self.assertFalse(create.call_args.kwargs["preset_adaptive"])
+        self.assertEqual(create.call_args.kwargs["dispatch_mode"], "auto")
 
         with (
             patch.object(app_routes, "_wizard_plan", return_value=plan),
@@ -2319,6 +2326,93 @@ class ApiRouteSmokeTests(unittest.TestCase):
             app_jobs.set_queue_paused(False)
             app_node_linking.delete_node(node_id)
 
+    def test_mobile_size_wizard_plans_and_queues_through_shared_learning(self):
+        pairing_response = self.client.post(
+            "/api/mobile/pairing_code", json={"scope": "control"}
+        )
+        paired = self.client.post(
+            "/api/mobile/v1/pair",
+            json={
+                "code": pairing_response.get_json()["pairing"]["code"],
+                "device_id": "wizard-phone",
+                "device_name": "Wizard phone",
+                "platform": "android",
+            },
+        )
+        headers = {
+            "Authorization": f"Bearer {paired.get_json()['access_token']}"
+        }
+        src = os.path.join(TEST_MEDIA, "Mobile.Wizard.Movie.2026.mkv")
+        selected_plan = {
+            "src": src,
+            "preset": "1080",
+            "probe": {"width": 1920, "height": 1080, "fps": 23.976},
+            "options": {
+                "video_codec": "h265",
+                "encoder_family": "qsv",
+                "bit_depth": "10",
+                "framerate_mode": "same",
+            },
+            "inputs": {"target_mb": 4096},
+            "estimates": {
+                "encoder": "qsv_h265_10bit",
+                "output_resolution": {"width": 1920, "height": 1080},
+            },
+            "extra_args": ["--encoder", "qsv_h265_10bit"],
+        }
+        recommendation = {
+            "recommended_id": "balanced",
+            "candidates": [{"id": "balanced", "name": "Learned balanced"}],
+            "selected_plan": selected_plan,
+            "learned_defaults": {"sample_count": 3},
+            "learning": {"feedback_count": 3},
+        }
+        with patch.object(
+            app_routes, "_smart_recommendation", return_value=recommendation
+        ):
+            planned = self.client.post(
+                "/api/mobile/v1/size_wizard/plan",
+                json={"src": src, "smart_start": True},
+                headers=headers,
+            )
+        self.assertEqual(planned.status_code, 200, planned.get_data(as_text=True))
+        planned_payload = planned.get_json()
+        self.assertEqual(planned_payload["smart_candidate_id"], "balanced")
+        self.assertEqual(
+            planned_payload["plan"]["estimates"]["encoder"],
+            "qsv_h265_10bit",
+        )
+        self.assertEqual(planned_payload["learned_defaults"]["sample_count"], 3)
+
+        queued_result = {
+            "job_id": "mobile-wizard-job",
+            "preset": "1080",
+            "extra_args": ["--encoder", "qsv_h265_10bit"],
+            "estimates": selected_plan["estimates"],
+            "dispatch_mode": "best",
+            "learning_recorded": True,
+            "learning": {"feedback_count": 4},
+        }
+        with patch.object(
+            app_routes, "_queue_wizard_job", return_value=queued_result
+        ) as queue_wizard:
+            queued = self.client.post(
+                "/api/mobile/v1/size_wizard/queue",
+                json={
+                    "src": src,
+                    "mode": "best",
+                    "video_codec": "h265",
+                    "framerate_mode": "same",
+                },
+                headers=headers,
+            )
+        self.assertEqual(queued.status_code, 200, queued.get_data(as_text=True))
+        self.assertTrue(queued.get_json()["learning_recorded"])
+        queue_data = queue_wizard.call_args.args[0]
+        self.assertEqual(queue_data["queue_source"], "bytesqueeze_app")
+        self.assertEqual(queue_data["mode"], "best")
+        self.assertEqual(queue_data["framerate_mode"], "same")
+
     def test_mobile_can_edit_worker_job_to_smart_and_clear_all_node_history(self):
         pairing_response = self.client.post(
             "/api/mobile/pairing_code", json={"scope": "control"}
@@ -2444,7 +2538,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.19.0")
+        self.assertEqual(dashboard_payload["release"], "3.20.0")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

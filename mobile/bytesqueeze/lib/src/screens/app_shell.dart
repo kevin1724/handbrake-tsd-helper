@@ -157,7 +157,8 @@ class _AppShellState extends State<AppShell> {
         summaryCount(summary, 'queued') > 0;
     // Queue already has full live status, and Settings should never have
     // controls obscured by operational chrome.
-    final showDock = workIsActive &&
+    final showDock = controller.showSecondaryUi &&
+        workIsActive &&
         controller.selectedTab != 2 &&
         controller.selectedTab != 4;
     final page = IndexedStack(index: controller.selectedTab, children: pages);
@@ -351,23 +352,24 @@ class _AppShellState extends State<AppShell> {
               ),
             ),
           ),
-          Positioned(
-            left: wide ? 112 : 12,
-            right: wide ? 24 : 12,
-            bottom: wide ? 14 : 88 + MediaQuery.paddingOf(context).bottom,
-            child: Align(
-              alignment: Alignment.bottomCenter,
-              child: ConstrainedBox(
-                constraints: const BoxConstraints(maxWidth: 720),
-                child: OperationsDock(
-                  summary: summary,
-                  activeJobs: activeJobs,
-                  paused: queue['paused'] == true,
-                  onTap: () => controller.selectTab(2),
+          if (controller.showSecondaryUi)
+            Positioned(
+              left: wide ? 112 : 12,
+              right: wide ? 24 : 12,
+              bottom: wide ? 14 : 88 + MediaQuery.paddingOf(context).bottom,
+              child: Align(
+                alignment: Alignment.bottomCenter,
+                child: ConstrainedBox(
+                  constraints: const BoxConstraints(maxWidth: 720),
+                  child: OperationsDock(
+                    summary: summary,
+                    activeJobs: activeJobs,
+                    paused: queue['paused'] == true,
+                    onTap: () => controller.selectTab(2),
+                  ),
                 ),
               ),
             ),
-          ),
         ],
       ),
       bottomNavigationBar: wide
@@ -661,18 +663,20 @@ class _WorkspaceBar extends StatelessWidget {
               ],
             ),
           ),
-          _CommandButton(onPressed: onCommand, expanded: true),
-          const SizedBox(width: 9),
-          IconButton.filledTonal(
-            tooltip: 'Refresh all',
-            onPressed: controller.busy ? null : controller.refreshAll,
-            icon: controller.busy
-                ? const SizedBox(
-                    width: 18,
-                    height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Icon(Icons.refresh_rounded),
-          ),
+          if (controller.showSecondaryUi) ...[
+            _CommandButton(onPressed: onCommand, expanded: true),
+            const SizedBox(width: 9),
+            IconButton.filledTonal(
+              tooltip: 'Refresh all',
+              onPressed: controller.busy ? null : controller.refreshAll,
+              icon: controller.busy
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2))
+                  : const Icon(Icons.refresh_rounded),
+            ),
+          ],
         ],
       ),
     );
@@ -719,11 +723,12 @@ class _MobileWorkspaceBar extends StatelessWidget {
               ],
             ),
           ),
-          IconButton(
-            tooltip: 'Command center',
-            onPressed: onCommand,
-            icon: const Icon(Icons.search_rounded),
-          ),
+          if (controller.showSecondaryUi)
+            IconButton(
+              tooltip: 'Command center',
+              onPressed: onCommand,
+              icon: const Icon(Icons.search_rounded),
+            ),
           if (controller.busy)
             const Padding(
               padding: EdgeInsets.only(right: 8),
@@ -733,7 +738,7 @@ class _MobileWorkspaceBar extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
             )
-          else
+          else if (controller.statsForNerds)
             Container(
               width: 8,
               height: 8,

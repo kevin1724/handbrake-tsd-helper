@@ -3290,6 +3290,102 @@ def _create_smart_job(
     return job_id, recommendation
 
 
+def _queue_wizard_job(data: dict) -> dict:
+    """Queue one fixed Wizard plan and record it as an approved preference."""
+    data = dict(data or {})
+    plan = _wizard_plan(data, probe_func=_probe_media, for_queue=True, preview=False)
+    learning_context = smart_feedback_context(
+        plan,
+        str(data.get("smart_candidate_id") or "manual"),
+    )
+    active_before = {
+        str(row.get("id") or "")
+        for row in list_jobs_for_api()
+        if str(row.get("src") or "") == str(plan["src"])
+        and str(row.get("status") or "")
+        in {"queued", "dispatching", "running", "waiting_to_upload"}
+    }
+    requested_mode = str(data.get("mode") or "local").strip().lower()
+    if requested_mode in {"best", "auto", "available", "next_available"}:
+        dispatch_mode = "auto"
+        response_mode = "best"
+    elif requested_mode == "local":
+        dispatch_mode = "local"
+        response_mode = "local"
+    else:
+        raise ValueError("Size Wizard destination must be local or best available")
+
+    preset_preferences = dict(plan.get("options") or {})
+    job_id = create_job(
+        plan["src"],
+        plan["preset"],
+        extra_args=" ".join(plan["extra_args"]),
+        encode_metadata={
+            "encode_method": plan["estimates"].get("encoder"),
+            "encoder": plan["estimates"].get("encoder"),
+            "video_codec": plan["options"].get("video_codec"),
+            "encoder_family": plan["options"].get("encoder_family"),
+            "bit_depth": plan["options"].get("bit_depth"),
+            "audio_strategy": plan["options"].get("smart_audio_strategy")
+            or plan["options"].get("audio_mode"),
+            "audio_languages": plan["options"].get("audio_languages"),
+            "subtitle_languages": plan["options"].get("subtitle_languages"),
+            "smart_preset": True,
+            "smart_profile_id": str(data.get("smart_profile_id") or "default"),
+            "smart_candidate_id": str(data.get("smart_candidate_id") or "manual"),
+            "smart_feedback_context": learning_context,
+            "automation_source": "size_wizard",
+            "preset_selection": "wizard",
+            "preset_adaptive": False,
+            "preset_preferences": preset_preferences,
+        },
+        dispatch_mode=dispatch_mode,
+        preset_selection="wizard",
+        preset_adaptive=False,
+        preset_preferences=preset_preferences,
+    )
+    learning_result = None
+    learning_recorded = bool(job_id and str(job_id) not in active_before)
+    if learning_recorded:
+        try:
+            learning_result = record_smart_preset_feedback(
+                learning_context,
+                "approve",
+                "looks_good",
+                origin="wizard_queue",
+                job_id=str(job_id),
+            )
+            log_event(
+                "wizard_queue_learning",
+                f"Learned the approved Size Wizard plan for {os.path.basename(str(plan['src']))}.",
+                level="info",
+                job_id=str(job_id),
+                src=str(plan["src"]),
+                extra={
+                    "candidate_id": str(data.get("smart_candidate_id") or "manual"),
+                    "encoder": str(plan.get("estimates", {}).get("encoder") or ""),
+                    "target_mb": round(float(plan.get("inputs", {}).get("target_mb") or 0.0), 1),
+                    "queue_source": str(data.get("queue_source") or "web"),
+                    "destination": response_mode,
+                },
+            )
+        except Exception as exc:
+            learning_recorded = False
+            print(
+                f"[WARN] Size Wizard queued job {job_id}, but Smart learning could not be saved: {exc}",
+                flush=True,
+            )
+    return {
+        "job_id": job_id,
+        "preset": plan["preset"],
+        "extra_args": plan["extra_args"],
+        "estimates": plan["estimates"],
+        "dispatch_mode": response_mode,
+        "learning_recorded": learning_recorded,
+        "learning": (learning_result or {}).get("learning") or smart_learning_status(),
+    }
+
+
 BETA_LIBRARY_CACHE_FILE = os.path.join(DATA_DIR, "beta_library_cache.json")
 BETA_LIBRARY_SUMMARY_FILE = os.path.join(DATA_DIR, "beta_library_summary.json")
 BETA_TRACKED_SHOWS_FILE = os.path.join(DATA_DIR, "beta_tracked_shows.json")
@@ -3329,7 +3425,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.19.0"
+APP_RELEASE = "3.20.0"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -8738,6 +8834,76 @@ def register_routes(app):
         log_event("mobile_library_queue", f"{device.get('name')} queued {queued} library item(s) with {preset}.", level="info")
         return jsonify(ok=True, queued=queued, requested=len(seen), skipped=skipped, preset=preset)
 
+    @app.route("/api/mobile/v1/size_wizard/plan", methods=["POST"])
+    def mobile_size_wizard_plan_api():
+        device = _authenticated_mobile("read")
+        if not device:
+            return jsonify(error="unauthorized mobile device"), 401
+        data = request.get_json(silent=True) or {}
+        try:
+            if _truthy(data.get("smart_start"), False):
+                recommendation = _smart_recommendation(
+                    {
+                        "src": data.get("src"),
+                        "preset": data.get("preset") or "auto",
+                        "smart_tuning": data.get("smart_tuning") or {},
+                    }
+                )
+                plan = recommendation["selected_plan"]
+                selected_id = str(recommendation.get("recommended_id") or "balanced")
+                selected = next(
+                    (
+                        row
+                        for row in recommendation.get("candidates") or []
+                        if str(row.get("id") or "") == selected_id
+                    ),
+                    {},
+                )
+                return jsonify(
+                    ok=True,
+                    smart_start=True,
+                    smart_candidate_id=selected_id,
+                    smart_candidate_name=str(selected.get("name") or "Smart starting point"),
+                    learned_defaults=recommendation.get("learned_defaults") or {},
+                    learning=recommendation.get("learning") or smart_learning_status(),
+                    plan=plan,
+                )
+            plan = _wizard_plan(data, probe_func=_probe_media, preview=False)
+            return jsonify(
+                ok=True,
+                smart_start=False,
+                smart_candidate_id=str(data.get("smart_candidate_id") or "manual"),
+                smart_candidate_name="Custom Size Wizard plan",
+                learned_defaults={},
+                learning=smart_learning_status(),
+                plan=plan,
+            )
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except Exception as exc:
+            return jsonify(error=f"Size Wizard planning failed: {str(exc)[:220]}"), 500
+
+    @app.route("/api/mobile/v1/size_wizard/queue", methods=["POST"])
+    def mobile_size_wizard_queue_api():
+        device = _authenticated_mobile("control")
+        if not device:
+            return jsonify(error="control permission required"), 403
+        data = dict(request.get_json(silent=True) or {})
+        data["queue_source"] = "bytesqueeze_app"
+        try:
+            result = _queue_wizard_job(data)
+        except ValueError as exc:
+            return jsonify(error=str(exc)), 400
+        except Exception as exc:
+            return jsonify(error=f"Size Wizard queue failed: {str(exc)[:220]}"), 500
+        log_event(
+            "mobile_size_wizard_queue",
+            f"{device.get('name')} queued {os.path.basename(str(data.get('src') or 'media'))} from Size Wizard.",
+            level="info",
+            job_id=str(result.get("job_id") or ""),
+        )
+        return jsonify(ok=True, **result)
+
     @app.route("/api/mobile/v1/library/tracked_show", methods=["POST"])
     def mobile_library_tracked_show_api():
         device = _authenticated_mobile("control")
@@ -10158,85 +10324,12 @@ def register_routes(app):
     def encode_wizard():
         """Queue a Wizard plan and teach Smart Presets from that approval."""
         data = request.get_json(force=True)
-
         try:
-            plan = _wizard_plan(data, probe_func=_probe_media, for_queue=True, preview=False)
+            return jsonify(**_queue_wizard_job(data))
         except ValueError as e:
             return jsonify(error=str(e)), 400
         except Exception as e:
             return jsonify(error=str(e)), 500
-
-        learning_context = smart_feedback_context(
-            plan,
-            str(data.get("smart_candidate_id") or "manual"),
-        )
-        active_before = {
-            str(row.get("id") or "")
-            for row in list_jobs_for_api()
-            if str(row.get("src") or "") == str(plan["src"])
-            and str(row.get("status") or "") in {"queued", "dispatching", "running", "waiting_to_upload"}
-        }
-        preset_preferences = dict(plan.get("options") or {})
-        job_id = create_job(
-            plan["src"],
-            plan["preset"],
-            extra_args=" ".join(plan["extra_args"]),
-            encode_metadata={
-                "encode_method": plan["estimates"].get("encoder"),
-                "encoder": plan["estimates"].get("encoder"),
-                "video_codec": plan["options"].get("video_codec"),
-                "encoder_family": plan["options"].get("encoder_family"),
-                "bit_depth": plan["options"].get("bit_depth"),
-                "audio_strategy": plan["options"].get("smart_audio_strategy") or plan["options"].get("audio_mode"),
-                "audio_languages": plan["options"].get("audio_languages"),
-                "subtitle_languages": plan["options"].get("subtitle_languages"),
-                "smart_preset": True,
-                "smart_profile_id": str(data.get("smart_profile_id") or "default"),
-                "smart_candidate_id": str(data.get("smart_candidate_id") or "manual"),
-                "smart_feedback_context": learning_context,
-                "automation_source": "size_wizard",
-                "preset_selection": "wizard",
-                "preset_adaptive": False,
-                "preset_preferences": preset_preferences,
-            },
-            preset_selection="wizard",
-            preset_adaptive=False,
-            preset_preferences=preset_preferences,
-        )
-        learning_result = None
-        learning_recorded = bool(job_id and str(job_id) not in active_before)
-        if learning_recorded:
-            try:
-                learning_result = record_smart_preset_feedback(
-                    learning_context,
-                    "approve",
-                    "looks_good",
-                    origin="wizard_queue",
-                    job_id=str(job_id),
-                )
-                log_event(
-                    "wizard_queue_learning",
-                    f"Learned the approved Size Wizard plan for {os.path.basename(str(plan['src']))}.",
-                    level="info",
-                    job_id=str(job_id),
-                    src=str(plan["src"]),
-                    extra={
-                        "candidate_id": str(data.get("smart_candidate_id") or "manual"),
-                        "encoder": str(plan.get("estimates", {}).get("encoder") or ""),
-                        "target_mb": round(float(plan.get("inputs", {}).get("target_mb") or 0.0), 1),
-                    },
-                )
-            except Exception as exc:
-                learning_recorded = False
-                print(f"[WARN] Size Wizard queued job {job_id}, but Smart learning could not be saved: {exc}", flush=True)
-        return jsonify(
-            job_id=job_id,
-            preset=plan["preset"],
-            extra_args=plan["extra_args"],
-            estimates=plan["estimates"],
-            learning_recorded=learning_recorded,
-            learning=(learning_result or {}).get("learning") or smart_learning_status(),
-        )
 
     # ------------- Wizard preview helpers -------------
 

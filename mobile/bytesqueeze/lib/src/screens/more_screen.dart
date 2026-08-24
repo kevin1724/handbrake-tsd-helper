@@ -60,12 +60,14 @@ class MoreScreen extends StatelessWidget {
                                       'ByteSqueeze'),
                               style: Theme.of(context).textTheme.titleLarge),
                           const SizedBox(height: 3),
-                          Text(controller.serverLabel,
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: const TextStyle(
-                                  color: ByteSqueezeColors.muted)),
-                          const SizedBox(height: 8),
+                          if (controller.statsForNerds) ...[
+                            Text(controller.serverLabel,
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: const TextStyle(
+                                    color: ByteSqueezeColors.muted)),
+                            const SizedBox(height: 8),
+                          ],
                           StatusPill(
                               label: controller.canControl
                                   ? 'Control access'
@@ -88,7 +90,7 @@ class MoreScreen extends StatelessWidget {
                     _MoreTile(
                       icon: Icons.dashboard_customize_rounded,
                       color: ByteSqueezeColors.violet,
-                      title: 'Interface & layout',
+                      title: 'Interface & UI',
                       subtitle: controller.useV3
                           ? 'V3 · ${controller.compactInterface ? 'compact' : 'comfortable'} density'
                           : 'V2 Classic fallback is active',
@@ -99,7 +101,9 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.developer_board_rounded,
                       color: ByteSqueezeColors.cyan,
                       title: 'Encoding capacity & safety',
-                      subtitle: controller.serverSupportsOperationsSettings
+                      subtitle: !controller.statsForNerds
+                          ? 'Encoder capacity and safety limits'
+                          : controller.serverSupportsOperationsSettings
                           ? '${controller.operations['hardware_transcode_concurrency'] ?? asMap(controller.jobs['summary'])['hardware_transcode_concurrency'] ?? 1} GPU slots · CPU stays at one'
                           : 'Server update needed for mobile controls',
                       onTap: () => _open(
@@ -117,7 +121,9 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.hub_rounded,
                       color: ByteSqueezeColors.cyan,
                       title: 'Encoding nodes',
-                      subtitle: '$online online · ${nodeRows.length + 1} total',
+                      subtitle: controller.statsForNerds
+                          ? '$online online · ${nodeRows.length + 1} total'
+                          : 'Manage the main controller and linked workers',
                       onTap: () =>
                           _open(context, NodesPage(controller: controller)),
                     ),
@@ -125,19 +131,21 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.savings_outlined,
                       color: ByteSqueezeColors.mint,
                       title: 'Storage savings',
-                      subtitle:
-                          '${formatBytes(storageSummary['saved_bytes'])} reclaimed across ${storageSummary['count'] ?? 0} encodes',
+                      subtitle: controller.statsForNerds
+                          ? '${formatBytes(storageSummary['saved_bytes'])} reclaimed across ${storageSummary['count'] ?? 0} encodes'
+                          : 'Review the space ByteSqueeze reclaimed',
                       onTap: () =>
                           _open(context, StoragePage(controller: controller)),
                     ),
-                    _MoreTile(
-                      icon: Icons.bolt_rounded,
-                      color: ByteSqueezeColors.amber,
-                      title: 'Event timeline',
-                      subtitle: '${eventRows.length} recent server events',
-                      onTap: () =>
-                          _open(context, EventsPage(controller: controller)),
-                    ),
+                    if (controller.statsForNerds)
+                      _MoreTile(
+                        icon: Icons.bolt_rounded,
+                        color: ByteSqueezeColors.amber,
+                        title: 'Event timeline',
+                        subtitle: '${eventRows.length} recent server events',
+                        onTap: () =>
+                            _open(context, EventsPage(controller: controller)),
+                      ),
                   ],
                 ),
               ),
@@ -159,7 +167,7 @@ class MoreScreen extends StatelessWidget {
                       icon: Icons.info_outline_rounded,
                       color: ByteSqueezeColors.muted,
                       title: 'About',
-                      subtitle: 'ByteSqueeze $appVersion · TSD 3.16',
+                      subtitle: 'ByteSqueeze $appVersion',
                       onTap: () => showAboutDialog(
                         context: context,
                         applicationName: 'ByteSqueeze',
@@ -247,7 +255,7 @@ class _InterfacePageState extends State<InterfacePage> {
   @override
   Widget build(BuildContext context) {
     return _DetailScaffold(
-      title: 'Interface & layout',
+      title: 'Interface & UI',
       child: ListView(
         padding: const EdgeInsets.all(16),
         children: [
@@ -338,6 +346,36 @@ class _InterfacePageState extends State<InterfacePage> {
             style: const TextStyle(
                 color: ByteSqueezeColors.muted, fontSize: 12),
           ),
+          const SectionHeader(
+            title: 'UI visibility',
+            subtitle: 'Keep everyday screens focused; restore optional detail here',
+          ),
+          SurfaceCard(
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+            child: Column(
+              children: [
+                SwitchListTile.adaptive(
+                  value: controller.showSecondaryUi,
+                  onChanged: _setSecondaryUi,
+                  secondary: const Icon(Icons.widgets_outlined,
+                      color: ByteSqueezeColors.cyan),
+                  title: const Text('Show secondary controls'),
+                  subtitle: const Text(
+                      'Restores helper cards, extra filters, refresh buttons, and the live operations dock.'),
+                ),
+                const Divider(height: 1),
+                SwitchListTile.adaptive(
+                  value: controller.statsForNerds,
+                  onChanged: _setStatsForNerds,
+                  secondary: const Icon(Icons.data_object_rounded,
+                      color: ByteSqueezeColors.violet),
+                  title: const Text('Stats for nerds'),
+                  subtitle: const Text(
+                      'Shows exact paths, server addresses, bitrates, event logs, and technical counters.'),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
@@ -350,6 +388,16 @@ class _InterfacePageState extends State<InterfacePage> {
 
   Future<void> _setDensity(String density) async {
     await controller.setInterfaceDensity(density);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _setSecondaryUi(bool value) async {
+    await controller.setShowSecondaryUi(value);
+    if (mounted) setState(() {});
+  }
+
+  Future<void> _setStatsForNerds(bool value) async {
+    await controller.setStatsForNerds(value);
     if (mounted) setState(() {});
   }
 }

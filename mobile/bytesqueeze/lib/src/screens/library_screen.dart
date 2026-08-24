@@ -6,6 +6,7 @@ import 'package:flutter/material.dart';
 import '../app_controller.dart';
 import '../theme.dart';
 import '../widgets/common.dart';
+import 'size_wizard_screen.dart';
 
 class LibraryScreen extends StatefulWidget {
   const LibraryScreen({super.key, required this.controller});
@@ -86,71 +87,78 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           ],
                         ),
                       ),
-                      IconButton.filledTonal(
-                        tooltip: 'Refresh library on server',
-                        onPressed: widget.controller.canControl &&
-                                !widget.controller.busy
-                            ? () => _run(widget.controller.refreshLibrary)
-                            : null,
-                        icon: const Icon(Icons.sync_rounded),
-                      ),
+                      if (widget.controller.showSecondaryUi)
+                        IconButton.filledTonal(
+                          tooltip: 'Refresh library on server',
+                          onPressed: widget.controller.canControl &&
+                                  !widget.controller.busy
+                              ? () => _run(widget.controller.refreshLibrary)
+                              : null,
+                          icon: const Icon(Icons.sync_rounded),
+                        ),
                     ],
                   ),
-                  const SizedBox(height: 16),
-                  SurfaceCard(
-                    borderColor: ByteSqueezeColors.cyan.withValues(alpha: .38),
-                    child: const Row(
-                      crossAxisAlignment: CrossAxisAlignment.start,
+                  if (widget.controller.showSecondaryUi) ...[
+                    const SizedBox(height: 16),
+                    SurfaceCard(
+                      borderColor:
+                          ByteSqueezeColors.cyan.withValues(alpha: .38),
+                      child: const Row(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Icon(Icons.auto_awesome_rounded,
+                              color: ByteSqueezeColors.cyan),
+                          SizedBox(width: 12),
+                          Expanded(
+                            child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                Text('Preview, tune, then queue',
+                                    style: TextStyle(
+                                        fontWeight: FontWeight.w800)),
+                                SizedBox(height: 4),
+                                Text(
+                                  'Open a title to compare a real Smart encode. Shows also support one-tap season previews and queues.',
+                                  style: TextStyle(
+                                      color: ByteSqueezeColors.muted,
+                                      fontSize: 12.5),
+                                ),
+                              ],
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                  ],
+                  if (widget.controller.statsForNerds) ...[
+                    const SizedBox(height: 12),
+                    Row(
                       children: [
-                        Icon(Icons.auto_awesome_rounded,
-                            color: ByteSqueezeColors.cyan),
-                        SizedBox(width: 12),
+                        StatusPill(
+                          label: tmdbConfigured
+                              ? 'TMDb preferred'
+                              : 'No-key artwork',
+                          color: tmdbConfigured
+                              ? ByteSqueezeColors.mint
+                              : ByteSqueezeColors.blue,
+                          icon: tmdbConfigured
+                              ? Icons.verified_outlined
+                              : Icons.image_search_rounded,
+                        ),
+                        const SizedBox(width: 8),
                         Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text('Preview, tune, then queue',
-                                  style:
-                                      TextStyle(fontWeight: FontWeight.w800)),
-                              SizedBox(height: 4),
-                              Text(
-                                'Open a title to compare a real Smart encode. Shows also support one-tap season previews and queues.',
-                                style: TextStyle(
-                                    color: ByteSqueezeColors.muted,
-                                    fontSize: 12.5),
-                              ),
-                            ],
+                          child: Text(
+                            tmdbConfigured
+                                ? 'TMDb posters are used first; other artwork fills any gaps.'
+                                : 'Local, TVmaze, and Apple artwork work without an API key.',
+                            style: const TextStyle(
+                                color: ByteSqueezeColors.muted,
+                                fontSize: 11.5),
                           ),
                         ),
                       ],
                     ),
-                  ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      StatusPill(
-                        label: tmdbConfigured
-                            ? 'TMDb preferred'
-                            : 'No-key artwork',
-                        color: tmdbConfigured
-                            ? ByteSqueezeColors.mint
-                            : ByteSqueezeColors.blue,
-                        icon: tmdbConfigured
-                            ? Icons.verified_outlined
-                            : Icons.image_search_rounded,
-                      ),
-                      const SizedBox(width: 8),
-                      Expanded(
-                        child: Text(
-                          tmdbConfigured
-                              ? 'TMDb posters are used first; other artwork fills any gaps.'
-                              : 'Local, TVmaze, and Apple artwork work without an API key.',
-                          style: const TextStyle(
-                              color: ByteSqueezeColors.muted, fontSize: 11.5),
-                        ),
-                      ),
-                    ],
-                  ),
+                  ],
                   const SizedBox(height: 12),
                   SegmentedButton<bool>(
                     segments: const [
@@ -189,8 +197,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             ),
                     ),
                   ),
-                  const SizedBox(height: 10),
-                  Row(
+                  if (widget.controller.showSecondaryUi) ...[
+                    const SizedBox(height: 10),
+                    Row(
                     children: [
                       Expanded(
                         child: SingleChildScrollView(
@@ -243,7 +252,8 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         ),
                       ),
                     ],
-                  ),
+                    ),
+                  ],
                   if (!configured) ...[
                     const SizedBox(height: 14),
                     const SurfaceCard(
@@ -260,7 +270,9 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       ),
                     ),
                   ],
-                  if (query.isEmpty && items.isNotEmpty) ...[
+                  if (widget.controller.showSecondaryUi &&
+                      query.isEmpty &&
+                      items.isNotEmpty) ...[
                     SectionHeader(
                       title: _shows ? 'Tracked shows' : 'Recently added',
                       subtitle: _shows
@@ -288,7 +300,7 @@ class _LibraryScreenState extends State<LibraryScreen> {
                     ),
                   ],
                   const SizedBox(height: 16),
-                  if (items.isNotEmpty)
+                  if (widget.controller.statsForNerds && items.isNotEmpty)
                     Padding(
                       padding: const EdgeInsets.only(bottom: 10),
                       child: Text(
@@ -674,6 +686,30 @@ class _MediaDetailsState extends State<_MediaDetails> {
     }
   }
 
+  Future<void> _openSizeWizard(Map<String, dynamic> file) async {
+    final path = '${file['path'] ?? ''}';
+    if (path.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('This library item has no source path.')),
+      );
+      return;
+    }
+    final episode = file['episode'];
+    final title = episode == null
+        ? '${widget.item['title'] ?? fileName(path)}'
+        : '${widget.item['title'] ?? 'Episode'} · S${file['season'] ?? 0}E$episode';
+    await Navigator.push<bool>(
+      context,
+      MaterialPageRoute(
+        builder: (_) => SizeWizardScreen(
+          controller: widget.controller,
+          path: path,
+          title: title,
+        ),
+      ),
+    );
+  }
+
   Map<int, List<Map<String, dynamic>>> _seasonGroups(
       List<dynamic> values) {
     final groups = <int, List<Map<String, dynamic>>>{};
@@ -781,7 +817,8 @@ class _MediaDetailsState extends State<_MediaDetails> {
                           StatusPill(
                               label: '${widget.item['quality']}',
                               color: ByteSqueezeColors.mint),
-                        if (artworkLabel.isNotEmpty)
+                        if (artworkLabel.isNotEmpty &&
+                            widget.controller.statsForNerds)
                           StatusPill(
                               label: artworkLabel,
                               color: posterSource == 'tmdb'
@@ -908,6 +945,18 @@ class _MediaDetailsState extends State<_MediaDetails> {
                   ],
                 ),
                 const SizedBox(height: 12),
+                FilledButton.tonalIcon(
+                  onPressed: _paths.isEmpty
+                      ? null
+                      : () => _openSizeWizard(files.isNotEmpty
+                          ? asMap(files.first)
+                          : <String, dynamic>{'path': _paths.first}),
+                  icon: const Icon(Icons.straighten_rounded),
+                  label: Text(widget.isShow
+                      ? 'Size Wizard for first episode'
+                      : 'Open in Size Wizard'),
+                ),
+                const SizedBox(height: 9),
                 OutlinedButton.icon(
                   onPressed: widget.controller.canControl &&
                           !_previewWorking &&
@@ -1082,6 +1131,11 @@ class _MediaDetailsState extends State<_MediaDetails> {
                         subtitle: Text(formatBytes(file['size_bytes']),
                             style: const TextStyle(
                                 color: ByteSqueezeColors.muted)),
+                        trailing: IconButton(
+                          tooltip: 'Open this episode in Size Wizard',
+                          onPressed: () => _openSizeWizard(file),
+                          icon: const Icon(Icons.straighten_rounded),
+                        ),
                       );
                     }).toList(),
                   ),
@@ -1102,6 +1156,11 @@ class _MediaDetailsState extends State<_MediaDetails> {
                         maxLines: 1, overflow: TextOverflow.ellipsis),
                     subtitle: Text(formatBytes(file['size_bytes']),
                         style: const TextStyle(color: ByteSqueezeColors.muted)),
+                    trailing: IconButton(
+                      tooltip: 'Open in Size Wizard',
+                      onPressed: () => _openSizeWizard(file),
+                      icon: const Icon(Icons.straighten_rounded),
+                    ),
                   );
                 }).toList(),
               ),

@@ -76,7 +76,11 @@ class _JobsScreenState extends State<JobsScreen> {
                 const SizedBox(height: 16),
                 SectionHeader(
                   title: 'Running now',
-                  subtitle: _capacityLabel(summary, runningJobs.length),
+                  subtitle: widget.controller.statsForNerds
+                      ? _capacityLabel(summary, runningJobs.length)
+                      : (runningJobs.isEmpty
+                          ? 'All encoders are available'
+                          : '${runningJobs.length} active encode${runningJobs.length == 1 ? '' : 's'}'),
                 ),
                 if (runningJobs.isEmpty)
                   const SurfaceCard(
@@ -123,25 +127,27 @@ class _JobsScreenState extends State<JobsScreen> {
                       shape: WidgetStatePropertyAll(RoundedRectangleBorder(
                           borderRadius: BorderRadius.circular(14)))),
                 ),
-                const SizedBox(height: 12),
-                SingleChildScrollView(
-                  scrollDirection: Axis.horizontal,
-                  child: Row(
-                    children: (_history
-                            ? const ['all', 'done', 'error', 'canceled']
-                            : const ['all', 'queued', 'waiting_to_upload'])
-                        .map((value) => Padding(
-                              padding: const EdgeInsets.only(right: 8),
-                              child: ChoiceChip(
-                                selected: _filter == value,
-                                onSelected: (_) =>
-                                    setState(() => _filter = value),
-                                label: Text(_filterLabel(value)),
-                              ),
-                            ))
-                        .toList(),
+                if (widget.controller.showSecondaryUi) ...[
+                  const SizedBox(height: 12),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: (_history
+                              ? const ['all', 'done', 'error', 'canceled']
+                              : const ['all', 'queued', 'waiting_to_upload'])
+                          .map((value) => Padding(
+                                padding: const EdgeInsets.only(right: 8),
+                                child: ChoiceChip(
+                                  selected: _filter == value,
+                                  onSelected: (_) =>
+                                      setState(() => _filter = value),
+                                  label: Text(_filterLabel(value)),
+                                ),
+                              ))
+                          .toList(),
+                    ),
                   ),
-                ),
+                ],
                 if (_history && rows.isNotEmpty)
                   Align(
                     alignment: Alignment.centerRight,

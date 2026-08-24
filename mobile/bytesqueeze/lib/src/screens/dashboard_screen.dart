@@ -120,51 +120,55 @@ class DashboardScreen extends StatelessWidget {
                         padding: const EdgeInsets.only(bottom: 10),
                         child: _ActiveJobCard(job: job),
                       )),
-                const SectionHeader(
-                    title: 'Quick controls',
-                    subtitle: 'Safe remote actions; encoding remains on TSD'),
-                Wrap(
-                  spacing: 10,
-                  runSpacing: 10,
-                  children: [
-                    FilledButton.tonalIcon(
-                      onPressed: controller.canControl
-                          ? () => _run(
-                              context, () => controller.setQueuePaused(!paused))
-                          : null,
-                      icon: Icon(paused
-                          ? Icons.play_arrow_rounded
-                          : Icons.pause_rounded),
-                      label: Text(paused ? 'Resume queue' : 'Pause queue'),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: () => controller.selectTab(1),
-                      icon: const Icon(Icons.movie_filter_outlined),
-                      label: const Text('Browse library'),
-                    ),
-                    FilledButton.tonalIcon(
-                      onPressed: () => controller.selectTab(3),
-                      icon: const Icon(Icons.auto_awesome_rounded),
-                      label: const Text('Open Autopilot'),
-                    ),
-                  ],
-                ),
-                SectionHeader(
-                  title: 'Recent activity',
-                  subtitle: 'The latest server decisions and outcomes',
-                  trailing: TextButton(
-                      onPressed: () => controller.selectTab(4),
-                      child: const Text('All events')),
-                ),
-                SurfaceCard(
-                  padding: const EdgeInsets.symmetric(vertical: 4),
-                  child: events.isEmpty
-                      ? const Padding(
-                          padding: EdgeInsets.all(18),
-                          child: Text('No events have been recorded yet.',
-                              style: TextStyle(color: ByteSqueezeColors.muted)))
-                      : Column(
-                          children: events.take(5).map((row) {
+                if (controller.showSecondaryUi) ...[
+                  const SectionHeader(
+                      title: 'Quick controls',
+                      subtitle: 'Safe remote actions; encoding remains on TSD'),
+                  Wrap(
+                    spacing: 10,
+                    runSpacing: 10,
+                    children: [
+                      FilledButton.tonalIcon(
+                        onPressed: controller.canControl
+                            ? () => _run(context,
+                                () => controller.setQueuePaused(!paused))
+                            : null,
+                        icon: Icon(paused
+                            ? Icons.play_arrow_rounded
+                            : Icons.pause_rounded),
+                        label: Text(paused ? 'Resume queue' : 'Pause queue'),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: () => controller.selectTab(1),
+                        icon: const Icon(Icons.movie_filter_outlined),
+                        label: const Text('Browse library'),
+                      ),
+                      FilledButton.tonalIcon(
+                        onPressed: () => controller.selectTab(3),
+                        icon: const Icon(Icons.auto_awesome_rounded),
+                        label: const Text('Open Autopilot'),
+                      ),
+                    ],
+                  ),
+                ],
+                if (controller.statsForNerds) ...[
+                  SectionHeader(
+                    title: 'Recent activity',
+                    subtitle: 'The latest server decisions and outcomes',
+                    trailing: TextButton(
+                        onPressed: () => controller.selectTab(4),
+                        child: const Text('All events')),
+                  ),
+                  SurfaceCard(
+                    padding: const EdgeInsets.symmetric(vertical: 4),
+                    child: events.isEmpty
+                        ? const Padding(
+                            padding: EdgeInsets.all(18),
+                            child: Text('No events have been recorded yet.',
+                                style: TextStyle(
+                                    color: ByteSqueezeColors.muted)))
+                        : Column(
+                            children: events.take(5).map((row) {
                             final event = asMap(row);
                             final level = '${event['level'] ?? 'info'}';
                             final color = level == 'error'
@@ -190,9 +194,10 @@ class DashboardScreen extends StatelessWidget {
                                   style: const TextStyle(
                                       color: ByteSqueezeColors.muted)),
                             );
-                          }).toList(),
-                        ),
-                ),
+                            }).toList(),
+                          ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -302,11 +307,13 @@ class _Hero extends StatelessWidget {
                         ? Icons.pause_circle_outline_rounded
                         : Icons.play_circle_outline_rounded,
                   ),
-                  StatusPill(
-                    label: '$hardwareLimit GPU slot${hardwareLimit == 1 ? '' : 's'}',
-                    color: ByteSqueezeColors.blue,
-                    icon: Icons.developer_board_rounded,
-                  ),
+                  if (controller.statsForNerds)
+                    StatusPill(
+                      label:
+                          '$hardwareLimit GPU slot${hardwareLimit == 1 ? '' : 's'}',
+                      color: ByteSqueezeColors.blue,
+                      icon: Icons.developer_board_rounded,
+                    ),
                   StatusPill(
                     label: autoEnabled
                         ? 'Autopilot ${autopilot['mode'] ?? 'observe'}'
@@ -316,10 +323,11 @@ class _Hero extends StatelessWidget {
                         : ByteSqueezeColors.muted,
                     icon: Icons.auto_awesome_rounded,
                   ),
-                  StatusPill(
-                      label: controller.serverLabel,
-                      color: ByteSqueezeColors.blue,
-                      icon: Icons.dns_outlined),
+                  if (controller.statsForNerds)
+                    StatusPill(
+                        label: controller.serverLabel,
+                        color: ByteSqueezeColors.blue,
+                        icon: Icons.dns_outlined),
                 ],
               ),
             ],

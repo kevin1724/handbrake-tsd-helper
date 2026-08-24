@@ -21,6 +21,8 @@ class AppController extends ChangeNotifier {
   ServerSession? session;
   String interfaceVersion = 'v3';
   String interfaceDensity = 'comfortable';
+  bool showSecondaryUi = false;
+  bool statsForNerds = false;
 
   Map<String, dynamic> dashboard = {};
   Map<String, dynamic> jobs = {};
@@ -46,6 +48,8 @@ class AppController extends ChangeNotifier {
     notifyListeners();
     interfaceVersion = await store.loadInterfaceVersion();
     interfaceDensity = await store.loadInterfaceDensity();
+    showSecondaryUi = await store.loadShowSecondaryUi();
+    statsForNerds = await store.loadStatsForNerds();
     session = await store.load();
     api.session = session;
     if (session != null) {
@@ -311,6 +315,18 @@ class AppController extends ChangeNotifier {
     notifyListeners();
   }
 
+  Future<void> setShowSecondaryUi(bool value) async {
+    showSecondaryUi = value;
+    await store.saveUiVisibility(showSecondaryUi: value);
+    notifyListeners();
+  }
+
+  Future<void> setStatsForNerds(bool value) async {
+    statsForNerds = value;
+    await store.saveUiVisibility(statsForNerds: value);
+    notifyListeners();
+  }
+
   Future<void> nodeAction(
     String nodeId,
     String action, {
@@ -392,6 +408,124 @@ class AppController extends ChangeNotifier {
         },
         timeout: const Duration(minutes: 2));
     await refreshJobsAndDashboard();
+  }
+
+  Future<Map<String, dynamic>> planSizeWizard(
+    String path, {
+    bool smartStart = false,
+    Map<String, dynamic>? options,
+    String smartCandidateId = '',
+  }) async {
+    if (path.isEmpty) {
+      throw const ApiFailure('No media file is available for Size Wizard.');
+    }
+    if (demoMode) {
+      return <String, dynamic>{
+        'ok': true,
+        'smart_start': smartStart,
+        'smart_candidate_id': smartStart ? 'balanced' : 'manual',
+        'smart_candidate_name':
+            smartStart ? 'Learned balanced plan' : 'Custom Size Wizard plan',
+        'learned_defaults': {'sample_count': 4, 'confidence': .82},
+        'learning': {'feedback_count': 4, 'automation_ready': true},
+        'plan': {
+          'src': path,
+          'preset': '1080',
+          'probe': {
+            'width': 1920,
+            'height': 1080,
+            'fps': 23.976,
+            'duration_sec': 6480,
+            'source_size_bytes': 8589934592,
+            'is_hdr': false,
+          },
+          'options': {
+            'target_size_auto': true,
+            'target_size_value': 5.0,
+            'target_size_unit': 'GB',
+            'resolution_mode': 'keep',
+            'video_codec': 'h265',
+            'encoder_family': 'qsv',
+            'bit_depth': '10',
+            'quality': 'balanced',
+            'encoder_speed': 'auto',
+            'audio_mode': 'copy',
+            'audio_tracks': 'all',
+            'subtitle_mode': 'all',
+            'framerate_mode': 'same',
+            ...?options,
+          },
+          'inputs': {'target_mb': 5120.0},
+          'estimates': {
+            'encoder': 'qsv_h265_10bit',
+            'encoder_label': 'Intel QSV H.265 10-bit',
+            'video_bitrate_kbps': 5850,
+            'output_resolution': {'width': 1920, 'height': 1080},
+            'eta_human': '28 minutes',
+            'quality_label': 'Good',
+          },
+        },
+      };
+    }
+    return api.post(
+      '/size_wizard/plan',
+      {
+        ...?options,
+        'src': path,
+        'preset': '${options?['preset'] ?? 'auto'}',
+        'smart_start': smartStart,
+        if (smartCandidateId.isNotEmpty)
+          'smart_candidate_id': smartCandidateId,
+      },
+      timeout: const Duration(minutes: 2),
+    );
+  }
+
+  Future<Map<String, dynamic>> queueSizeWizard(
+    String path,
+    Map<String, dynamic> options, {
+    String smartCandidateId = 'manual',
+    String mode = 'local',
+  }) async {
+    _requireControl();
+    if (path.isEmpty) {
+      throw const ApiFailure('No media file is available for Size Wizard.');
+    }
+    if (demoMode) {
+      final learning = _map(smartPresets['learning']);
+      learning['feedback_count'] =
+          ((learning['feedback_count'] as num?)?.toInt() ?? 0) + 1;
+      smartPresets['learning'] = learning;
+      notifyListeners();
+      return {
+        'ok': true,
+        'job_id': 'demo-size-wizard',
+        'learning_recorded': true,
+        'learning': learning,
+        'dispatch_mode': mode,
+      };
+    }
+    final value = await api.post(
+      '/size_wizard/queue',
+      {
+        ...options,
+        'src': path,
+        'preset': '${options['preset'] ?? 'auto'}',
+        'smart_candidate_id': smartCandidateId,
+        'mode': mode,
+      },
+      timeout: const Duration(minutes: 2),
+    );
+    final refreshed = await Future.wait([
+      api.get('/jobs'),
+      api.get('/dashboard'),
+      api.get('/smart_presets'),
+    ]);
+    jobs = refreshed[0];
+    dashboard = refreshed[1];
+    smartPresets = refreshed[2];
+    notifyListeners();
+    return value;
   }
 
   Future<Map<String, dynamic>> generateLibraryPreview(
