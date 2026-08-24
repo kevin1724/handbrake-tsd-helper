@@ -619,8 +619,18 @@
 
     .smart-inline-actions {
       display: flex;
+      flex-wrap: wrap;
       gap: 6px;
       min-width: 0;
+    }
+
+    .wizard-open-button {
+      border-color: rgba(77, 215, 231, 0.52);
+      color: #cffafe;
+    }
+
+    .smart-inline-actions .wizard-open-button {
+      flex: 1 1 112px;
     }
 
     .smart-inline-actions .smart-queue-button {
@@ -2247,12 +2257,16 @@
     }
 
     function openInWizard(path) {
+      if (!path) {
+        if (window.appToast) appToast("This library item has no source path.", "error");
+        return;
+      }
       try {
-        const handoff = JSON.stringify({ src: path, preset: "auto", saved_at: Date.now() });
+        const handoff = JSON.stringify({ src: path, preset: "auto", origin: "library", saved_at: Date.now() });
         sessionStorage.setItem("hbwiz_handoff", handoff);
         localStorage.setItem("hbwiz_last_handoff", handoff);
       } catch (e) {}
-      window.location.assign("/size_wizard?src=" + encodeURIComponent(path) + "&preset=auto");
+      window.location.assign("/size_wizard?src=" + encodeURIComponent(path) + "&preset=auto&from=library");
     }
 
     function makeMovieCard(item) {
@@ -2300,6 +2314,13 @@
 
       const actions = document.createElement("div");
       actions.className = "beta-card-actions smart-inline-actions";
+      const wizard = document.createElement("button");
+      wizard.type = "button";
+      wizard.className = "wizard-open-button";
+      wizard.textContent = "Size Wizard";
+      wizard.setAttribute("aria-label", `Open ${item.title || "movie"} in Size Wizard`);
+      wizard.onclick = () => openInWizard(item.path);
+      actions.appendChild(wizard);
       const queue = document.createElement("button");
       queue.type = "button";
       queue.className = "smart-queue-button";
@@ -2358,6 +2379,13 @@
 
       const actions = document.createElement("div");
       actions.className = "episode-actions";
+      const wizard = document.createElement("button");
+      wizard.type = "button";
+      wizard.className = "wizard-open-button";
+      wizard.textContent = "Size Wizard";
+      wizard.setAttribute("aria-label", `Open ${episodeLabel(ep)} in Size Wizard`);
+      wizard.onclick = () => openInWizard(ep.path);
+      actions.appendChild(wizard);
       const queue = document.createElement("button");
       queue.type = "button";
       queue.className = "smart-queue-button";

@@ -34,6 +34,7 @@ from webui.app.smart_presets import (  # noqa: E402
     SMART_PRESETS_FILE,
     candidate_learning,
     feedback_context,
+    learned_plan_defaults,
     record_feedback,
 )
 
@@ -80,7 +81,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.18.0")
+        self.assertEqual(status.get_json()["release"], "3.19.0")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -255,6 +256,9 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertIn(b'data-library-view="movies"', library_page.data)
         self.assertIn(b'data-library-view="shows"', library_page.data)
         self.assertIn(b'data-mobile-view="movies"', library_page.data)
+        self.assertIn(b'wizard.onclick = () => openInWizard(item.path)', library_page.data)
+        self.assertIn(b'wizard.onclick = () => openInWizard(ep.path)', library_page.data)
+        self.assertIn(b'&from=library', library_page.data)
 
         v3_css = self.client.get("/static/v3.css")
         self.assertEqual(v3_css.status_code, 200)
@@ -273,6 +277,200 @@ class ApiRouteSmokeTests(unittest.TestCase):
         wizard_page = self.client.get("/size_wizard?ui=v3")
         self.assertEqual(wizard_page.status_code, 200)
         self.assertIn(b'href="/size_wizard"', wizard_page.data)
+
+    def test_size_wizard_queue_records_an_approved_learning_plan(self):
+        media_path = os.path.join(TEST_MEDIA, "Wizard.Learning.Movie.2026.mkv")
+        plan = {
+            "src": media_path,
+            "preset": "1080",
+            "extra_args": ["--encoder", "x265_10bit"],
+            "probe": {
+                "source_type": "movie",
+                "source_size_bytes": 8 * 1024**3,
+                "width": 1920,
+                "height": 1080,
+                "is_hdr": False,
+            },
+            "options": {
+                "ai_goal": "quality",
+                "video_codec": "h265",
+                "encoder_family": "software",
+                "bit_depth": "10",
+                "quality": "high",
+                "encoder_speed": "slow",
+                "resolution_mode": "keep",
+                "audio_mode": "copy",
+                "subtitle_mode": "all",
+            },
+            "inputs": {"target_mb": 4096},
+            "estimates": {
+                "encoder": "x265_10bit",
+                "video_bitrate_kbps": 7000,
+                "output_resolution": {"width": 1920, "height": 1080},
+            },
+        }
+        learned = {"feedback_count": 1, "automation_ready": False}
+        with (
+            patch.object(app_routes, "_wizard_plan", return_value=plan),
+            patch.object(app_routes, "list_jobs_for_api", return_value=[]),
+            patch.object(app_routes, "create_job", return_value="wizard-learning-job") as create,
+            patch.object(
+                app_routes,
+                "record_smart_preset_feedback",
+                return_value={"learning": learned, "feedback": {"id": "feedback-1"}},
+            ) as record,
+        ):
+            response = self.client.post(
+                "/encode_wizard",
+                json={"src": media_path, "smart_profile_id": "default", "smart_candidate_id": "detail"},
+            )
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertTrue(payload["learning_recorded"])
+        self.assertEqual(payload["learning"], learned)
+        context = record.call_args.args[0]
+        self.assertEqual(context["candidate_id"], "detail")
+        self.assertEqual(context["features"]["quality"], "high")
+        self.assertEqual(context["features"]["bit_depth"], "10")
+        self.assertEqual(record.call_args.args[1:3], ("approve", "looks_good"))
+        self.assertEqual(record.call_args.kwargs["origin"], "wizard_queue")
+        self.assertEqual(record.call_args.kwargs["job_id"], "wizard-learning-job")
+        metadata = create.call_args.kwargs["encode_metadata"]
+        self.assertTrue(metadata["smart_preset"])
+        self.assertEqual(metadata["automation_source"], "size_wizard")
+        self.assertEqual(metadata["smart_feedback_context"], context)
+        self.assertFalse(create.call_args.kwargs["preset_adaptive"])
+
+        with (
+            patch.object(app_routes, "_wizard_plan", return_value=plan),
+            patch.object(
+                app_routes,
+                "list_jobs_for_api",
+                return_value=[{"id": "wizard-learning-job", "src": media_path, "status": "queued"}],
+            ),
+            patch.object(app_routes, "create_job", return_value="wizard-learning-job"),
+            patch.object(app_routes, "record_smart_preset_feedback") as duplicate_record,
+        ):
+            duplicate = self.client.post("/encode_wizard", json={"src": media_path})
+        self.assertEqual(duplicate.status_code, 200)
+        self.assertFalse(duplicate.get_json()["learning_recorded"])
+        duplicate_record.assert_not_called()
+
+    def test_queued_wizard_preferences_are_contextual_smart_defaults(self):
+        hdr_context = {
+            "source": {"kind": "show", "hdr": True, "resolution": "4k"},
+            "features": {
+                "goal": "quality",
+                "codec": "h265",
+                "encoder_family": "qsv",
+                "bit_depth": "10",
+                "quality": "high",
+                "speed": "auto",
+                "output_resolution": "4k",
+                "resolution_mode": "keep",
+                "target_ratio": 0.42,
+                "audio_strategy": "copy",
+                "subtitle_mode": "all",
+            },
+        }
+        sdr_context = {
+            "source": {"kind": "show", "hdr": False, "resolution": "4k"},
+            "features": {
+                "goal": "small",
+                "codec": "av1",
+                "encoder_family": "software",
+                "target_ratio": 0.18,
+            },
+        }
+        state = {
+            "profile": {"minimum_feedback": 2},
+            "feedback": [
+                {"verdict": "approve", "origin": "wizard_queue", "context": hdr_context},
+                {"verdict": "approve", "origin": "wizard_queue", "context": sdr_context},
+            ],
+        }
+        learned = learned_plan_defaults(
+            {"source_type": "show", "is_hdr": True, "width": 3840, "height": 2160},
+            state,
+        )
+        self.assertEqual(learned["sample_count"], 1)
+        self.assertEqual(learned["codec"], "h265")
+        self.assertEqual(learned["encoder_family"], "qsv")
+        self.assertEqual(learned["bit_depth"], "10")
+        self.assertAlmostEqual(learned["target_ratio"], 0.42)
+
+    def test_approved_wizard_queue_drives_the_next_matching_smart_plan(self):
+        try:
+            os.remove(SMART_PRESETS_FILE)
+        except FileNotFoundError:
+            pass
+
+        media_path = os.path.join(TEST_MEDIA, "Learned.Preference.Movie.2026.mkv")
+        with open(media_path, "wb") as handle:
+            handle.write(b"0" * 1024 * 1024)
+        approved_plan = {
+            "src": media_path,
+            "preset": "1080",
+            "probe": {
+                "source_type": "movie",
+                "source_size_bytes": 1024 * 1024,
+                "width": 1920,
+                "height": 1080,
+                "is_hdr": False,
+            },
+            "options": {
+                "ai_goal": "quality",
+                "video_codec": "h264",
+                "encoder_family": "software",
+                "bit_depth": "8",
+                "quality": "high",
+                "encoder_speed": "slow",
+                "resolution_mode": "keep",
+                "audio_mode": "copy",
+                "subtitle_mode": "all",
+            },
+            "inputs": {"target_mb": 0.65},
+            "estimates": {
+                "output_resolution": {"width": 1920, "height": 1080},
+                "video_bitrate_kbps": 5000,
+                "encoder": "x264",
+                "quality_code": "good",
+            },
+        }
+        record_feedback(
+            feedback_context(approved_plan, "manual"),
+            "approve",
+            "looks_good",
+            origin="wizard_queue",
+            job_id="learned-wizard-job",
+        )
+        probe = {
+            "duration_sec": 3600.0,
+            "width": 1920,
+            "height": 1080,
+            "fps": 23.976,
+            "is_hdr": False,
+            "source_type": "movie",
+        }
+        with (
+            patch("webui.app.routes._probe_media", return_value=probe),
+            patch(
+                "webui.app.routes.analyze_episode_scenes",
+                return_value={"target_scale": 1.0, "fingerprint": "learned-preference"},
+            ),
+        ):
+            recommendation = app_routes._smart_recommendation(
+                {"src": media_path, "preset": "auto"}
+            )
+
+        self.assertEqual(recommendation["learned_defaults"]["sample_count"], 1)
+        options = recommendation["selected_plan"]["options"]
+        self.assertEqual(options["video_codec"], "h264")
+        self.assertEqual(options["encoder_family"], "software")
+        self.assertEqual(options["bit_depth"], "8")
+        self.assertEqual(options["quality"], "high")
+        self.assertEqual(options["encoder_speed"], "slow")
+        self.assertEqual(options["resolution_mode"], "keep")
 
     def test_tracked_show_saves_one_profile_and_independent_episode_plans(self):
         episode_a = os.path.join(TEST_MEDIA, "Tracked.Show.S01E01.mkv")
@@ -2246,7 +2444,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.18.0")
+        self.assertEqual(dashboard_payload["release"], "3.19.0")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

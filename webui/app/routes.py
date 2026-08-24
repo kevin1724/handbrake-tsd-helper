@@ -138,6 +138,7 @@ from .smart_presets import (
     candidate_learning as smart_candidate_learning,
     feedback_context as smart_feedback_context,
     learning_status as smart_learning_status,
+    learned_plan_defaults as smart_learned_plan_defaults,
     load_state as load_smart_preset_state,
     normalize_profile as normalize_smart_profile,
     public_state as public_smart_preset_state,
@@ -2262,7 +2263,14 @@ def _wizard_build_extra_args(options: dict, video_kbps: float, out_w: int, out_h
     return args
 
 
-def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False, preview: bool = False) -> dict:
+def _wizard_plan(
+    data: dict,
+    *,
+    probe_func=_probe_media,
+    for_queue: bool = False,
+    preview: bool = False,
+    learned_defaults: dict | None = None,
+) -> dict:
     src = (data.get("src") or "").strip()
     if not src or not os.path.isfile(src):
         raise ValueError("invalid src")
@@ -2330,6 +2338,26 @@ def _wizard_plan(data: dict, *, probe_func=_probe_media, for_queue: bool = False
         effective_preset,
         bool(settings.get("qsv_device_available", False)),
     )
+    # Smart recommendations may start from a plan the user explicitly queued
+    # in Size Wizard. Reapply the exact quality/speed/depth preferences after
+    # the general AI heuristic has run, but keep format-safety rules (HDR and
+    # H.264 bit-depth constraints) authoritative.
+    if options.get("ai_mode") and isinstance(learned_defaults, dict):
+        learned_quality = str(learned_defaults.get("quality") or "")
+        if learned_quality in WIZARD_QUALITIES:
+            options["quality"] = learned_quality
+        learned_speed = str(learned_defaults.get("speed") or "")
+        if learned_speed in WIZARD_ENCODER_SPEEDS:
+            options["encoder_speed"] = learned_speed
+        learned_depth = str(learned_defaults.get("bit_depth") or "")
+        learned_codec = str(options.get("video_codec") or "")
+        if learned_depth in WIZARD_BIT_DEPTHS:
+            if info.get("is_hdr"):
+                options["bit_depth"] = "10"
+            elif learned_codec == "h264":
+                options["bit_depth"] = "8"
+            else:
+                options["bit_depth"] = learned_depth
     hdr_format = str(info.get("hdr_format") or ("hdr10" if info.get("is_hdr") else "sdr")).lower()
     if hdr_format in {"hdr10plus", "dolby_vision"} and options.get("encoder_family") in {
         "qsv",
@@ -2936,9 +2964,66 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
     # its own candidates. A season/show request calls this function again for
     # every path, so no HDR or scene characteristic can leak across episodes.
     episode_probe = dict(_probe_media(src) or {})
+    if not episode_probe.get("source_type"):
+        episode_probe["source_type"] = _wizard_detect_source_type(
+            src,
+            episode_probe.get("duration_sec"),
+        ).get("kind")
     probe_func = lambda _path: dict(episode_probe)
+    learned_defaults = smart_learned_plan_defaults(episode_probe, state)
+    if learned_defaults.get("sample_count"):
+        if learned_defaults.get("goal") and not tuning.get("goal"):
+            profile["goal"] = learned_defaults["goal"]
+        if learned_defaults.get("encoder_family") in {"qsv", "software"} and not tuning.get("hardware"):
+            profile["hardware"] = learned_defaults["encoder_family"]
+        learned_profile_audio = str(learned_defaults.get("audio_strategy") or "")
+        if learned_profile_audio == "eac3":
+            learned_profile_audio = "eac3_surround"
+        if learned_profile_audio in {"copy", "eac3_surround"} and not tuning.get("audio_strategy"):
+            profile["audio_strategy"] = learned_profile_audio
 
     base_options = _smart_profile_options(data, profile)
+    if learned_defaults.get("sample_count"):
+        learned_codec = str(learned_defaults.get("codec") or "")
+        if learned_codec in WIZARD_VIDEO_CODECS:
+            base_options["ai_codec_preference"] = learned_codec
+            base_options["video_codec"] = learned_codec
+        learned_family = str(learned_defaults.get("encoder_family") or "")
+        if learned_family in WIZARD_ENCODER_FAMILIES and not tuning.get("hardware"):
+            base_options["ai_hardware"] = learned_family
+            base_options["encoder_family"] = learned_family
+        learned_depth = str(learned_defaults.get("bit_depth") or "")
+        if learned_depth in WIZARD_BIT_DEPTHS:
+            base_options["bit_depth"] = learned_depth
+        learned_quality = str(learned_defaults.get("quality") or "")
+        if learned_quality in WIZARD_QUALITIES:
+            base_options["quality"] = learned_quality
+        learned_speed = str(learned_defaults.get("speed") or "")
+        if learned_speed in WIZARD_ENCODER_SPEEDS:
+            base_options["encoder_speed"] = learned_speed
+        if not profile.get("never_downscale", True) and not tuning.get("resolution_mode"):
+            learned_resolution = str(learned_defaults.get("resolution_mode") or "")
+            if learned_resolution in WIZARD_RESOLUTION_MODES:
+                base_options["resolution_mode"] = learned_resolution
+        if not profile.get("never_transcode_audio", True) and not tuning.get("audio_strategy"):
+            learned_audio = str(learned_defaults.get("audio_strategy") or "")
+            if learned_audio in {"eac3", "eac3_surround"}:
+                base_options.update({"smart_audio_strategy": "eac3_surround", "audio_mode": "eac3", "audio_bitrate": "640"})
+        if not profile.get("keep_all_subtitle_languages", True) and not tuning.get("subtitle_mode"):
+            learned_subtitle_mode = str(learned_defaults.get("subtitle_mode") or "")
+            if learned_subtitle_mode in WIZARD_SUBTITLE_MODES:
+                base_options["subtitle_mode"] = learned_subtitle_mode
+                base_options["ai_subtitle_scope"] = learned_subtitle_mode
+                base_options["smart_subtitle_strategy"] = learned_subtitle_mode
+        try:
+            learned_ratio = float(learned_defaults.get("target_ratio") or 0.0)
+            source_bytes = float(episode_probe.get("source_size_bytes") or os.path.getsize(src))
+        except (TypeError, ValueError, OSError):
+            learned_ratio = source_bytes = 0.0
+        if learned_ratio > 0 and source_bytes > 0:
+            base_options["target_size_auto"] = False
+            base_options["target_size_value"] = round(source_bytes * learned_ratio / (1024.0 * 1024.0), 1)
+            base_options["target_size_unit"] = "MB"
     if tuning.get("resolution_mode"):
         base_options["resolution_mode"] = tuning["resolution_mode"]
     if tuning.get("subtitle_mode"):
@@ -2946,7 +3031,12 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
         base_options["ai_subtitle_scope"] = tuning["subtitle_mode"]
         base_options["smart_subtitle_strategy"] = tuning["subtitle_mode"]
     base_options = _enforce_smart_guardrails(base_options)
-    baseline = _wizard_plan({**data, **base_options}, probe_func=probe_func, preview=False)
+    baseline = _wizard_plan(
+        {**data, **base_options},
+        probe_func=probe_func,
+        preview=False,
+        learned_defaults=learned_defaults,
+    )
     scene_analysis = analyze_episode_scenes(
         src,
         baseline.get("probe") or episode_probe,
@@ -2980,12 +3070,22 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
             }
         )
         try:
-            plan = _wizard_plan({**data, **candidate_options}, probe_func=probe_func, preview=False)
+            plan = _wizard_plan(
+                {**data, **candidate_options},
+                probe_func=probe_func,
+                preview=False,
+                learned_defaults=learned_defaults,
+            )
             candidate_floor = _smart_episode_quality_floor(plan)
             planned_target = float((plan.get("inputs") or {}).get("target_mb") or 0.0)
             if planned_target + 0.05 < float(candidate_floor.get("target_mb") or 0.0):
                 candidate_options["target_size_value"] = float(candidate_floor["target_mb"])
-                plan = _wizard_plan({**data, **candidate_options}, probe_func=probe_func, preview=False)
+                plan = _wizard_plan(
+                    {**data, **candidate_options},
+                    probe_func=probe_func,
+                    preview=False,
+                    learned_defaults=learned_defaults,
+                )
                 candidate_floor = _smart_episode_quality_floor(plan)
             plan["quality_floor"] = candidate_floor
             plan["estimates"]["smart_quality_floor_mb"] = candidate_floor.get("target_mb")
@@ -3068,6 +3168,7 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
         "episode_plan": episode_plan,
         "scene_analysis": scene_analysis,
         "quality_floor": selected_quality_floor,
+        "learned_defaults": learned_defaults,
         "selected_plan": selected_plan,
     }
 
@@ -3228,7 +3329,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.18.0"
+APP_RELEASE = "3.19.0"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -5612,8 +5713,8 @@ def _autopilot_readiness(settings: dict | None = None) -> dict:
     add(
         "learning",
         bool(learning.get("automation_ready")),
-        "Preview training",
-        learning.get("message") or "Review accurate comparison previews before enabling Manage mode.",
+        "Preference learning",
+        learning.get("message") or "Approve accurate previews or queue Size Wizard plans before enabling Manage mode.",
         required=True,
     )
     add("stability", bool(settings.get("beta_auto_scan_file_stability_enabled", True)), "Write protection", "New files must become stable before they can be queued." if settings.get("beta_auto_scan_file_stability_enabled", True) else "Enable the file-stability window to avoid encoding files that are still being copied.")
@@ -5635,7 +5736,7 @@ def _autopilot_completed_feedback_jobs(limit: int = 24) -> list[dict]:
             job.get("status") != "done"
             or not job.get("smart_preset")
             or not isinstance(context, dict)
-            or str(job.get("automation_source") or "") not in {"autopilot", "smart_preset"}
+            or str(job.get("automation_source") or "") not in {"autopilot", "smart_preset", "size_wizard"}
         ):
             continue
         src = str(job.get("src") or "")
@@ -10055,7 +10156,7 @@ def register_routes(app):
 
     @app.route("/encode_wizard", methods=["POST"])
     def encode_wizard():
-        """Queue an encode with Size Wizard options."""
+        """Queue a Wizard plan and teach Smart Presets from that approval."""
         data = request.get_json(force=True)
 
         try:
@@ -10065,6 +10166,17 @@ def register_routes(app):
         except Exception as e:
             return jsonify(error=str(e)), 500
 
+        learning_context = smart_feedback_context(
+            plan,
+            str(data.get("smart_candidate_id") or "manual"),
+        )
+        active_before = {
+            str(row.get("id") or "")
+            for row in list_jobs_for_api()
+            if str(row.get("src") or "") == str(plan["src"])
+            and str(row.get("status") or "") in {"queued", "dispatching", "running", "waiting_to_upload"}
+        }
+        preset_preferences = dict(plan.get("options") or {})
         job_id = create_job(
             plan["src"],
             plan["preset"],
@@ -10078,13 +10190,52 @@ def register_routes(app):
                 "audio_strategy": plan["options"].get("smart_audio_strategy") or plan["options"].get("audio_mode"),
                 "audio_languages": plan["options"].get("audio_languages"),
                 "subtitle_languages": plan["options"].get("subtitle_languages"),
+                "smart_preset": True,
+                "smart_profile_id": str(data.get("smart_profile_id") or "default"),
+                "smart_candidate_id": str(data.get("smart_candidate_id") or "manual"),
+                "smart_feedback_context": learning_context,
+                "automation_source": "size_wizard",
+                "preset_selection": "wizard",
+                "preset_adaptive": False,
+                "preset_preferences": preset_preferences,
             },
+            preset_selection="wizard",
+            preset_adaptive=False,
+            preset_preferences=preset_preferences,
         )
+        learning_result = None
+        learning_recorded = bool(job_id and str(job_id) not in active_before)
+        if learning_recorded:
+            try:
+                learning_result = record_smart_preset_feedback(
+                    learning_context,
+                    "approve",
+                    "looks_good",
+                    origin="wizard_queue",
+                    job_id=str(job_id),
+                )
+                log_event(
+                    "wizard_queue_learning",
+                    f"Learned the approved Size Wizard plan for {os.path.basename(str(plan['src']))}.",
+                    level="info",
+                    job_id=str(job_id),
+                    src=str(plan["src"]),
+                    extra={
+                        "candidate_id": str(data.get("smart_candidate_id") or "manual"),
+                        "encoder": str(plan.get("estimates", {}).get("encoder") or ""),
+                        "target_mb": round(float(plan.get("inputs", {}).get("target_mb") or 0.0), 1),
+                    },
+                )
+            except Exception as exc:
+                learning_recorded = False
+                print(f"[WARN] Size Wizard queued job {job_id}, but Smart learning could not be saved: {exc}", flush=True)
         return jsonify(
             job_id=job_id,
             preset=plan["preset"],
             extra_args=plan["extra_args"],
             estimates=plan["estimates"],
+            learning_recorded=learning_recorded,
+            learning=(learning_result or {}).get("learning") or smart_learning_status(),
         )
 
     # ------------- Wizard preview helpers -------------

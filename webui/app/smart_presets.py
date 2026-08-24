@@ -312,13 +312,17 @@ def feedback_context(plan: dict, candidate_id: str = "manual") -> dict:
             "goal": str(options.get("ai_goal") or "balanced")[:20],
             "codec": str(options.get("video_codec") or "")[:20],
             "encoder_family": str(options.get("encoder_family") or "")[:20],
+            "bit_depth": str(options.get("bit_depth") or "")[:8],
             "quality": str(options.get("quality") or "")[:20],
             "speed": str(options.get("encoder_speed") or "")[:20],
             "output_resolution": resolution_bucket(output.get("width"), output.get("height")),
+            "resolution_mode": str(options.get("resolution_mode") or "")[:20],
             "target_ratio": round(target_bytes / float(source_bytes), 4),
             "audio_strategy": str(options.get("smart_audio_strategy") or options.get("audio_mode") or "")[:24],
             "audio_languages": _language_key(options.get("audio_languages")),
+            "subtitle_mode": str(options.get("subtitle_mode") or "")[:20],
             "subtitle_languages": _language_key(options.get("subtitle_languages")),
+            "framerate_mode": str(options.get("framerate_mode") or "")[:12],
         },
         "plan": {
             "preset": str(plan.get("preset") or "")[:20],
@@ -328,6 +332,93 @@ def feedback_context(plan: dict, candidate_id: str = "manual") -> dict:
             "quality_code": str(estimates.get("quality_code") or "")[:20],
         },
     }
+
+
+def learned_plan_defaults(probe: dict, state: dict | None = None) -> dict:
+    """Summarize approved choices from genuinely similar sources.
+
+    This feeds the next Smart recommendation without weakening HDR/FPS/audio
+    guardrails. Queueing a Size Wizard plan is an explicit approval of that
+    configuration, while a later post-encode rejection can still correct it.
+    """
+    state = state if isinstance(state, dict) else load_state()
+    probe = probe if isinstance(probe, dict) else {}
+    source = {
+        "kind": str(probe.get("source_type") or probe.get("kind") or "unknown")[:20],
+        "hdr": bool(probe.get("is_hdr", probe.get("hdr", False))),
+        "resolution": resolution_bucket(probe.get("width"), probe.get("height")),
+    }
+    categorical = {
+        key: {}
+        for key in (
+            "goal",
+            "codec",
+            "encoder_family",
+            "bit_depth",
+            "quality",
+            "speed",
+            "output_resolution",
+            "resolution_mode",
+            "audio_strategy",
+            "audio_languages",
+            "subtitle_mode",
+            "subtitle_languages",
+        )
+    }
+    ratio_total = 0.0
+    ratio_weight = 0.0
+    total_weight = 0.0
+    samples = 0
+
+    for row in reversed((state.get("feedback") or [])[-250:]):
+        if not isinstance(row, dict) or row.get("verdict") != "approve":
+            continue
+        context = row.get("context") if isinstance(row.get("context"), dict) else {}
+        saved_source = context.get("source") if isinstance(context.get("source"), dict) else {}
+        saved_features = context.get("features") if isinstance(context.get("features"), dict) else {}
+        # Never transfer SDR choices to HDR content (or the reverse), and do
+        # not make a movie preference the default for episodic material.
+        if bool(saved_source.get("hdr")) != source["hdr"]:
+            continue
+        saved_kind = str(saved_source.get("kind") or "unknown")
+        if source["kind"] != "unknown" and saved_kind != "unknown" and saved_kind != source["kind"]:
+            continue
+        weight = 0.45
+        if saved_kind == source["kind"]:
+            weight += 0.20
+        if str(saved_source.get("resolution") or "") == source["resolution"]:
+            weight += 0.35
+        if str(row.get("origin") or "") == "wizard_queue":
+            weight *= 1.12
+        total_weight += weight
+        samples += 1
+
+        for key, votes in categorical.items():
+            value = str(saved_features.get(key) or "").strip().lower()
+            if value:
+                votes[value] = float(votes.get(value) or 0.0) + weight
+        try:
+            ratio = float(saved_features.get("target_ratio") or 0.0)
+        except (TypeError, ValueError):
+            ratio = 0.0
+        if 0.01 <= ratio <= 1.5:
+            ratio_total += ratio * weight
+            ratio_weight += weight
+
+    if not samples or total_weight <= 0:
+        return {"sample_count": 0, "confidence": 0.0, "source": source}
+
+    result = {
+        "sample_count": samples,
+        "confidence": round(min(1.0, total_weight / 3.0), 3),
+        "source": source,
+    }
+    for key, votes in categorical.items():
+        if votes:
+            result[key] = max(votes.items(), key=lambda item: item[1])[0]
+    if ratio_weight:
+        result["target_ratio"] = round(max(0.03, min(1.25, ratio_total / ratio_weight)), 4)
+    return result
 
 
 def _similarity(left: dict, right: dict) -> float:
@@ -438,7 +529,7 @@ def learning_status(state: dict | None = None) -> dict:
             "Learned automation is ready for familiar sources."
             if ready
             else (
-                f"Review {needed} more accurate preview{'s' if needed != 1 else ''} to unlock automation."
+                f"Approve {needed} more preview or queued Wizard plan{'s' if needed != 1 else ''} to unlock automation."
                 if needed
                 else "More consistent approvals are needed before automation unlocks."
             )

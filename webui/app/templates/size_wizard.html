@@ -1133,6 +1133,7 @@
         <div class="smart-learning-meter" aria-hidden="true"><div id="smartLearningFill"></div></div>
         <strong id="smartLearningSummary">Loading learning history…</strong>
       </div>
+      <div class="help-text">Queueing a Size Wizard plan counts as an approval. Smart Presets stores the codec, encoder, quality, size ratio, audio, subtitle, HDR, and source-resolution context so the next similar recommendation starts closer to your choices.</div>
       <div class="wizard-actions">
         <button id="smartBuildBtn" type="button" class="primary-btn">Build Smart Presets</button>
         <span id="smartPresetStatus" class="small status-text"></span>
@@ -2728,7 +2729,7 @@
       if (el("smartLearningFill")) el("smartLearningFill").style.width = `${progress}%`;
       if (el("smartLearningSummary")) {
         el("smartLearningSummary").textContent = learning.automation_ready
-          ? `Ready · ${count} reviewed previews · ${Math.round(Number(learning.approval_probability || 0) * 100)}% learned acceptance`
+          ? `Ready · ${count} learned decisions · ${Math.round(Number(learning.approval_probability || 0) * 100)}% learned acceptance`
           : (learning.message || `${needed} more reviews needed`);
       }
       const pill = el("smartReadyPill");
@@ -2736,7 +2737,7 @@
         pill.textContent = learning.automation_ready ? "Auto ready" : (learning.automation_enabled ? "Learning" : "Recommend only");
         pill.title = learning.automation_ready
           ? "Autopilot and Smart mode may now choose a learned preset automatically."
-          : "Automatic selection stays locked until enough consistent accurate-preview feedback is recorded.";
+          : "Automatic selection stays locked until enough consistent preview reviews or approved Wizard queues are recorded.";
       }
     }
 
@@ -3597,8 +3598,18 @@
         }, 15000);
         const data = await readJson(res);
         if (!res.ok) throw new Error(data.error || "Queue failed");
-        setQueueStatus(`Queued ${data.job_id || ""}`, "ok");
-        if (window.appToast) appToast("Wizard encode queued.", "success");
+        if (data.learning) renderSmartLearning(data.learning);
+        const learned = data.learning_recorded === true;
+        setQueueStatus(
+          learned
+            ? `Queued ${data.job_id || ""}. Smart Presets learned this approved plan.`
+            : `Queued ${data.job_id || ""}. This source was already active, so no duplicate learning was saved.`,
+          "ok"
+        );
+        if (window.appToast) appToast(
+          learned ? "Wizard encode queued and added to Smart learning." : "Wizard encode is already queued.",
+          "success"
+        );
         if (window.setAppStatus) setAppStatus("Idle", "idle");
         setTimeout(() => setQueueStatus(""), 3500);
       } catch (e) {
@@ -3722,7 +3733,7 @@
         applyAutoTargetForSource(srcQ);
         rememberWizardHandoff(srcQ, presetQ || el("preset").value);
         safeRemoveStorage(wizardSessionStorage, "hbwiz_handoff");
-        setStatus("sourceStatus", "Loaded from Jobs.", "ok");
+        setStatus("sourceStatus", qs("from") === "library" ? "Loaded from Library." : "Loaded in Size Wizard.", "ok");
       } else if (handoff && handoff.src) {
         el("src").value = handoff.src;
         if (handoff.preset) el("preset").value = handoff.preset;
