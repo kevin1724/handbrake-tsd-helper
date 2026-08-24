@@ -16,7 +16,7 @@ void main() {
 
     expect(find.text('ByteSqueeze'), findsOneWidget);
     expect(find.text('Media operations are ready.'), findsOneWidget);
-    expect(find.text('1 encoding now'), findsOneWidget);
+    expect(find.text('1 running'), findsOneWidget);
     expect(find.text('Library'), findsOneWidget);
     expect(find.text('Automate'), findsOneWidget);
     expect(find.text('More'), findsOneWidget);
@@ -246,7 +246,11 @@ void main() {
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('Show secondary controls'), 220,
         scrollable: find.byType(Scrollable).first);
+    await tester.ensureVisible(find.text('Show secondary controls'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Show secondary controls'));
+    await tester.ensureVisible(find.text('Stats for nerds'));
+    await tester.pumpAndSettle();
     await tester.tap(find.text('Stats for nerds'));
     await tester.pumpAndSettle();
 
@@ -288,6 +292,16 @@ void main() {
     expect(find.text('Size Wizard'), findsOneWidget);
     expect(find.textContaining('source FPS preserved'), findsOneWidget);
     expect(find.text('Queue this Wizard plan'), findsOneWidget);
+    final wizardScroll = find
+        .descendant(
+          of: find.byType(ListView).last,
+          matching: find.byType(Scrollable),
+        )
+        .first;
+    await tester.scrollUntilVisible(find.text('Queue destination'), 300,
+        scrollable: wizardScroll);
+    await tester.tap(find.text('Main controller'));
+    await tester.pumpAndSettle();
     expect(find.text('Next available node'), findsOneWidget);
   });
 }
