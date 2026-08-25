@@ -22,6 +22,32 @@ void main() {
     expect(find.text('More'), findsOneWidget);
   });
 
+  testWidgets('iPad layout keeps every app workspace available',
+      (tester) async {
+    tester.view.physicalSize = const Size(1180, 820);
+    tester.view.devicePixelRatio = 1;
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    final controller = AppController()..enterDemo();
+    await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+    await tester.pumpAndSettle();
+
+    expect(find.text('Overview'), findsOneWidget);
+    expect(find.text('Library'), findsOneWidget);
+    expect(find.text('Queue'), findsOneWidget);
+    expect(find.text('Autopilot'), findsOneWidget);
+    expect(find.text('Settings'), findsOneWidget);
+    expect(find.byType(NavigationBar), findsNothing);
+
+    await tester.tap(find.text('Library'));
+    await tester.pumpAndSettle();
+    expect(controller.selectedTab, 1);
+    expect(find.text('Preview, tune, then queue'), findsOneWidget);
+  });
+
   testWidgets('V3 command center exposes navigation and safe actions',
       (tester) async {
     final controller = AppController()..enterDemo();

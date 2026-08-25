@@ -16,8 +16,10 @@
 	<string>6.0</string>
 	<key>CFBundleName</key>
 	<string>ByteSqueeze</string>
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>ByteSqueeze connects to your HandBrake TSD Helper server on the local network.</string>
+	<string>ByteSqueeze connects to your media controller and linked encoding nodes on your local network.</string>
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
@@ -56,6 +58,8 @@
 	</dict>
 	<key>UIApplicationSupportsIndirectInputEvents</key>
 	<true/>
+	<key>UIUserInterfaceStyle</key>
+	<string>Dark</string>
 	<key>UILaunchStoryboardName</key>
 	<string>LaunchScreen</string>
 	<key>UIMainStoryboardFile</key>

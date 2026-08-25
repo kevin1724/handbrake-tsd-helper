@@ -7,8 +7,8 @@ jobs, tune automation, and watch node and storage health.
 
 ## Product direction
 
-- Android ships first from a Flutter codebase.
-- The same Dart UI, state, and API layers are used by the generated iOS target.
+- Android, iPhone, and iPad ship from one Flutter codebase.
+- The same Dart UI, state, API, Size Wizard, and queue controls run on every mobile platform.
 - The visual language is original to ByteSqueeze: deep navy surfaces, electric
   blue/cyan status accents, soft elevated cards, large poster art, and compact
   operational controls.
@@ -33,8 +33,8 @@ jobs, tune automation, and watch node and storage health.
    projected-output protection, calendar, workers, storage, events, and
    connection controls.
 
-Wide screens use a navigation rail while phones use bottom navigation. This
-keeps tablets and a future iPad build useful without creating a second UI.
+Wide screens use a navigation rail while phones use bottom navigation. iPad
+automatically gets the complete wide workspace without creating a second UI.
 
 ## Pairing
 
@@ -66,12 +66,14 @@ flutter build apk --release
 
 The first Android release uses package id `com.kevina1724.bytesqueeze`.
 
-## iOS port
+## iPhone and iPad
 
-The generated `ios/` target and complete AppIcon set are kept in the repository.
-Port work is limited to Apple signing, bundle registration and metadata, and
-physical-device testing. Networking, secure session storage, screens,
-responsive navigation, and business logic are shared with Android.
+The universal `ios/` target, privacy manifest, local-network permission,
+AppIcon set, iPhone/iPad orientations, and matching native launch screen are
+kept in the repository. GitHub Actions builds the Apple target on macOS for
+every relevant change. The manual TestFlight workflow signs and uploads the
+same application after Apple credentials are configured. See
+[`ios-testflight.md`](ios-testflight.md) for the complete setup.
 
 ## Mobile API v1
 

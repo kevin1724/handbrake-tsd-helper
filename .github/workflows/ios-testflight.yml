@@ -1,0 +1,224 @@
+name: Publish ByteSqueeze to TestFlight
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_number:
+        description: Optional unique App Store build number (defaults to this workflow run number)
+        required: false
+        type: string
+      release_notes:
+        description: What should testers verify in this build?
+        required: false
+        default: "Universal ByteSqueeze app for iPhone and iPad."
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bytesqueeze-testflight
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: Sign, build, and upload
+    runs-on: macos-15
+    timeout-minutes: 60
+    environment: testflight
+    env:
+      BUNDLE_ID: ${{ vars.IOS_BUNDLE_ID || 'com.kevina1724.bytesqueeze' }}
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Verify publishing configuration
+        shell: bash
+        env:
+          APPSTORE_ISSUER_ID: ${{ vars.APPSTORE_ISSUER_ID }}
+          APPSTORE_API_KEY_ID: ${{ vars.APPSTORE_API_KEY_ID }}
+          APPSTORE_API_PRIVATE_KEY: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          APPSTORE_CERTIFICATES_FILE_BASE64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          APPSTORE_CERTIFICATES_PASSWORD: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+        run: |
+          missing=()
+          for name in APPSTORE_ISSUER_ID APPSTORE_API_KEY_ID APPSTORE_API_PRIVATE_KEY APPSTORE_CERTIFICATES_FILE_BASE64 APPSTORE_CERTIFICATES_PASSWORD; do
+            if [[ -z "${!name}" ]]; then
+              missing+=("$name")
+            fi
+          done
+          if (( ${#missing[@]} )); then
+            printf '::error::Missing TestFlight variable/secret: %s\n' "${missing[*]}"
+            exit 1
+          fi
+          if [[ -z "$BUNDLE_ID" ]]; then
+            echo '::error::IOS_BUNDLE_ID cannot be empty.'
+            exit 1
+          fi
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          pub-cache: true
+
+      - name: Resolve dependencies
+        working-directory: mobile/bytesqueeze
+        run: flutter pub get
+
+      - name: Generate iPhone and iPad icons
+        working-directory: mobile/bytesqueeze
+        run: dart run flutter_launcher_icons
+
+      - name: Analyze and test
+        working-directory: mobile/bytesqueeze
+        run: |
+          flutter analyze
+          flutter test
+
+      - name: Apply the registered bundle identifier
+        working-directory: mobile/bytesqueeze
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+
+          project = Path("ios/Runner.xcodeproj/project.pbxproj")
+          source = project.read_text()
+          old = "PRODUCT_BUNDLE_IDENTIFIER = com.kevina1724.bytesqueeze;"
+          new = f"PRODUCT_BUNDLE_IDENTIFIER = {os.environ['BUNDLE_ID']};"
+          replacements = source.count(old)
+          if replacements != 3:
+              raise SystemExit(
+                  f"Expected three ByteSqueeze bundle ID settings, found {replacements}"
+              )
+          project.write_text(source.replace(old, new))
+          PY
+
+      - name: Import Apple Distribution certificate
+        uses: apple-actions/import-codesign-certs@v7
+        with:
+          p12-file-base64: ${{ secrets.APPSTORE_CERTIFICATES_FILE_BASE64 }}
+          p12-password: ${{ secrets.APPSTORE_CERTIFICATES_PASSWORD }}
+
+      - name: Download App Store provisioning profile
+        uses: apple-actions/download-provisioning-profiles@v6
+        with:
+          bundle-id: ${{ env.BUNDLE_ID }}
+          profile-type: IOS_APP_STORE
+          issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+
+      - name: Configure and verify distribution signing
+        id: signing
+        working-directory: mobile/bytesqueeze
+        shell: bash
+        run: |
+          profiles="$HOME/Library/MobileDevice/Provisioning Profiles"
+          profile_path="$(find "$profiles" -type f \( -name '*.mobileprovision' -o -name '*.provisionprofile' \) -print -quit)"
+          if [[ -z "$profile_path" ]]; then
+            echo '::error::No downloaded App Store provisioning profile was found.'
+            exit 1
+          fi
+
+          profile_plist="$RUNNER_TEMP/bytesqueeze-profile.plist"
+          security cms -D -i "$profile_path" > "$profile_plist"
+          profile_name="$(/usr/libexec/PlistBuddy -c 'Print :Name' "$profile_plist")"
+          team_id="$(/usr/libexec/PlistBuddy -c 'Print :TeamIdentifier:0' "$profile_plist")"
+          application_id="$(/usr/libexec/PlistBuddy -c 'Print :Entitlements:application-identifier' "$profile_plist")"
+          profile_bundle_id="${application_id#*.}"
+
+          if [[ "$profile_bundle_id" != "$BUNDLE_ID" ]]; then
+            echo "::error::Provisioning profile is for $profile_bundle_id, expected $BUNDLE_ID."
+            exit 1
+          fi
+
+          {
+            printf '\nDEVELOPMENT_TEAM = %s\n' "$team_id"
+            printf 'CODE_SIGN_STYLE = Manual\n'
+            printf 'CODE_SIGN_IDENTITY = Apple Distribution\n'
+            printf 'PROVISIONING_PROFILE_SPECIFIER = %s\n' "$profile_name"
+          } >> ios/Flutter/Release.xcconfig
+
+          export PROFILE_NAME="$profile_name"
+          export TEAM_ID="$team_id"
+          python3 - <<'PY'
+          import os
+          import plistlib
+          from pathlib import Path
+
+          options = {
+              "destination": "export",
+              "manageAppVersionAndBuildNumber": False,
+              "method": "app-store-connect",
+              "provisioningProfiles": {
+                  os.environ["BUNDLE_ID"]: os.environ["PROFILE_NAME"],
+              },
+              "signingCertificate": "Apple Distribution",
+              "signingStyle": "manual",
+              "stripSwiftSymbols": True,
+              "teamID": os.environ["TEAM_ID"],
+              "uploadSymbols": True,
+          }
+          path = Path(os.environ["RUNNER_TEMP"]) / "ByteSqueezeExportOptions.plist"
+          with path.open("wb") as stream:
+              plistlib.dump(options, stream)
+          PY
+
+          echo "team_id=$team_id" >> "$GITHUB_OUTPUT"
+          echo "profile_name=$profile_name" >> "$GITHUB_OUTPUT"
+          echo "export_options=$RUNNER_TEMP/ByteSqueezeExportOptions.plist" >> "$GITHUB_OUTPUT"
+          echo "Using Apple team $team_id and provisioning profile $profile_name"
+
+      - name: Build signed TestFlight IPA
+        id: package
+        working-directory: mobile/bytesqueeze
+        shell: bash
+        env:
+          INPUT_BUILD_NUMBER: ${{ inputs.build_number }}
+          EXPORT_OPTIONS: ${{ steps.signing.outputs.export_options }}
+        run: |
+          build_number="${INPUT_BUILD_NUMBER:-$GITHUB_RUN_NUMBER}"
+          if [[ ! "$build_number" =~ ^[0-9]+$ ]]; then
+            echo '::error::The TestFlight build number must contain digits only.'
+            exit 1
+          fi
+
+          flutter build ipa --release --build-number="$build_number" --export-options-plist="$EXPORT_OPTIONS"
+
+          ipa_path="$(find "$PWD/build/ios/ipa" -type f -name '*.ipa' -print -quit)"
+          if [[ -z "$ipa_path" ]]; then
+            echo '::error::Flutter did not produce an IPA.'
+            exit 1
+          fi
+          echo "ipa_path=$ipa_path" >> "$GITHUB_OUTPUT"
+          echo "build_number=$build_number" >> "$GITHUB_OUTPUT"
+
+      - name: Upload build to TestFlight
+        uses: apple-actions/upload-testflight-build@v5
+        with:
+          app-path: ${{ steps.package.outputs.ipa_path }}
+          app-type: ios
+          issuer-id: ${{ vars.APPSTORE_ISSUER_ID }}
+          api-key-id: ${{ vars.APPSTORE_API_KEY_ID }}
+          api-private-key: ${{ secrets.APPSTORE_API_PRIVATE_KEY }}
+          release-notes: ${{ inputs.release_notes }}
+          uses-non-exempt-encryption: "false"
+          wait-for-processing: "true"
+
+      - name: Publish summary
+        shell: bash
+        run: |
+          {
+            echo '## ByteSqueeze TestFlight upload complete'
+            echo
+            echo "- Bundle ID: `$BUNDLE_ID`"
+            echo "- Build: `${{ steps.package.outputs.build_number }}`"
+            echo "- Apple team: `${{ steps.signing.outputs.team_id }}`"
+            echo
+            echo 'Open App Store Connect → ByteSqueeze → TestFlight to add the processed build to an internal testing group.'
+          } >> "$GITHUB_STEP_SUMMARY"

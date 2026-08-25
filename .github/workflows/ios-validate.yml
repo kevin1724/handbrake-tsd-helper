@@ -1,0 +1,78 @@
+name: Validate ByteSqueeze iOS
+
+on:
+  pull_request:
+    paths:
+      - "mobile/bytesqueeze/**"
+      - ".github/workflows/ios-validate.yml"
+      - ".github/workflows/ios-testflight.yml"
+  push:
+    branches:
+      - main
+    paths:
+      - "mobile/bytesqueeze/**"
+      - ".github/workflows/ios-validate.yml"
+      - ".github/workflows/ios-testflight.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: bytesqueeze-ios-validate-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  universal-build:
+    name: Universal iPhone and iPad build
+    runs-on: macos-15
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: mobile/bytesqueeze
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v6
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          cache: true
+          pub-cache: true
+
+      - name: Resolve dependencies
+        run: flutter pub get
+
+      - name: Generate iPhone and iPad icons
+        run: dart run flutter_launcher_icons
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test phone and tablet layouts
+        run: flutter test
+
+      - name: Validate Apple metadata
+        shell: bash
+        run: |
+          plutil -lint ios/Runner/Info.plist
+          plutil -lint ios/Runner/PrivacyInfo.xcprivacy
+          grep -Fq 'TARGETED_DEVICE_FAMILY = "1,2";' ios/Runner.xcodeproj/project.pbxproj
+          grep -Fq 'NSLocalNetworkUsageDescription' ios/Runner/Info.plist
+
+      - name: Build unsigned release for physical Apple devices
+        run: flutter build ios --release --no-codesign
+
+      - name: Inspect universal app bundle
+        shell: bash
+        run: |
+          app="build/ios/iphoneos/Runner.app"
+          test -d "$app"
+          test -f "$app/PrivacyInfo.xcprivacy"
+          family="$(/usr/libexec/PlistBuddy -c 'Print :UIDeviceFamily' "$app/Info.plist")"
+          printf 'Built device family: %s\n' "$family"
+          grep -q '1' <<<"$family"
+          grep -q '2' <<<"$family"
+          /usr/libexec/PlistBuddy -c 'Print :NSLocalNetworkUsageDescription' "$app/Info.plist"

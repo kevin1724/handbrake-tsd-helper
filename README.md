@@ -22,7 +22,7 @@ Completed output files are tagged with `-TSD`, short for "Transcoded", so the ap
 - Remote-transfer mode for workers that do not have media drives mounted
 - Bounded Autopilot with observe/manage modes, schedules, queue caps, and explained decisions
 - Transactional node protocol v2 with safe pairing retries, automatic session recovery, and diagnostics
-- ByteSqueeze Android companion with secure pairing, poster library, remote job controls, automation, and node health
+- Universal ByteSqueeze Android, iPhone, and iPad companion with secure pairing, poster library, remote job controls, automation, and node health
 - Versioned mobile API with hashed tokens, refresh, read/control scopes, and device revocation
 - Safer cleanup behavior for failed or canceled jobs
 
@@ -56,7 +56,7 @@ Autopilot is disabled and set to Observe by default. Its page now creates and di
 
 ## ByteSqueeze Mobile
 
-ByteSqueeze is the Android-first Flutter companion for managing a TSD controller from a phone. It can browse movie and show posters, track shows, queue server-side Smart Preset jobs, manage active jobs, tune Autopilot, review learned preset decisions, and monitor workers, storage savings, and events. All transcoding remains on the Docker controller and its workers.
+ByteSqueeze is the universal Flutter companion for managing a TSD controller from Android, iPhone, or iPad. It can browse movie and show posters, track shows, queue server-side Smart Preset jobs, use the Size Wizard, manage active jobs, tune Autopilot, review learned preset decisions, and monitor workers, storage savings, and events. All transcoding remains on the Docker controller and its workers.
 
 The mobile V3 interface mirrors the web workspace with an adaptive desktop
 sidebar, polished phone navigation, a searchable command center, real Smart
@@ -65,10 +65,11 @@ persistent **Settings → Interface & UI → V2 Classic** fallback. Interface
 density and V3/V2 selection are local to each device and never alter encoding
 settings.
 
-The same Flutter project includes an iOS target so networking, secure pairing, application state, responsive navigation, and screens can be carried into an iPhone release without a second implementation.
+The same signed application runs on iPhone and iPad. iPad uses the wide workspace automatically and supports portrait, landscape, Split View, keyboard, and pointer input without a separate implementation.
 
 - Source: [`mobile/bytesqueeze`](mobile/bytesqueeze)
 - Product and mobile API notes: [`docs/BYTESQUEEZE.md`](docs/BYTESQUEEZE.md)
+- iPhone/iPad and TestFlight setup: [`docs/ios-testflight.md`](docs/ios-testflight.md)
 - Latest Android APK: [GitHub Releases](https://github.com/kevin1724/handbrake-tsd-helper/releases/latest)
 - Pairing: open **Settings > Linked Nodes** and generate a one-time read or control code under Companion app access
 
