@@ -424,6 +424,7 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                                   ? asMap(_plan['inputs'])['target_mb']
                                   : null),
                         ),
+                      ),
                       _resultRow('Estimated time',
                           '${estimates['eta_human'] ?? 'Not available'}'),
                     ],
