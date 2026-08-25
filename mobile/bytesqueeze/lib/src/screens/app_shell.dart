@@ -491,9 +491,22 @@ class _V3Sidebar extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: [
-          const Padding(
-            padding: EdgeInsets.symmetric(horizontal: 8),
-            child: BrandMark(size: 38),
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 8),
+            child: Row(
+              children: [
+                const BrandMark(size: 36, showName: false),
+                const SizedBox(width: 10),
+                Expanded(
+                  child: Text(
+                    'ByteSqueeze',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: Theme.of(context).textTheme.titleMedium,
+                  ),
+                ),
+              ],
+            ),
           ),
           const SizedBox(height: 24),
           _CommandButton(onPressed: onCommand, expanded: true),
@@ -762,26 +775,32 @@ class _CommandButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    return OutlinedButton.icon(
-      onPressed: onPressed,
-      icon: const Icon(Icons.search_rounded, size: 19),
-      label: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(expanded ? 'Command center' : 'Search'),
-          if (expanded) ...[
-            const SizedBox(width: 20),
-            const Text('⌘ K',
-                style:
-                    TextStyle(color: ByteSqueezeColors.muted, fontSize: 10)),
-          ],
-        ],
-      ),
-      style: OutlinedButton.styleFrom(
-        foregroundColor: ByteSqueezeColors.softInk,
-        backgroundColor: ByteSqueezeColors.surface.withValues(alpha: .7),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-      ),
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final showShortcut = expanded &&
+            (!constraints.hasBoundedWidth || constraints.maxWidth >= 250);
+        return OutlinedButton.icon(
+          onPressed: onPressed,
+          icon: const Icon(Icons.search_rounded, size: 19),
+          label: showShortcut
+              ? const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('Command center'),
+                    SizedBox(width: 20),
+                    Text('⌘ K',
+                        style: TextStyle(
+                            color: ByteSqueezeColors.muted, fontSize: 10)),
+                  ],
+                )
+              : Text(expanded ? 'Command center' : 'Search'),
+          style: OutlinedButton.styleFrom(
+            foregroundColor: ByteSqueezeColors.softInk,
+            backgroundColor: ByteSqueezeColors.surface.withValues(alpha: .7),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+          ),
+        );
+      },
     );
   }
 }
