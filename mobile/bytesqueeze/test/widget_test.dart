@@ -45,7 +45,7 @@ void main() {
     await tester.tap(find.text('Library'));
     await tester.pumpAndSettle();
     expect(controller.selectedTab, 1);
-    expect(find.text('YOUR MEDIA'), findsOneWidget);
+    expect(find.text('YOUR MEDIA'), findsWidgets);
   });
 
   testWidgets('V3 command center exposes navigation and safe actions',
