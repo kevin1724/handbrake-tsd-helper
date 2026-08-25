@@ -2307,7 +2307,7 @@
       const meta = document.createElement("div");
       meta.className = "beta-card-meta";
       appendMetaLine(meta, predictionText(item.prediction));
-      appendMetaLine(meta, `${item.target?.label || "Movie"} target: ${item.target?.target_size_value || 5}${item.target?.target_size_unit || "GB"}`);
+      appendMetaLine(meta, `${item.target?.label || "Movie"} target: calculated per title in Size Wizard`);
       appendMetaLine(meta, item.filename || "");
       details.appendChild(meta);
       body.appendChild(details);

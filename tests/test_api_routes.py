@@ -277,6 +277,9 @@ class ApiRouteSmokeTests(unittest.TestCase):
         wizard_page = self.client.get("/size_wizard?ui=v3")
         self.assertEqual(wizard_page.status_code, 200)
         self.assertIn(b'href="/size_wizard"', wizard_page.data)
+        self.assertIn(b"Automatic source-aware estimate", wizard_page.data)
+        self.assertIn(b"Automatic estimate for this title", wizard_page.data)
+        self.assertNotIn(b'target_size_value: 5,', wizard_page.data)
 
     def test_size_wizard_queue_records_an_approved_learning_plan(self):
         media_path = os.path.join(TEST_MEDIA, "Wizard.Learning.Movie.2026.mkv")
@@ -362,6 +365,96 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(duplicate.status_code, 200)
         self.assertFalse(duplicate.get_json()["learning_recorded"])
         duplicate_record.assert_not_called()
+
+    def test_size_wizard_auto_target_is_unique_and_reacts_to_choices(self):
+        movie_path = os.path.join(TEST_MEDIA, "Auto.Target.Movie.2026.2160p.mkv")
+        episode_path = os.path.join(TEST_MEDIA, "Auto.Target.Show.S01E03.1080p.mkv")
+        for path in (movie_path, episode_path):
+            with open(path, "wb") as handle:
+                handle.write(b"wizard-source")
+
+        movie_probe = {
+            "duration_sec": 7200.0,
+            "width": 3840,
+            "height": 2160,
+            "fps": 24000 / 1001,
+            "is_hdr": False,
+        }
+        episode_probe = {
+            "duration_sec": 2700.0,
+            "width": 1920,
+            "height": 1080,
+            "fps": 24000 / 1001,
+            "is_hdr": False,
+        }
+        settings = {
+            "cpu_profile": "i5-9500t",
+            "cpu_speed_override": 1.0,
+            "qsv_device_available": True,
+        }
+
+        def plan(path, probe, **choices):
+            with (
+                patch.object(app_routes.os.path, "getsize", return_value=40 * 1024**3),
+                patch.object(app_routes, "load_settings", return_value=settings),
+                patch.object(
+                    app_routes,
+                    "smart_learned_plan_defaults",
+                    return_value={"sample_count": 0, "confidence": 0.0},
+                ),
+                patch.object(
+                    app_routes,
+                    "_history_prediction_for",
+                    return_value={"available": False, "sample_count": 0},
+                ),
+            ):
+                return app_routes._wizard_plan(
+                    {
+                        "src": path,
+                        "preset": "auto",
+                        "target_size_auto": True,
+                        "encoder_family": "qsv",
+                        "video_codec": "h265",
+                        "quality": "balanced",
+                        "resolution_mode": "keep",
+                        **choices,
+                    },
+                    probe_func=lambda _src: probe,
+                )
+
+        balanced_movie = plan(movie_path, movie_probe)
+        compact_movie = plan(
+            movie_path,
+            movie_probe,
+            quality="small",
+            resolution_mode="1080",
+        )
+        episode = plan(episode_path, episode_probe)
+
+        balanced_mb = balanced_movie["inputs"]["target_mb"]
+        compact_mb = compact_movie["inputs"]["target_mb"]
+        episode_mb = episode["inputs"]["target_mb"]
+        self.assertNotEqual(balanced_mb, 5120.0)
+        self.assertNotEqual(episode_mb, 800.0)
+        self.assertGreater(balanced_mb, compact_mb)
+        self.assertGreater(compact_mb, episode_mb)
+        self.assertEqual(balanced_movie["estimates"]["auto_target"]["mode"], "source_aware")
+        self.assertIn("title runtime", balanced_movie["estimates"]["auto_target"]["signals"])
+        self.assertEqual(
+            balanced_movie["estimates"]["estimated_output_mb"],
+            balanced_movie["inputs"]["target_mb"],
+        )
+        self.assertEqual(episode["probe"]["source_type"], "show")
+
+        manual = plan(
+            movie_path,
+            movie_probe,
+            target_size_auto=False,
+            target_size_value=2,
+            target_size_unit="GB",
+        )
+        self.assertEqual(manual["inputs"]["target_mb"], 2048.0)
+        self.assertEqual(manual["estimates"]["auto_target"]["mode"], "manual")
 
     def test_queued_wizard_preferences_are_contextual_smart_defaults(self):
         hdr_context = {
@@ -2929,6 +3022,8 @@ class ApiRouteSmokeTests(unittest.TestCase):
             },
         }
         context = feedback_context(sample_plan, "balanced")
+        self.assertIn("duration", context["source"])
+        self.assertFalse(context["features"]["target_size_auto"])
         for _index in range(3):
             record_feedback(context, "approve", "looks_good")
 

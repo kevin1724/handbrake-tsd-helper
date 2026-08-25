@@ -1003,7 +1003,9 @@ WIZARD_DEFAULT_OPTIONS = {
     "subtitle_languages": ["eng", "spa"],
     "preset": "auto",
     "target_size_auto": True,
-    "target_size_value": 5.0,
+    # Automatic sizing replaces this neutral parsing fallback with a source-
+    # aware estimate. It must never be presented as a universal movie target.
+    "target_size_value": 1.0,
     "target_size_unit": "GB",
     "quality": "balanced",
     "video_codec": "h265",
@@ -1032,8 +1034,8 @@ WIZARD_DEFAULT_OPTIONS = {
 }
 
 WIZARD_SOURCE_TARGETS = {
-    "movie": {"label": "Movie", "target_size_value": 5.0, "target_size_unit": "GB", "target_mb": 5120.0},
-    "show": {"label": "Show", "target_size_value": 800.0, "target_size_unit": "MB", "target_mb": 800.0},
+    "movie": {"label": "Movie"},
+    "show": {"label": "Show episode"},
 }
 
 WIZARD_SHOW_PATTERNS = [
@@ -1132,12 +1134,7 @@ def _wizard_languages(value) -> list[str]:
 
 def _wizard_source_target(kind: str) -> dict:
     target = WIZARD_SOURCE_TARGETS.get(kind) or WIZARD_SOURCE_TARGETS["movie"]
-    return {
-        "label": target["label"],
-        "target_size_value": target["target_size_value"],
-        "target_size_unit": target["target_size_unit"],
-        "target_mb": target["target_mb"],
-    }
+    return {"label": target["label"]}
 
 
 def _wizard_detect_source_type(src_path: str, duration_sec=None) -> dict:
@@ -1173,13 +1170,181 @@ def _wizard_detect_source_type(src_path: str, duration_sec=None) -> dict:
     return {"kind": "movie", "reason": reason, **target}
 
 
-def _wizard_apply_source_target(options: dict, source_type: dict) -> dict:
+def _wizard_target_geometry(options: dict, src_w: int, src_h: int) -> tuple[int, int]:
+    """Return the largest picture the current Wizard choice can produce.
+
+    This is deliberately independent of the target bitrate so automatic size
+    estimation and automatic resolution selection do not form a circular
+    calculation. Explicit caps never upscale a smaller source.
+    """
+    mode = str(options.get("resolution_mode") or "auto")
+    if mode in {"720", "1080", "1440", "2160"} and src_h > int(mode):
+        return _scale_to_height(src_w, src_h, int(mode))
+    return src_w, src_h
+
+
+def _wizard_size_preference_factor(options: dict) -> float:
+    """Comparable size pressure for learned/history target adjustment."""
+    quality = {"high": 1.28, "balanced": 1.0, "small": 0.74}.get(
+        str(options.get("quality") or "balanced"), 1.0
+    )
+    codec = {"h264": 1.24, "h265": 1.0, "av1": 0.84}.get(
+        str(options.get("video_codec") or "h265"), 1.0
+    )
+    family = 1.10 if str(options.get("encoder_family") or "software") == "qsv" else 1.0
+    speed_name = str(options.get("encoder_speed") or options.get("speed") or "auto")
+    speed = {"fast": 1.09, "medium": 1.0, "slow": 0.94, "auto": 1.0}.get(speed_name, 1.0)
+    return quality * codec * family * speed
+
+
+def _wizard_auto_target(
+    options: dict,
+    info: dict,
+    source_type: dict,
+    source_size_bytes: int,
+    effective_preset: str,
+    learned_defaults: dict | None = None,
+) -> tuple[float, dict]:
+    """Estimate an output target from this title instead of a fixed 5 GB.
+
+    The baseline is a bits-per-pixel model. Completed encodes and explicitly
+    approved Size Wizard plans are blended in when available, while the
+    current codec/quality/resolution choices always continue to affect the
+    estimate.
+    """
+    duration_sec = max(1.0, float(info.get("duration_sec") or 0.0))
+    fps = max(1.0, float(info.get("fps") or 24.0))
+    src_w = max(2, int(info.get("width") or 0))
+    src_h = max(2, int(info.get("height") or 0))
+    out_w, out_h = _wizard_target_geometry(options, src_w, src_h)
+
+    codec = str(options.get("video_codec") or "h265")
+    quality = str(options.get("quality") or "balanced")
+    bpp_table = {
+        "h264": {"high": 0.105, "balanced": 0.078, "small": 0.057},
+        "h265": {"high": 0.078, "balanced": 0.057, "small": 0.042},
+        "av1": {"high": 0.066, "balanced": 0.048, "small": 0.035},
+    }
+    target_bpp = bpp_table.get(codec, bpp_table["h265"]).get(quality, 0.057)
+    if str(options.get("encoder_family") or "software") == "qsv":
+        target_bpp *= 1.10
+    speed = str(options.get("encoder_speed") or "auto")
+    target_bpp *= {"fast": 1.08, "medium": 1.0, "slow": 0.95, "auto": 1.0}.get(speed, 1.0)
+    if bool(info.get("is_hdr")):
+        target_bpp *= 1.14
+
+    video_kbps = max(300.0, target_bpp * out_w * out_h * fps / 1000.0)
+    audio_kbps = max(64, _wizard_audio_kbps(options))
+    modeled_mb = ((video_kbps + audio_kbps) * 1000.0 * duration_sec / 8.0) / (1024.0 * 1024.0)
+    estimate_mb = modeled_mb
+    signals = ["title runtime", f"{out_w}x{out_h}", codec.upper(), quality]
+
+    learned = learned_defaults if isinstance(learned_defaults, dict) else {}
+    learned_adjusted_ratio = 0.0
+    try:
+        learned_ratio = float(learned.get("target_ratio") or 0.0)
+        learned_samples = int(learned.get("sample_count") or 0)
+        learned_confidence = float(learned.get("confidence") or 0.0)
+    except (TypeError, ValueError):
+        learned_ratio = learned_confidence = 0.0
+        learned_samples = 0
+    if source_size_bytes > 0 and learned_ratio > 0 and learned_samples > 0:
+        learned_options = {
+            "quality": learned.get("quality") or "balanced",
+            "video_codec": learned.get("codec") or "h265",
+            "encoder_family": learned.get("encoder_family") or "software",
+            "encoder_speed": learned.get("speed") or "auto",
+        }
+        adjustment = _wizard_size_preference_factor(options) / max(
+            0.25, _wizard_size_preference_factor(learned_options)
+        )
+        learned_mb = source_size_bytes * learned_ratio * adjustment / (1024.0 * 1024.0)
+        learned_adjusted_ratio = learned_ratio * adjustment
+        learned_weight = min(0.55, 0.20 + (0.30 * max(0.0, min(1.0, learned_confidence))))
+        estimate_mb = estimate_mb * (1.0 - learned_weight) + learned_mb * learned_weight
+        signals.append(f"{learned_samples} approved similar plan{'s' if learned_samples != 1 else ''}")
+
+    try:
+        history = _history_prediction_for(
+            source_size_bytes,
+            effective_preset,
+            bool(info.get("is_hdr")),
+            encode_method=_wizard_encoder_name(options),
+        )
+    except Exception:
+        history = {"available": False}
+    if history.get("available") and history.get("estimated_out_bytes"):
+        history_mb = float(history["estimated_out_bytes"]) / (1024.0 * 1024.0)
+        history_mb *= {"high": 1.20, "balanced": 1.0, "small": 0.80}.get(quality, 1.0)
+        history_weight = {"high": 0.30, "medium": 0.22, "low": 0.12}.get(
+            str(history.get("confidence") or "low"), 0.12
+        )
+        estimate_mb = estimate_mb * (1.0 - history_weight) + history_mb * history_weight
+        signals.append(f"{int(history.get('sample_count') or 0)} completed encode samples")
+
+    # An output target larger than an already compressed source is not useful.
+    # Keep enough room for audio and a conservative video floor on tiny files.
+    minimum_mb = max(
+        32.0,
+        ((audio_kbps + 300.0) * 1000.0 * duration_sec / 8.0) / (1024.0 * 1024.0),
+    )
+    maximum_mb = 0.0
+    if source_size_bytes > 0:
+        source_mb = source_size_bytes / (1024.0 * 1024.0)
+        # The ceiling also reflects the chosen compression goal. Otherwise an
+        # already-small source could cap High, Balanced, H.264, and H.265 to
+        # the same number and make the controls appear broken again.
+        ceiling_ratio = {
+            "high": 0.93,
+            "balanced": 0.80,
+            "small": 0.62,
+        }.get(quality, 0.80)
+        ceiling_ratio *= {"h264": 1.08, "h265": 1.0, "av1": 0.92}.get(codec, 1.0)
+        if str(options.get("encoder_family") or "software") == "qsv":
+            ceiling_ratio *= 1.03
+        if learned_adjusted_ratio > 0:
+            ceiling_ratio = max(ceiling_ratio, min(0.97, learned_adjusted_ratio))
+        ceiling_ratio = max(0.35, min(0.97, ceiling_ratio))
+        maximum_mb = max(minimum_mb, source_mb * ceiling_ratio)
+        estimate_mb = min(estimate_mb, maximum_mb)
+    estimate_mb = round(max(minimum_mb, estimate_mb), 1)
+    return estimate_mb, {
+        "mode": "source_aware",
+        "target_mb": estimate_mb,
+        "model_target_mb": round(modeled_mb, 1),
+        "source_ceiling_mb": round(maximum_mb, 1) if maximum_mb else None,
+        "source_kind": str(source_type.get("kind") or "movie"),
+        "signals": signals,
+        "summary": "Calculated for this source from " + ", ".join(signals) + ".",
+        "learned_sample_count": learned_samples,
+        "history_sample_count": int(history.get("sample_count") or 0),
+    }
+
+
+def _wizard_apply_source_target(
+    options: dict,
+    source_type: dict,
+    *,
+    info: dict | None = None,
+    source_size_bytes: int = 0,
+    effective_preset: str = "auto",
+    learned_defaults: dict | None = None,
+) -> tuple[dict, dict]:
     if not options.get("target_size_auto"):
-        return options
+        return options, {"mode": "manual", "summary": "Manual target size."}
+    info = info if isinstance(info, dict) else {}
+    target_mb, details = _wizard_auto_target(
+        options,
+        info,
+        source_type,
+        source_size_bytes,
+        effective_preset,
+        learned_defaults,
+    )
     out = options.copy()
-    out["target_size_value"] = source_type["target_size_value"]
-    out["target_size_unit"] = source_type["target_size_unit"]
-    return out
+    out["target_size_value"] = target_mb
+    out["target_size_unit"] = "MB"
+    return out, details
 
 
 def _wizard_encoder_label(encoder_name: str) -> str:
@@ -2312,10 +2477,22 @@ def _wizard_plan(
         raise RuntimeError("probe incomplete")
 
     source_type = _wizard_detect_source_type(src, duration_sec)
-    options = _wizard_apply_source_target(options, source_type)
     info["source_type"] = source_type["kind"]
     info["source_type_label"] = source_type["label"]
     info["source_type_reason"] = source_type["reason"]
+    if not isinstance(learned_defaults, dict):
+        try:
+            learned_defaults = smart_learned_plan_defaults(info)
+        except Exception:
+            learned_defaults = {"sample_count": 0, "confidence": 0.0}
+    options, auto_target = _wizard_apply_source_target(
+        options,
+        source_type,
+        info=info,
+        source_size_bytes=source_size_bytes,
+        effective_preset=effective_preset,
+        learned_defaults=learned_defaults,
+    )
 
     settings = load_settings()
     cpu = get_cpu_profile(settings.get("cpu_profile"))
@@ -2381,6 +2558,17 @@ def _wizard_plan(
     options["source_is_hdr"] = bool(info.get("is_hdr"))
     options["source_hdr_format"] = hdr_format
     options = _enforce_smart_guardrails(options)
+    # AI and learned preferences can change codec, quality, encoder, or output
+    # resolution. Recalculate automatic size from those final choices so every
+    # visible Wizard change produces a corresponding per-title estimate.
+    options, auto_target = _wizard_apply_source_target(
+        options,
+        source_type,
+        info=info,
+        source_size_bytes=source_size_bytes,
+        effective_preset=effective_preset,
+        learned_defaults=learned_defaults,
+    )
     target_mb = _size_to_mb(options["target_size_value"], options["target_size_unit"])
     target_bytes = target_mb * 1024.0 * 1024.0
     total_bitrate_kbps = (target_bytes * 8.0 / duration_sec) / 1000.0
@@ -2472,6 +2660,9 @@ def _wizard_plan(
             "ai_target_analysis": ai_insights.get("target_analysis") or {},
             "source_type": source_type,
             "target_size_auto": bool(options.get("target_size_auto")),
+            "auto_target": auto_target,
+            "estimated_output_mb": round(target_mb, 1),
+            "estimated_output_bytes": int(round(target_mb * 1024.0 * 1024.0)),
             "eta_seconds": int(round(eta_sec)),
             "eta_human": f"{int(eta_sec//3600)}h {int((eta_sec%3600)//60)}m" if eta_sec >= 3600 else f"{int(eta_sec//60)}m",
             "history_prediction": history_prediction,
@@ -3015,15 +3206,9 @@ def _smart_recommendation(data: dict, *, require_automation_ready: bool = False)
                 base_options["subtitle_mode"] = learned_subtitle_mode
                 base_options["ai_subtitle_scope"] = learned_subtitle_mode
                 base_options["smart_subtitle_strategy"] = learned_subtitle_mode
-        try:
-            learned_ratio = float(learned_defaults.get("target_ratio") or 0.0)
-            source_bytes = float(episode_probe.get("source_size_bytes") or os.path.getsize(src))
-        except (TypeError, ValueError, OSError):
-            learned_ratio = source_bytes = 0.0
-        if learned_ratio > 0 and source_bytes > 0:
-            base_options["target_size_auto"] = False
-            base_options["target_size_value"] = round(source_bytes * learned_ratio / (1024.0 * 1024.0), 1)
-            base_options["target_size_unit"] = "MB"
+        # Keep automatic sizing automatic. The planner blends the learned
+        # target ratio with this episode's own runtime, resolution, codec, and
+        # quality instead of turning one past choice into a fixed file size.
     if tuning.get("resolution_mode"):
         base_options["resolution_mode"] = tuning["resolution_mode"]
     if tuning.get("subtitle_mode"):

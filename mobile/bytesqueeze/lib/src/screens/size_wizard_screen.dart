@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 
 import '../app_controller.dart';
@@ -31,6 +33,8 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
   String _error = '';
   String _destination = 'local';
   String _candidateId = 'manual';
+  Timer? _estimateDebounce;
+  int _editRevision = 0;
 
   AppController get controller => widget.controller;
 
@@ -42,11 +46,14 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
 
   @override
   void dispose() {
+    _estimateDebounce?.cancel();
     _targetSize.dispose();
     super.dispose();
   }
 
-  Future<void> _load({required bool smartStart}) async {
+  Future<void> _load({required bool smartStart, int? revision}) async {
+    if (smartStart) _editRevision += 1;
+    final requestedRevision = revision ?? _editRevision;
     setState(() {
       _loading = true;
       _error = '';
@@ -58,13 +65,15 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
         options: smartStart ? null : _queueOptions(),
         smartCandidateId: _candidateId,
       );
-      if (!mounted) return;
+      if (!mounted || requestedRevision != _editRevision) return;
       _applyResponse(value);
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || requestedRevision != _editRevision) return;
       setState(() => _error = '$error');
     } finally {
-      if (mounted) setState(() => _loading = false);
+      if (mounted && requestedRevision == _editRevision) {
+        setState(() => _loading = false);
+      }
     }
   }
 
@@ -76,7 +85,7 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
       _plan = plan;
       _options = options;
       _candidateId = '${value['smart_candidate_id'] ?? 'manual'}';
-      _targetSize.text = '${options['target_size_value'] ?? 5}';
+      _targetSize.text = '${options['target_size_value'] ?? 1}';
       _dirty = false;
     });
   }
@@ -97,7 +106,35 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
     setState(() {
       _options[key] = value;
       _dirty = true;
+      _editRevision += 1;
     });
+    _scheduleEstimate();
+  }
+
+  void _targetChanged() {
+    setState(() {
+      _dirty = true;
+      _editRevision += 1;
+    });
+    _scheduleEstimate();
+  }
+
+  void _scheduleEstimate() {
+    _estimateDebounce?.cancel();
+    final revision = _editRevision;
+    _estimateDebounce = Timer(
+      const Duration(milliseconds: 550),
+      () => _load(smartStart: false, revision: revision),
+    );
+  }
+
+  String _formatSizeMb(dynamic value) {
+    final mb = value is num ? value.toDouble() : double.tryParse('$value');
+    if (mb == null || mb <= 0) return 'Calculating';
+    if (mb >= 1024) {
+      return '${(mb / 1024).toStringAsFixed(2)} GB (${mb.toStringAsFixed(0)} MB)';
+    }
+    return '${mb.toStringAsFixed(mb >= 100 ? 0 : 1)} MB';
   }
 
   Future<void> _queue() async {
@@ -138,6 +175,7 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
     final probe = asMap(_plan['probe']);
     final estimates = asMap(_plan['estimates']);
     final output = asMap(estimates['output_resolution']);
+    final autoTarget = asMap(estimates['auto_target']);
     final learning = asMap(_response['learning']);
     final learned = asMap(_response['learned_defaults']);
     final sourceWidth = (probe['width'] as num?)?.toInt() ?? 0;
@@ -222,8 +260,11 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                         onChanged: (value) =>
                             _setOption('target_size_auto', value),
                         title: const Text('Automatic target size'),
-                        subtitle: const Text(
-                            'Use the learned target for this kind of source.'),
+                        subtitle: Text(
+                          _options['target_size_auto'] == false
+                              ? 'Use an exact file-size target.'
+                              : '${autoTarget['summary'] ?? 'Calculate from this title and your learned preferences.'}',
+                        ),
                       ),
                       if (_options['target_size_auto'] == false) ...[
                         const SizedBox(height: 8),
@@ -234,7 +275,7 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                                 controller: _targetSize,
                                 keyboardType: const TextInputType.numberWithOptions(
                                     decimal: true),
-                                onChanged: (_) => setState(() => _dirty = true),
+                                onChanged: (_) => _targetChanged(),
                                 decoration:
                                     const InputDecoration(labelText: 'Target size'),
                               ),
@@ -367,12 +408,22 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                 SurfaceCard(
                   child: Column(
                     children: [
+                      if (_loading) ...[
+                        const LinearProgressIndicator(minHeight: 2),
+                        const SizedBox(height: 12),
+                      ],
                       _resultRow('Output',
                           outputWidth > 0 ? '$outputWidth×$outputHeight' : 'Calculating'),
                       _resultRow('Encoder',
                           '${estimates['encoder_label'] ?? estimates['encoder'] ?? 'Calculating'}'),
-                      _resultRow('Target',
-                          '${_plan['inputs'] is Map ? asMap(_plan['inputs'])['target_mb'] ?? '—' : '—'} MB'),
+                      _resultRow(
+                        'Estimated final file',
+                        _formatSizeMb(
+                          estimates['estimated_output_mb'] ??
+                              (_plan['inputs'] is Map
+                                  ? asMap(_plan['inputs'])['target_mb']
+                                  : null),
+                        ),
                       _resultRow('Estimated time',
                           '${estimates['eta_human'] ?? 'Not available'}'),
                     ],
@@ -381,7 +432,12 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                 if (_dirty) ...[
                   const SizedBox(height: 12),
                   OutlinedButton.icon(
-                    onPressed: _loading ? null : () => _load(smartStart: false),
+                    onPressed: _loading
+                        ? null
+                        : () => _load(
+                              smartStart: false,
+                              revision: _editRevision,
+                            ),
                     icon: _loading
                         ? const SizedBox(
                             width: 17,

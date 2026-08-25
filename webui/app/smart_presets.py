@@ -283,6 +283,22 @@ def resolution_bucket(width, height) -> str:
     return "sd_hd"
 
 
+def duration_bucket(value) -> str:
+    try:
+        minutes = float(value or 0.0) / 60.0
+    except (TypeError, ValueError):
+        minutes = 0.0
+    if minutes <= 0:
+        return "unknown"
+    if minutes < 30:
+        return "short_episode"
+    if minutes <= 75:
+        return "episode"
+    if minutes <= 150:
+        return "feature"
+    return "long_feature"
+
+
 def _language_key(value) -> str:
     if isinstance(value, str):
         values = re.split(r"[\s,;]+", value)
@@ -307,6 +323,7 @@ def feedback_context(plan: dict, candidate_id: str = "manual") -> dict:
             "kind": str(probe.get("source_type") or "unknown")[:20],
             "hdr": bool(probe.get("is_hdr")),
             "resolution": resolution_bucket(probe.get("width"), probe.get("height")),
+            "duration": duration_bucket(probe.get("duration_sec")),
         },
         "features": {
             "goal": str(options.get("ai_goal") or "balanced")[:20],
@@ -318,6 +335,7 @@ def feedback_context(plan: dict, candidate_id: str = "manual") -> dict:
             "output_resolution": resolution_bucket(output.get("width"), output.get("height")),
             "resolution_mode": str(options.get("resolution_mode") or "")[:20],
             "target_ratio": round(target_bytes / float(source_bytes), 4),
+            "target_size_auto": bool(options.get("target_size_auto")),
             "audio_strategy": str(options.get("smart_audio_strategy") or options.get("audio_mode") or "")[:24],
             "audio_languages": _language_key(options.get("audio_languages")),
             "subtitle_mode": str(options.get("subtitle_mode") or "")[:20],
@@ -347,6 +365,7 @@ def learned_plan_defaults(probe: dict, state: dict | None = None) -> dict:
         "kind": str(probe.get("source_type") or probe.get("kind") or "unknown")[:20],
         "hdr": bool(probe.get("is_hdr", probe.get("hdr", False))),
         "resolution": resolution_bucket(probe.get("width"), probe.get("height")),
+        "duration": duration_bucket(probe.get("duration_sec")),
     }
     categorical = {
         key: {}
@@ -388,6 +407,9 @@ def learned_plan_defaults(probe: dict, state: dict | None = None) -> dict:
             weight += 0.20
         if str(saved_source.get("resolution") or "") == source["resolution"]:
             weight += 0.35
+        saved_duration = str(saved_source.get("duration") or "unknown")
+        if saved_duration != "unknown" and saved_duration == source["duration"]:
+            weight += 0.18
         if str(row.get("origin") or "") == "wizard_queue":
             weight *= 1.12
         total_weight += weight

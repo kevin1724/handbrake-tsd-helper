@@ -3,6 +3,33 @@ import 'package:bytesqueeze/src/app_controller.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
+  test('Size Wizard automatic estimates react to media choices', () async {
+    final controller = AppController()..enterDemo();
+
+    final balanced = await controller.planSizeWizard('/demo/Arrival.mkv');
+    final smaller = await controller.planSizeWizard(
+      '/demo/Arrival.mkv',
+      options: {
+        'target_size_auto': true,
+        'quality': 'small',
+        'video_codec': 'av1',
+        'resolution_mode': '720',
+      },
+    );
+
+    final balancedMb =
+        ((balanced['plan'] as Map)['inputs'] as Map)['target_mb'] as num;
+    final smallerMb =
+        ((smaller['plan'] as Map)['inputs'] as Map)['target_mb'] as num;
+    expect(balancedMb, isNot(5120));
+    expect(smallerMb, lessThan(balancedMb));
+    expect(
+      (((smaller['plan'] as Map)['estimates'] as Map)['auto_target']
+          as Map)['mode'],
+      'source_aware',
+    );
+  });
+
   test('older servers do not trigger a global connection failure', () async {
     final controller = AppController();
     controller.api = _LegacyServerApi(controller.store);

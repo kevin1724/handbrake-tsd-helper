@@ -420,6 +420,52 @@ class AppController extends ChangeNotifier {
       throw const ApiFailure('No media file is available for Size Wizard.');
     }
     if (demoMode) {
+      final demoOptions = <String, dynamic>{
+        'target_size_auto': true,
+        'target_size_value': 1.0,
+        'target_size_unit': 'GB',
+        'resolution_mode': 'keep',
+        'video_codec': 'h265',
+        'encoder_family': 'qsv',
+        'bit_depth': '10',
+        'quality': 'balanced',
+        'encoder_speed': 'auto',
+        'audio_mode': 'copy',
+        'audio_tracks': 'all',
+        'subtitle_mode': 'all',
+        'framerate_mode': 'same',
+        ...?options,
+      };
+      final qualityFactor = const <String, double>{
+            'high': 1.28,
+            'balanced': 1.0,
+            'small': .74,
+          }['${demoOptions['quality']}'] ??
+          1.0;
+      final codecFactor = const <String, double>{
+            'h264': 1.24,
+            'h265': 1.0,
+            'av1': .84,
+          }['${demoOptions['video_codec']}'] ??
+          1.0;
+      final resolutionMode = '${demoOptions['resolution_mode']}';
+      final resolutionFactor = const <String, double>{
+            '720': .24,
+            '1080': 1.0,
+            // The demo source is 1080p; larger caps must never upscale it.
+            '1440': 1.0,
+            '2160': 1.0,
+          }[resolutionMode] ??
+          1.0;
+      final automaticMb = (3180.0 * qualityFactor * codecFactor * resolutionFactor)
+          .clamp(180.0, 7864.0)
+          .toDouble();
+      final manualValue = (demoOptions['target_size_value'] as num?)?.toDouble() ?? 1.0;
+      final targetMb = demoOptions['target_size_auto'] == false
+          ? manualValue * ('${demoOptions['target_size_unit']}' == 'GB' ? 1024.0 : 1.0)
+          : automaticMb;
+      demoOptions['target_size_value'] = double.parse(targetMb.toStringAsFixed(1));
+      demoOptions['target_size_unit'] = 'MB';
       return <String, dynamic>{
         'ok': true,
         'smart_start': smartStart,
@@ -439,30 +485,24 @@ class AppController extends ChangeNotifier {
             'source_size_bytes': 8589934592,
             'is_hdr': false,
           },
-          'options': {
-            'target_size_auto': true,
-            'target_size_value': 5.0,
-            'target_size_unit': 'GB',
-            'resolution_mode': 'keep',
-            'video_codec': 'h265',
-            'encoder_family': 'qsv',
-            'bit_depth': '10',
-            'quality': 'balanced',
-            'encoder_speed': 'auto',
-            'audio_mode': 'copy',
-            'audio_tracks': 'all',
-            'subtitle_mode': 'all',
-            'framerate_mode': 'same',
-            ...?options,
-          },
-          'inputs': {'target_mb': 5120.0},
+          'options': demoOptions,
+          'inputs': {'target_mb': double.parse(targetMb.toStringAsFixed(1))},
           'estimates': {
             'encoder': 'qsv_h265_10bit',
             'encoder_label': 'Intel QSV H.265 10-bit',
-            'video_bitrate_kbps': 5850,
+            'video_bitrate_kbps':
+                double.parse(((targetMb * 8 * 1024 * 1024 / 6480) / 1000).toStringAsFixed(1)),
             'output_resolution': {'width': 1920, 'height': 1080},
             'eta_human': '28 minutes',
             'quality_label': 'Good',
+            'estimated_output_mb': double.parse(targetMb.toStringAsFixed(1)),
+            'auto_target': {
+              'mode': demoOptions['target_size_auto'] == false ? 'manual' : 'source_aware',
+              'summary': demoOptions['target_size_auto'] == false
+                  ? 'Manual target size.'
+                  : 'Calculated for this source from title runtime, resolution, codec, quality, and approved similar plans.',
+              'learned_sample_count': 4,
+            },
           },
         },
       };
