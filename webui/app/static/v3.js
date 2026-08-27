@@ -106,6 +106,7 @@
     topbar.innerHTML = `
       <div class="v3-topbar-title"><span class="v3-topbar-wordmark">ByteSqueeze</span><span class="v3-topbar-divider" aria-hidden="true">/</span><strong>${currentRoute.label}</strong></div>
       <div class="v3-topbar-actions">
+        <button id="v3SystemChip" class="v3-system-chip is-loading" type="button" aria-controls="v3OperationsDock" aria-expanded="false"><i></i><span>Checking</span></button>
         <button class="v3-command-trigger" type="button" aria-label="Open command center">
           <span class="v3-command-icon">${icons.search}</span><span>Search and run a command</span><kbd>/</kbd>
         </button>
@@ -113,6 +114,7 @@
       </div>`;
     main.parentNode.insertBefore(topbar, main);
     topbar.querySelector(".v3-command-trigger").addEventListener("click", openCommandCenter);
+    topbar.querySelector("#v3SystemChip").addEventListener("click", toggleOperationsDetail);
   }
 
   function formatBytes(value) {
@@ -130,12 +132,15 @@
   function injectOperationsDock() {
     document.querySelector(".v3-operations-dock")?.remove();
     const dock = document.createElement("aside");
+    dock.id = "v3OperationsDock";
     dock.className = "v3-operations-dock is-loading";
     dock.setAttribute("aria-label", "Encoding operations status");
+    dock.hidden = true;
     dock.innerHTML = `
       <a class="v3-ops-primary" href="/jobs">
         <span class="v3-ops-signal">${icons.activity}</span>
-        <span class="v3-ops-copy"><strong id="v3OpsState">Checking operations</strong><small id="v3OpsCurrent">Loading queue and worker status…</small></span>
+        <span class="v3-ops-copy"><strong id="v3OpsState">Checking operations</strong><small id="v3OpsCurrent">Loading queue and worker status…</small><small id="v3OpsDetail"></small></span>
+        <b id="v3OpsPercent" class="v3-ops-percent">—</b>
         <span class="v3-ops-progress" aria-hidden="true"><i id="v3OpsProgress"></i></span>
       </a>
       <div class="v3-ops-metrics">
@@ -144,14 +149,47 @@
         <a href="/settings/nodes"><small>Workers</small><strong id="v3OpsWorkers">—</strong></a>
         <a href="/settings"><small>Recovered</small><strong id="v3OpsSaved">—</strong></a>
       </div>
-      <a id="v3OpsAlert" class="v3-ops-alert" href="/jobs?status=error" aria-label="No queue errors">${icons.alert}<span>0</span></a>`;
+      <a id="v3OpsAlert" class="v3-ops-alert" href="/jobs?status=error" aria-label="No queue errors">${icons.alert}<span>0</span></a>
+      <button class="v3-ops-close" type="button" aria-label="Close operations details">×</button>`;
     document.body.appendChild(dock);
+    dock.querySelector(".v3-ops-close").addEventListener("click", () => setOperationsDetail(false));
     refreshOperationsDock();
     window.setInterval(refreshOperationsDock, 20000);
     document.addEventListener("visibilitychange", () => { if (!document.hidden) refreshOperationsDock(); });
   }
 
   let operationsRequestActive = false;
+
+  function setOperationsDetail(open) {
+    const dock = document.getElementById("v3OperationsDock");
+    const chip = document.getElementById("v3SystemChip");
+    if (!dock || !chip) return;
+    dock.dataset.userOpen = open ? "true" : "false";
+    const contextual = dock.classList.contains("is-running") || dock.classList.contains("is-warning");
+    dock.hidden = !open && !contextual;
+    dock.classList.toggle("is-expanded", open);
+    chip.setAttribute("aria-expanded", open ? "true" : "false");
+    document.body.classList.toggle("v3-has-ops-preview", open && !contextual);
+  }
+
+  function toggleOperationsDetail() {
+    const dock = document.getElementById("v3OperationsDock");
+    setOperationsDetail(dock?.dataset.userOpen !== "true");
+  }
+
+  function jobRate(job) {
+    const value = Number(job?.fps ?? job?.current_fps ?? job?.encode_fps ?? 0);
+    return value > 0 ? `${value.toFixed(value >= 100 ? 0 : 1)} FPS` : "";
+  }
+
+  function jobEta(job) {
+    const seconds = Number(job?.eta_seconds ?? job?.eta ?? 0);
+    if (!(seconds > 0)) return "";
+    const hours = Math.floor(seconds / 3600);
+    const minutes = Math.max(1, Math.round((seconds % 3600) / 60));
+    return hours ? `${hours}h ${minutes}m remaining` : `${minutes}m remaining`;
+  }
+
   async function refreshOperationsDock() {
     if (operationsRequestActive || document.hidden) return;
     operationsRequestActive = true;
@@ -177,18 +215,31 @@
       const workersOnline = nodes.filter(node => node.online).length;
       const current = running[0];
       const paused = Boolean(data.queue?.paused || summary.queue_paused);
+      const showContext = Boolean(errors || runningCount);
+      const chip = document.getElementById("v3SystemChip");
 
       dock.classList.remove("is-loading", "is-idle", "is-running", "is-warning");
       dock.classList.add(errors ? "is-warning" : runningCount ? "is-running" : "is-idle");
-      document.getElementById("v3OpsState").textContent = errors ? "Queue needs attention" : paused ? "Queue paused" : runningCount ? `${runningCount} encoding now` : "System ready";
+      document.body.classList.toggle("v3-has-active-ops", showContext);
+      dock.hidden = !showContext && dock.dataset.userOpen !== "true";
+      if (chip) {
+        chip.className = `v3-system-chip ${errors ? "is-warning" : runningCount ? "is-running" : "is-ready"}`;
+        chip.querySelector("span").textContent = errors
+          ? `${errors} error${errors === 1 ? "" : "s"}`
+          : runningCount ? `${runningCount} encoding`
+          : nodes.length ? `${workersOnline}/${nodes.length} workers` : "Ready";
+      }
+      document.getElementById("v3OpsState").textContent = errors ? "Queue needs attention" : paused ? "Queue paused" : runningCount ? fileName(current?.src) : "System ready";
       document.getElementById("v3OpsCurrent").textContent = current
-        ? `${fileName(current.src)}${runningCount > 1 ? ` + ${runningCount - 1} more` : ""}`
+        ? [current.node_name || current.worker_name || current.encoder || "Local encoder", jobRate(current), jobEta(current)].filter(Boolean).join(" · ")
         : queuedCount ? `${queuedCount} waiting to start` : "No active transcodes";
+      document.getElementById("v3OpsDetail").textContent = current && runningCount > 1 ? `+ ${runningCount - 1} other active job${runningCount === 2 ? "" : "s"}` : "";
       document.getElementById("v3OpsRunning").textContent = String(runningCount);
       document.getElementById("v3OpsQueued").textContent = String(queuedCount);
       document.getElementById("v3OpsWorkers").textContent = nodes.length ? `${workersOnline}/${nodes.length}` : "Local";
       document.getElementById("v3OpsSaved").textContent = formatBytes(data.storage?.saved_bytes || data.storage?.total_saved_bytes || 0);
       document.getElementById("v3OpsProgress").style.width = `${Math.max(0, Math.min(100, progress))}%`;
+      document.getElementById("v3OpsPercent").textContent = runningCount ? `${Math.round(progress)}%` : "—";
       const alert = document.getElementById("v3OpsAlert");
       alert.querySelector("span").textContent = String(errors);
       alert.classList.toggle("has-errors", errors > 0);
@@ -196,6 +247,10 @@
     } catch (error) {
       dock.classList.remove("is-loading", "is-idle", "is-running");
       dock.classList.add("is-warning");
+      dock.hidden = false;
+      document.body.classList.add("v3-has-active-ops");
+      const chip = document.getElementById("v3SystemChip");
+      if (chip) { chip.className = "v3-system-chip is-warning"; chip.querySelector("span").textContent = "Status error"; }
       const state = document.getElementById("v3OpsState");
       const current = document.getElementById("v3OpsCurrent");
       if (state) state.textContent = "Status unavailable";
@@ -227,11 +282,45 @@
     const nodes = document.getElementById("linkedNodesJobsPanel")?.closest("section");
     overview?.classList.add("v3-queue-overview");
     nodes?.classList.add("v3-worker-overview");
-    if (overview) main.insertBefore(overview, main.querySelector(".page-hero")?.nextSibling || main.firstChild);
-    if (running && overview) overview.insertAdjacentElement("afterend", running);
+    if (running) main.insertBefore(running, main.querySelector(".page-hero")?.nextSibling || main.firstChild);
+    if (overview && running) running.insertAdjacentElement("afterend", overview);
+    else if (overview) main.insertBefore(overview, main.querySelector(".page-hero")?.nextSibling || main.firstChild);
     if (history && running) running.insertAdjacentElement("afterend", history);
     if (history) history.insertAdjacentElement("afterend", composer);
     if (nodes) composer.insertAdjacentElement("afterend", nodes);
+
+    const statusSelect = document.getElementById("jobStatusFilter");
+    const filterBar = statusSelect?.closest(".jobs-filter-bar");
+    if (statusSelect && filterBar && !filterBar.querySelector(".v3-job-tabs")) {
+      const tabs = document.createElement("div");
+      tabs.className = "v3-job-tabs";
+      tabs.setAttribute("role", "tablist");
+      [["all", "All"], ["running", "Running"], ["queued", "Queued"], ["done", "Completed"], ["error", "Errors"]].forEach(([value, label]) => {
+        const tab = document.createElement("button");
+        tab.type = "button";
+        tab.dataset.status = value;
+        tab.textContent = label;
+        tab.className = value === statusSelect.value ? "is-active" : "";
+        tab.setAttribute("role", "tab");
+        tab.setAttribute("aria-controls", "jobsTablePane");
+        tab.setAttribute("aria-selected", value === statusSelect.value ? "true" : "false");
+        tab.addEventListener("click", () => {
+          statusSelect.value = value;
+          statusSelect.dispatchEvent(new Event("change", { bubbles: true }));
+          tabs.querySelectorAll("button").forEach(button => {
+            button.classList.toggle("is-active", button === tab);
+            button.setAttribute("aria-selected", button === tab ? "true" : "false");
+          });
+        });
+        tabs.appendChild(tab);
+      });
+      filterBar.prepend(tabs);
+      statusSelect.addEventListener("change", () => tabs.querySelectorAll("button").forEach(button => {
+        const active = button.dataset.status === statusSelect.value;
+        button.classList.toggle("is-active", active);
+        button.setAttribute("aria-selected", active ? "true" : "false");
+      }));
+    }
 
     const openComposerForHash = () => {
       if (window.location.hash === "#v3QueueComposer") {
@@ -279,6 +368,96 @@
         card.appendChild(pill);
       }
     });
+  }
+
+  function enhanceLibraryPage() {
+    if (!currentPath.startsWith("/library")) return;
+    const controls = document.getElementById("libraryControls");
+    const filterSelect = document.getElementById("quickFilterSelect");
+    const filterBar = controls?.querySelector(".library-filterbar");
+    if (!controls || !filterSelect || !filterBar || controls.querySelector(".v3-library-filters")) return;
+    const chips = document.createElement("div");
+    chips.className = "v3-library-filters v3-only";
+    [["all", "All"], ["savings", "Largest savings"], ["hdr", "HDR"], ["tracked", "Tracked shows"], ["learning", "Needs learning"]].forEach(([value, label]) => {
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.filter = value;
+      button.textContent = label;
+      button.className = filterSelect.value === value ? "is-active" : "";
+      button.addEventListener("click", () => {
+        filterSelect.value = value;
+        filterSelect.dispatchEvent(new Event("change", { bubbles: true }));
+        chips.querySelectorAll("button").forEach(item => item.classList.toggle("is-active", item === button));
+      });
+      chips.appendChild(button);
+    });
+    filterBar.insertAdjacentElement("afterend", chips);
+    filterSelect.addEventListener("change", () => chips.querySelectorAll("button").forEach(button => button.classList.toggle("is-active", button.dataset.filter === filterSelect.value)));
+  }
+
+  function enhanceAutopilotPage() {
+    if (!currentPath.startsWith("/autopilot")) return;
+    ["training", "policy", "feedback", "documentation"].forEach((id, index) => {
+      const section = document.getElementById(id);
+      const head = section?.querySelector(":scope > .auto-card-head");
+      const body = section?.querySelector(":scope > .auto-card-body");
+      if (!section || !head || !body || head.querySelector(".v3-section-toggle")) return;
+      section.classList.add("v3-collapsible");
+      section.classList.toggle("is-collapsed", index > 0);
+      const toggle = document.createElement("button");
+      toggle.className = "v3-section-toggle";
+      toggle.type = "button";
+      toggle.setAttribute("aria-expanded", index === 0 ? "true" : "false");
+      toggle.setAttribute("aria-controls", `${id}Body`);
+      toggle.innerHTML = "<span>Toggle section</span><b>⌄</b>";
+      body.id = `${id}Body`;
+      toggle.addEventListener("click", () => {
+        const collapsed = section.classList.toggle("is-collapsed");
+        toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      });
+      head.appendChild(toggle);
+    });
+    document.addEventListener("bytesqueeze:autopilot-stage", event => {
+      const current = event.detail?.stage;
+      ["training", "policy"].forEach(id => {
+        const section = document.getElementById(id);
+        const toggle = section?.querySelector(".v3-section-toggle");
+        if (!section || !toggle) return;
+        const collapsed = id !== current;
+        section.classList.toggle("is-collapsed", collapsed);
+        toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+      });
+    });
+  }
+
+  function enhanceWizardPage() {
+    if (!currentPath.startsWith("/size_wizard")) return;
+    const metrics = document.querySelector(".metric-list");
+    const source = document.getElementById("metricSourceSize");
+    const estimate = document.getElementById("metricEstimatedSize");
+    if (!metrics || !source || !estimate || document.querySelector(".v3-size-impact")) return;
+    const impact = document.createElement("section");
+    impact.className = "v3-size-impact";
+    impact.innerHTML = '<div><small>Current</small><strong id="v3ImpactSource">—</strong></div><span>→</span><div><small>Estimated</small><strong id="v3ImpactEstimate">—</strong></div><b id="v3ImpactSaving">Select a source</b>';
+    metrics.insertAdjacentElement("beforebegin", impact);
+    const update = () => {
+      document.getElementById("v3ImpactSource").textContent = source.textContent || "—";
+      document.getElementById("v3ImpactEstimate").textContent = estimate.textContent || "—";
+      const parse = value => {
+        const match = String(value || "").match(/([\d.]+)\s*(TB|GB|MB|KB|B)/i);
+        if (!match) return 0;
+        const scale = { B: 1, KB: 1024, MB: 1048576, GB: 1073741824, TB: 1099511627776 };
+        return Number(match[1]) * scale[match[2].toUpperCase()];
+      };
+      const before = parse(source.textContent);
+      const after = parse(estimate.textContent);
+      const savings = before > 0 && after > 0 ? Math.max(0, Math.round((1 - after / before) * 100)) : 0;
+      document.getElementById("v3ImpactSaving").textContent = savings ? `Save about ${savings}%` : "Live source-aware estimate";
+    };
+    const observer = new MutationObserver(update);
+    observer.observe(source, { childList: true, characterData: true, subtree: true });
+    observer.observe(estimate, { childList: true, characterData: true, subtree: true });
+    update();
   }
 
   const commands = [
@@ -433,10 +612,13 @@
   injectTopbar();
   injectOperationsDock();
   enhanceJobsPage();
+  enhanceLibraryPage();
+  enhanceAutopilotPage();
   enhanceSettingsPage();
   addKeyboardShortcuts();
   applyLibrarySearch();
   addWizardProgress();
+  enhanceWizardPage();
   document.title = `ByteSqueeze · ${currentRoute.label}`;
   body.classList.add("v3-ready");
 })();

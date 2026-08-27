@@ -64,7 +64,7 @@
 
   <main class="home-shell">
     <header class="home-hero">
-      <div><span class="home-kicker">System overview</span><h1>Everything important, at a glance.</h1><p>A calm view of the queue, library, workers, and Autopilot. Open a workspace only when something needs your attention.</p></div>
+      {% if ui_version == 'v3' %}<div><h1>Overview</h1><p id="homeOverviewSummary">System health, current work, and recent activity.</p></div>{% else %}<div><span class="home-kicker">System overview</span><h1>Everything important, at a glance.</h1><p>A calm view of the queue, library, workers, and Autopilot.</p></div>{% endif %}
       <div class="home-hero-actions"><span id="homeSystemStatus" class="home-status">System online</span><button id="homeCustomizeBtn" type="button" class="ghost-btn v3-only">Customize</button><button id="homeRefreshBtn" type="button" class="ghost-btn">Refresh</button></div>
     </header>
 
@@ -149,14 +149,19 @@
       const online = nodes.filter(node => node.online).length;
       homeText("homeWorkersMetric", nodes.length ? `${online} / ${nodes.length}` : "Local");
       homeText("homeWorkersDetail", nodes.length ? "linked workers online" : "Standalone encoder ready");
+      const health = Number(counts.error || summary.error || 0) ? "Needs attention" : "Healthy";
+      const scanTime = library.updated_at ? homeWhen(library.updated_at) : "not scanned";
+      homeText("homeOverviewSummary", `${health} · ${nodes.length ? `${online}/${nodes.length} workers` : "local encoder"} · Last scan ${scanTime}`);
 
       const jobs = document.getElementById("homeJobs");
       jobs.innerHTML = active.length ? active.map(job => {
         const progress = Math.max(0, Math.min(100, Number(job.progress || 0)));
         const progressMarkup = String(job.status || '').toLowerCase() === 'running'
           ? `<span class="home-job-track"><i style="width:${progress}%"></i></span>` : '';
-        return `<div class="home-job"><div class="home-job-copy"><strong>${homeEscape(job.src?.split(/[\\/]/).pop() || "Encode job")}</strong><small>${homeEscape(job.node_name || job.encoder || job.preset || "Local encoder")}${job.progress != null ? ` &middot; ${Math.round(progress)}%` : ""}</small>${progressMarkup}</div><span class="home-job-state">${homeEscape(job.status || "queued")}</span></div>`;
-      }).join("") : `<div class="home-empty"><strong>Nothing is encoding right now.</strong><br><span class="small">Autopilot or a manual job will appear here.</span></div>`;
+        const rate = Number(job.fps ?? job.current_fps ?? job.encode_fps ?? 0);
+        const details = [job.node_name || job.worker_name || "Local encoder", job.encoder || job.preset, rate > 0 ? `${rate.toFixed(rate >= 100 ? 0 : 1)} FPS` : "", job.eta_seconds ? `${Math.max(1, Math.round(Number(job.eta_seconds) / 60))}m remaining` : ""].filter(Boolean).join(" · ");
+        return `<div class="home-job"><div class="home-job-copy"><strong>${homeEscape(job.src?.split(/[\\/]/).pop() || "Encode job")}</strong><small>${homeEscape(details)}${job.progress != null ? ` &middot; ${Math.round(progress)}%` : ""}</small>${progressMarkup}</div><span class="home-job-state">${homeEscape(job.status || "queued")}</span></div>`;
+      }).join("") : `<div class="home-empty"><strong>No active transcodes</strong><span class="small">The encoders are ready.</span></div>`;
 
       const events = Array.isArray(data.events) ? data.events : [];
       const eventBox = document.getElementById("homeEvents");

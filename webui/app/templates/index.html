@@ -35,8 +35,7 @@
   <main class="app-page jobs-shell">
     <header class="page-hero">
       <div>
-        <h1>Jobs &amp; Queue</h1>
-        <p class="page-subtitle">Find a folder or file, add one-off encodes, and manage work already in the queue.</p>
+        {% if ui_version == 'v3' %}<h1>Queue</h1><p class="page-subtitle">Active encodes, waiting work, and history across the controller and linked nodes.</p>{% else %}<h1>Jobs &amp; Queue</h1><p class="page-subtitle">Find a folder or file, add one-off encodes, and manage work already in the queue.</p>{% endif %}
       </div>
     </header>
 
@@ -1154,16 +1153,32 @@ function renderV3RunningJobs(jobs, summary) {
     const footer = document.createElement('div');
     footer.className = 'v3-running-card-foot';
     const eta = document.createElement('span');
-    eta.textContent = job.eta_seconds ? `${formatEta(job.eta_seconds)} remaining` : 'Calculating finish time';
+    const rate = Number(job.fps ?? job.current_fps ?? job.encode_fps ?? 0);
+    const outputEstimate = Number(job.estimated_output_bytes ?? job.estimated_final_bytes ?? 0);
+    const currentOutput = Number(job.output_size_bytes ?? job.current_output_bytes ?? 0);
+    eta.textContent = [rate > 0 ? `${rate.toFixed(rate >= 100 ? 0 : 1)} FPS` : '', job.eta_seconds ? `${formatEta(job.eta_seconds)} remaining` : 'Calculating finish time', currentOutput > 0 ? `${formatFileBytes(currentOutput)} now` : '', outputEstimate > 0 ? `est. ${formatFileBytes(outputEstimate)}` : ''].filter(Boolean).join(' · ');
     footer.appendChild(eta);
+    const actions = document.createElement('div');
+    actions.className = 'v3-running-actions';
+    const details = document.createElement('button');
+    details.type = 'button';
+    details.className = 'ghost-btn';
+    details.textContent = 'Details';
+    details.onclick = () => {
+      const search = document.getElementById('jobSearchInput');
+      if (search) { search.value = job.id || ''; search.dispatchEvent(new Event('input', { bubbles: true })); }
+      document.querySelector('.jobs-history-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    };
+    actions.appendChild(details);
     if (!job.is_worker_job) {
       const cancel = document.createElement('button');
       cancel.type = 'button';
       cancel.className = 'v3-inline-danger';
       cancel.textContent = 'Cancel';
       cancel.onclick = () => cancelJobById(job.id);
-      footer.appendChild(cancel);
+      actions.appendChild(cancel);
     }
+    footer.appendChild(actions);
 
     card.append(head, track, footer);
     panel.appendChild(card);

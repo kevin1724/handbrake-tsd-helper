@@ -1031,28 +1031,13 @@
   <main class="beta-shell">
     <header class="page-hero">
       <div>
-        <span class="page-kicker">Media workspace</span>
         <h1>Library</h1>
-        <p class="page-subtitle">Search, preview, and queue movies or complete seasons with source-safe Smart Presets.</p>
+        {% if ui_version == 'v3' %}<p id="libraryHeaderSummary" class="page-subtitle">Loading titles and episodes…</p>{% else %}<p class="page-subtitle">Search, preview, and queue movies or complete seasons with source-safe Smart Presets.</p>{% endif %}
       </div>
     </header>
 
     <section id="libraryControls" class="section-card library-control-card">
       <div class="library-toolbar-stack">
-        <div class="beta-toolbar library-scanbar">
-          <div class="beta-field">
-            <label for="rootSelect">Library scope</label>
-            <select id="rootSelect"></select>
-          </div>
-
-          <label class="beta-toggle">
-            <input id="posterToggle" type="checkbox" checked>
-            Artwork &amp; releases
-          </label>
-
-          <button id="scanBtn" type="button">Refresh library</button>
-        </div>
-
         <div class="beta-toolbar library-filterbar">
         <div class="beta-field">
           <label for="searchInput">Search library</label>
@@ -1080,13 +1065,20 @@
           </select>
         </div>
 
-        <label class="beta-toggle">
-          <input id="recursiveToggle" type="checkbox" checked>
-          Recursive
-        </label>
-
         <span id="betaStatus" class="small"></span>
         </div>
+        <details class="library-scan-settings" {% if ui_version == 'v2' %}open{% endif %}>
+          <summary>Scan settings <span>Scope, artwork, recursion</span></summary>
+          <div class="beta-toolbar library-scanbar">
+            <div class="beta-field">
+              <label for="rootSelect">Library scope</label>
+              <select id="rootSelect"></select>
+            </div>
+            <label class="beta-toggle"><input id="posterToggle" type="checkbox" checked>Artwork &amp; releases</label>
+            <label class="beta-toggle"><input id="recursiveToggle" type="checkbox" checked>Recursive</label>
+            <button id="scanBtn" type="button">Refresh library</button>
+          </div>
+        </details>
       </div>
 
       <div id="libraryBatchBar" class="beta-bulkbar">
@@ -1148,7 +1140,7 @@
       </details>
     </section>
 
-    <section class="section-card">
+    <section class="section-card library-release-section">
       <div class="beta-column-header">
         <div>
           <div class="eyebrow">Release calendar</div>
@@ -2726,6 +2718,9 @@
       el("statEpisodes").textContent = stats.episodes || 0;
       el("statScanned").textContent = stats.scanned || 0;
       el("statTracked").textContent = tracking.tracked_count || 0;
+      const totalTitles = Number(stats.movies || 0) + Number(stats.shows || 0);
+      const summary = el("libraryHeaderSummary");
+      if (summary) summary.textContent = `${totalTitles.toLocaleString()} titles · ${Number(stats.episodes || 0).toLocaleString()} episodes · ${Number(tracking.tracked_count || 0).toLocaleString()} tracked shows`;
     }
 
     function posterProblemText(data = {}) {

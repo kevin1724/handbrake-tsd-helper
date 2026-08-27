@@ -274,8 +274,13 @@
     <nav class="settings-section-nav" aria-label="Settings sections">
       <a class="settings-section-link {% if settings_page == 'main' %}settings-section-link-active{% endif %}" href="/settings">
         <strong>General</strong>
-        <span>Encoding, presets, events, storage</span>
+        <span>Application defaults</span>
       </a>
+      {% if settings_page == 'main' %}
+      <a class="settings-section-link settings-section-sublink v3-only" href="#encoding-settings"><strong>Encoding</strong><span>Hardware, concurrency, output guards</span></a>
+      <a class="settings-section-link settings-section-sublink v3-only" href="#interface-settings"><strong>Interface</strong><span>V3, V2 Classic, density</span></a>
+      <a class="settings-section-link settings-section-sublink v3-only" href="#storage-history"><strong>Storage &amp; history</strong><span>Events and recovered space</span></a>
+      {% endif %}
       <a class="settings-section-link {% if settings_page == 'smart' %}settings-section-link-active{% endif %}" href="/settings/smart">
         <strong>Smart Presets</strong>
         <span>Resolution, frame, tracks, audio safety</span>
@@ -546,7 +551,7 @@
   <!-- ============================================================
        Global encoding settings
        ------------------------------------------------------------ -->
-  <div class="section-card main-settings-section">
+  <div id="encoding-settings" class="section-card main-settings-section">
     <h2>Encoding settings</h2>
 
     <div class="row">
@@ -889,7 +894,7 @@
   <!-- ============================================================
        UI settings
        ------------------------------------------------------------ -->
-  <div class="section-card settings-wide main-settings-section interface-version-settings">
+  <div id="interface-settings" class="section-card settings-wide main-settings-section interface-version-settings">
     <div class="section-heading-row">
       <div>
         <div class="eyebrow">Interface generation</div>
@@ -1125,7 +1130,7 @@
   <!-- ============================================================
        Events feed (Lidarr-style)
        ------------------------------------------------------------ -->
-  <div class="section-card main-settings-section">
+  <div id="event-history" class="section-card main-settings-section">
     <h2>Events</h2>
     <p class="small">Recent activity (queue, encodes, errors, etc.).</p>
 
@@ -1167,7 +1172,7 @@
   <!-- ============================================================
        Storage savings history
        ------------------------------------------------------------ -->
-  <div class="section-card main-settings-section">
+  <div id="storage-history" class="section-card main-settings-section">
     <h2>Storage Savings</h2>
     <p class="small">
       Tracks how much space was saved per encode and over time.

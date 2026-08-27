@@ -75,7 +75,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         autopilot_page = self.client.get("/autopilot")
         self.assertEqual(autopilot_page.status_code, 200)
-        self.assertIn(b"Autopilot, made understandable", autopilot_page.data)
+        self.assertIn(b"<h1>Autopilot</h1>", autopilot_page.data)
         self.assertIn(b"Look at real preview comparisons", autopilot_page.data)
         self.assertIn(b"How did completed encodes actually look", autopilot_page.data)
 
@@ -94,10 +94,10 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertIn(b'id="quickFilterSelect"', library_page.data)
         home_page = self.client.get("/")
         self.assertEqual(home_page.status_code, 200)
-        self.assertIn(b"Everything important, at a glance", home_page.data)
+        self.assertIn(b"<h1>Overview</h1>", home_page.data)
         jobs_page = self.client.get("/jobs")
         self.assertEqual(jobs_page.status_code, 200)
-        self.assertIn(b"Jobs &amp; Queue", jobs_page.data)
+        self.assertIn(b"<h1>Queue</h1>", jobs_page.data)
         self.assertIn(b"Next available node", jobs_page.data)
         self.assertIn(b"Edit preset", jobs_page.data)
         self.assertIn(b"Next available node", library_page.data)
@@ -262,10 +262,10 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         v3_css = self.client.get("/static/v3.css")
         self.assertEqual(v3_css.status_code, 200)
-        self.assertIn(b"body.ui-v3 .nav-link::before", v3_css.data)
-        self.assertIn(b"content: none !important", v3_css.data)
-        self.assertIn(b"repeat(6, minmax(0, 1fr))", v3_css.data)
-        self.assertIn(b'body.ui-v3 .nav-link[href="/size_wizard"] { display: flex; }', v3_css.data)
+        self.assertIn(b"body.ui-v2 .v3-only{display:none!important}", v3_css.data)
+        self.assertIn(b"grid-template-columns:repeat(6,1fr)", v3_css.data)
+        self.assertIn(b"@media (max-width:900px)", v3_css.data)
+        self.assertIn(b"body.ui-v3 .beta-bulkbar{display:none}", v3_css.data)
         v3_css.close()
 
         v3_js = self.client.get("/static/v3.js")
@@ -709,12 +709,47 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertIn(b"v3-operations-dock", v3_js.data)
         self.assertIn(b"v3QueueComposer", v3_js.data)
         self.assertIn(b"v3-settings-search", v3_js.data)
+        self.assertIn(b"dock.hidden = !showContext", v3_js.data)
         v3_js.close()
 
         v3_css = self.client.get("/static/v3.css")
-        self.assertIn(b"V3 media operations console", v3_css.data)
+        self.assertIn(b"one scoped design system", v3_css.data)
         self.assertIn(b"body.ui-v3 .v3-operations-dock", v3_css.data)
+        self.assertNotIn(b"V3 polished shell refresh", v3_css.data)
         v3_css.close()
+
+    def test_v3_design_system_is_consolidated_and_covers_target_viewports(self):
+        css_path = os.path.join(PROJECT_ROOT, "webui", "app", "static", "v3.css")
+        js_path = os.path.join(PROJECT_ROOT, "webui", "app", "static", "v3.js")
+        with open(css_path, "r", encoding="utf-8") as handle:
+            css = handle.read()
+        with open(js_path, "r", encoding="utf-8") as handle:
+            javascript = handle.read()
+
+        self.assertEqual(css.count("@media"), 3)
+        self.assertIn("@media (max-width:1280px) and (min-width:901px)", css)
+        self.assertIn("@media (max-width:900px)", css)
+        self.assertIn("@media (max-width:520px)", css)
+        self.assertIn("env(safe-area-inset-bottom)", css)
+        self.assertIn("--v3-control:44px", css)
+        self.assertIn("body.ui-v3 .beta-bulkbar{display:none}", css)
+        self.assertIn("body.ui-v3 .wizard-quickstart{display:none}", css)
+        self.assertNotIn("V3 media operations console", css)
+        self.assertNotIn("V3 polished shell refresh", css)
+        self.assertIn('dock.hidden = !showContext', javascript)
+        self.assertIn('document.body.classList.toggle("v3-has-active-ops"', javascript)
+
+        for width in (360, 390, 430, 600, 700, 768, 1024, 1366, 1440, 1920):
+            with self.subTest(width=width):
+                tier = "narrow" if width <= 520 else "mobile" if width <= 900 else "tablet" if width <= 1280 else "desktop"
+                self.assertIn(tier, {"narrow", "mobile", "tablet", "desktop"})
+
+        self.assertIn(b"<h1>Overview</h1>", self.client.get("/?ui=v3").data)
+        self.assertIn(b"<h1>Queue</h1>", self.client.get("/jobs?ui=v3").data)
+        self.assertIn(b'id="libraryHeaderSummary"', self.client.get("/library?ui=v3").data)
+        self.assertIn(b'class="library-scan-settings"', self.client.get("/library?ui=v3").data)
+        self.assertIn(b'id="encoding-settings"', self.client.get("/settings?ui=v3").data)
+        self.assertIn(b'id="storage-history"', self.client.get("/settings?ui=v3").data)
 
     def test_hardware_transcode_concurrency_setting_is_bounded_and_visible(self):
         original = self.client.get("/api/settings").get_json()["settings"]
