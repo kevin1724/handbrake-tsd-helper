@@ -133,12 +133,12 @@ class _AppShellState extends State<AppShell> {
 
     return CallbackShortcuts(
       bindings: <ShortcutActivator, VoidCallback>{
-        const SingleActivator(LogicalKeyboardKey.keyK, control: true):
-            () => _openCommandCenter(context),
-        const SingleActivator(LogicalKeyboardKey.keyK, meta: true):
-            () => _openCommandCenter(context),
-        const SingleActivator(LogicalKeyboardKey.slash):
-            () => _openCommandCenter(context),
+        const SingleActivator(LogicalKeyboardKey.keyK, control: true): () =>
+            _openCommandCenter(context),
+        const SingleActivator(LogicalKeyboardKey.keyK, meta: true): () =>
+            _openCommandCenter(context),
+        const SingleActivator(LogicalKeyboardKey.slash): () =>
+            _openCommandCenter(context),
       },
       child: Focus(autofocus: true, child: shell),
     );
@@ -152,12 +152,10 @@ class _AppShellState extends State<AppShell> {
     required bool wide,
   }) {
     final paused = queue['paused'] == true;
-    final workIsActive = paused ||
-        summaryCount(summary, 'running') > 0 ||
-        summaryCount(summary, 'queued') > 0;
+    final workIsActive = summaryCount(summary, 'running') > 0;
     // Queue already has full live status, and Settings should never have
     // controls obscured by operational chrome.
-    final showDock = controller.showSecondaryUi &&
+    final showDock =
         workIsActive &&
         controller.selectedTab != 2 &&
         controller.selectedTab != 4;
@@ -165,8 +163,8 @@ class _AppShellState extends State<AppShell> {
 
     if (wide) {
       return Scaffold(
-        body: DecoratedBox(
-          decoration: const BoxDecoration(gradient: ByteSqueezeColors.backdrop),
+        body: ColoredBox(
+          color: ByteSqueezeColors.canvas,
           child: SafeArea(
             child: Row(
               children: [
@@ -197,8 +195,9 @@ class _AppShellState extends State<AppShell> {
                                 child: Align(
                                   alignment: Alignment.bottomCenter,
                                   child: ConstrainedBox(
-                                    constraints:
-                                        const BoxConstraints(maxWidth: 720),
+                                    constraints: const BoxConstraints(
+                                      maxWidth: 720,
+                                    ),
                                     child: OperationsDock(
                                       summary: summary,
                                       activeJobs: activeJobs,
@@ -222,9 +221,8 @@ class _AppShellState extends State<AppShell> {
     }
 
     return Scaffold(
-      extendBody: true,
-      body: DecoratedBox(
-        decoration: const BoxDecoration(gradient: ByteSqueezeColors.backdrop),
+      body: ColoredBox(
+        color: ByteSqueezeColors.canvas,
         child: SafeArea(
           bottom: false,
           child: Column(
@@ -235,57 +233,45 @@ class _AppShellState extends State<AppShell> {
                 onCommand: () => _openCommandCenter(context),
               ),
               if (controller.error != null) _errorBanner(),
-              Expanded(
-                child: Stack(
-                  children: [
-                    Positioned.fill(child: page),
-                    if (showDock)
-                      Positioned(
-                        left: 12,
-                        right: 12,
-                        bottom: 82 + MediaQuery.paddingOf(context).bottom,
-                        child: OperationsDock(
-                          summary: summary,
-                          activeJobs: activeJobs,
-                          paused: paused,
-                          onTap: () => controller.selectTab(2),
-                        ),
-                      ),
-                  ],
-                ),
-              ),
+              Expanded(child: page),
             ],
           ),
         ),
       ),
-      bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(10, 0, 10, 9),
-        child: DecoratedBox(
-          decoration: BoxDecoration(
-            color: const Color(0xF70B1017),
-            borderRadius: BorderRadius.circular(22),
-            border: Border.all(color: ByteSqueezeColors.line),
-            boxShadow: const [
-              BoxShadow(
-                color: Color(0x99000000),
-                blurRadius: 28,
-                offset: Offset(0, 14),
-              ),
-            ],
-          ),
-          child: ClipRRect(
-            borderRadius: BorderRadius.circular(21),
-            child: NavigationBar(
-              selectedIndex: controller.selectedTab,
-              onDestinationSelected: controller.selectTab,
-              destinations: _destinations
-                  .map((item) => NavigationDestination(
+      bottomNavigationBar: DecoratedBox(
+        decoration: const BoxDecoration(
+          color: Color(0xFF0B1017),
+          border: Border(top: BorderSide(color: ByteSqueezeColors.subtleLine)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (showDock)
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(10, 8, 10, 0),
+                  child: OperationsDock(
+                    summary: summary,
+                    activeJobs: activeJobs,
+                    paused: paused,
+                    onTap: () => controller.selectTab(2),
+                  ),
+                ),
+              NavigationBar(
+                selectedIndex: controller.selectedTab,
+                onDestinationSelected: controller.selectTab,
+                destinations: _destinations
+                    .map(
+                      (item) => NavigationDestination(
                         icon: Icon(item.icon),
                         selectedIcon: Icon(item.selectedIcon),
                         label: item.shortLabel ?? item.label,
-                      ))
-                  .toList(),
-            ),
+                      ),
+                    )
+                    .toList(),
+              ),
+            ],
           ),
         ),
       ),
@@ -305,7 +291,9 @@ class _AppShellState extends State<AppShell> {
         children: [
           Positioned.fill(
             child: DecoratedBox(
-              decoration: const BoxDecoration(gradient: ByteSqueezeColors.backdrop),
+              decoration: const BoxDecoration(
+                gradient: ByteSqueezeColors.backdrop,
+              ),
               child: SafeArea(
                 bottom: false,
                 child: Column(
@@ -324,13 +312,15 @@ class _AppShellState extends State<AppShell> {
                                     child: BrandMark(size: 42, showName: false),
                                   ),
                                   destinations: _destinations
-                                      .map((item) => NavigationRailDestination(
-                                            icon: Icon(item.icon),
-                                            selectedIcon:
-                                                Icon(item.selectedIcon),
-                                            label: Text(
-                                                item.shortLabel ?? item.label),
-                                          ))
+                                      .map(
+                                        (item) => NavigationRailDestination(
+                                          icon: Icon(item.icon),
+                                          selectedIcon: Icon(item.selectedIcon),
+                                          label: Text(
+                                            item.shortLabel ?? item.label,
+                                          ),
+                                        ),
+                                      )
                                       .toList(),
                                 ),
                                 const VerticalDivider(width: 1),
@@ -382,11 +372,13 @@ class _AppShellState extends State<AppShell> {
                   selectedIndex: controller.selectedTab,
                   onDestinationSelected: controller.selectTab,
                   destinations: _destinations
-                      .map((item) => NavigationDestination(
-                            icon: Icon(item.icon),
-                            selectedIcon: Icon(item.selectedIcon),
-                            label: item.shortLabel ?? item.label,
-                          ))
+                      .map(
+                        (item) => NavigationDestination(
+                          icon: Icon(item.icon),
+                          selectedIcon: Icon(item.selectedIcon),
+                          label: item.shortLabel ?? item.label,
+                        ),
+                      )
                       .toList(),
                 ),
               ),
@@ -395,14 +387,16 @@ class _AppShellState extends State<AppShell> {
   }
 
   Widget _errorBanner() => MaterialBanner(
-        backgroundColor: ByteSqueezeColors.danger.withValues(alpha: .10),
-        leading: const Icon(Icons.cloud_off_rounded,
-            color: ByteSqueezeColors.danger),
-        content: Text(controller.error!),
-        actions: [
-          TextButton(onPressed: controller.refreshAll, child: const Text('Retry')),
-        ],
-      );
+    backgroundColor: ByteSqueezeColors.danger.withValues(alpha: .10),
+    leading: const Icon(
+      Icons.cloud_off_rounded,
+      color: ByteSqueezeColors.danger,
+    ),
+    content: Text(controller.error!),
+    actions: [
+      TextButton(onPressed: controller.refreshAll, child: const Text('Retry')),
+    ],
+  );
 
   Future<void> _openCommandCenter(BuildContext context) async {
     final queue = asMap(controller.dashboard['queue']);
@@ -455,10 +449,8 @@ class _AppShellState extends State<AppShell> {
       isScrollControlled: true,
       useSafeArea: true,
       showDragHandle: false,
-      builder: (context) => _CommandCenter(
-        actions: actions,
-        canControl: controller.canControl,
-      ),
+      builder: (context) =>
+          _CommandCenter(actions: actions, canControl: controller.canControl),
     );
     if (selected == null || !mounted) return;
     try {
@@ -548,11 +540,14 @@ class _V3Sidebar extends StatelessWidget {
                   children: [
                     Icon(Icons.circle, color: ByteSqueezeColors.mint, size: 9),
                     SizedBox(width: 7),
-                    Text('SERVER ONLINE',
-                        style: TextStyle(
-                            fontSize: 10,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: .8)),
+                    Text(
+                      'SERVER ONLINE',
+                      style: TextStyle(
+                        fontSize: 10,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: .8,
+                      ),
+                    ),
                   ],
                 ),
                 const SizedBox(height: 7),
@@ -649,7 +644,7 @@ class _WorkspaceBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      height: 78,
+      height: 58,
       padding: const EdgeInsets.symmetric(horizontal: 26),
       decoration: const BoxDecoration(
         color: Color(0xB80A0E14),
@@ -662,17 +657,22 @@ class _WorkspaceBar extends StatelessWidget {
               mainAxisAlignment: MainAxisAlignment.center,
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Text(destination.eyebrow,
-                    style: const TextStyle(
-                        color: ByteSqueezeColors.cyan,
-                        fontSize: 9,
-                        fontWeight: FontWeight.w800,
-                        letterSpacing: 1.35)),
-                const SizedBox(height: 3),
-                Text(destination.subtitle,
+                Text(
+                  destination.label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.titleMedium,
+                ),
+                if (controller.statsForNerds)
+                  Text(
+                    destination.subtitle,
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.titleMedium),
+                    style: const TextStyle(
+                      color: ByteSqueezeColors.muted,
+                      fontSize: 10.5,
+                    ),
+                  ),
               ],
             ),
           ),
@@ -686,7 +686,8 @@ class _WorkspaceBar extends StatelessWidget {
                   ? const SizedBox(
                       width: 18,
                       height: 18,
-                      child: CircularProgressIndicator(strokeWidth: 2))
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
                   : const Icon(Icons.refresh_rounded),
             ),
           ],
@@ -709,39 +710,58 @@ class _MobileWorkspaceBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final queue = asMap(controller.dashboard['queue']);
+    final summary = asMap(queue['summary']);
+    final running = summaryCount(summary, 'running');
+    final nodes = asMap(controller.dashboard['nodes']);
+    final online = (nodes['online'] as num?)?.toInt() ?? 0;
     return Container(
-      height: 66,
-      padding: const EdgeInsets.fromLTRB(15, 8, 10, 8),
+      height: 52,
+      padding: const EdgeInsets.fromLTRB(15, 4, 7, 4),
       decoration: const BoxDecoration(
         color: Color(0xD90A0E14),
         border: Border(bottom: BorderSide(color: ByteSqueezeColors.subtleLine)),
       ),
       child: Row(
         children: [
-          const BrandMark(size: 34, showName: false),
-          const SizedBox(width: 11),
           Expanded(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text('ByteSqueeze',
-                    style: TextStyle(
-                        fontSize: 16, fontWeight: FontWeight.w800)),
-                Text('${destination.label} workspace · V3',
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style: const TextStyle(
-                        color: ByteSqueezeColors.muted, fontSize: 10.5)),
-              ],
+            child: Text(
+              destination.shortLabel ?? destination.label,
+              maxLines: 1,
+              overflow: TextOverflow.ellipsis,
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w800),
             ),
           ),
-          if (controller.showSecondaryUi)
-            IconButton(
-              tooltip: 'Command center',
-              onPressed: onCommand,
-              icon: const Icon(Icons.search_rounded),
+          Tooltip(
+            message: running > 0
+                ? '$running encoding now'
+                : '$online worker${online == 1 ? '' : 's'} online',
+            child: Semantics(
+              label: running > 0
+                  ? '$running encoding now'
+                  : '$online workers online',
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 8),
+                child: Icon(
+                  Icons.circle,
+                  size: 8,
+                  color: running > 0
+                      ? ByteSqueezeColors.cyan
+                      : ByteSqueezeColors.mint,
+                ),
+              ),
             ),
+          ),
+          IconButton(
+            tooltip: 'Command center',
+            onPressed: onCommand,
+            icon: const Icon(Icons.search_rounded),
+          ),
+          IconButton(
+            tooltip: 'Queue media',
+            onPressed: () => controller.selectTab(1),
+            icon: const Icon(Icons.add_rounded),
+          ),
           if (controller.busy)
             const Padding(
               padding: EdgeInsets.only(right: 8),
@@ -751,16 +771,8 @@ class _MobileWorkspaceBar extends StatelessWidget {
                 child: CircularProgressIndicator(strokeWidth: 2),
               ),
             )
-          else if (controller.statsForNerds)
-            Container(
-              width: 8,
-              height: 8,
-              margin: const EdgeInsets.only(right: 9),
-              decoration: const BoxDecoration(
-                color: ByteSqueezeColors.mint,
-                shape: BoxShape.circle,
-              ),
-            ),
+          else
+            const SizedBox(width: 8),
         ],
       ),
     );
@@ -777,7 +789,8 @@ class _CommandButton extends StatelessWidget {
   Widget build(BuildContext context) {
     return LayoutBuilder(
       builder: (context, constraints) {
-        final showShortcut = expanded &&
+        final showShortcut =
+            expanded &&
             (!constraints.hasBoundedWidth || constraints.maxWidth >= 250);
         return OutlinedButton.icon(
           onPressed: onPressed,
@@ -788,9 +801,13 @@ class _CommandButton extends StatelessWidget {
                   children: [
                     Text('Command center'),
                     SizedBox(width: 20),
-                    Text('⌘ K',
-                        style: TextStyle(
-                            color: ByteSqueezeColors.muted, fontSize: 10)),
+                    Text(
+                      '⌘ K',
+                      style: TextStyle(
+                        color: ByteSqueezeColors.muted,
+                        fontSize: 10,
+                      ),
+                    ),
                   ],
                 )
               : Text(expanded ? 'Command center' : 'Search'),
@@ -862,11 +879,17 @@ class _CommandCenterState extends State<_CommandCenter> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Command center',
-                            style: Theme.of(context).textTheme.headlineSmall),
-                        const Text('Go anywhere or run a safe server action',
-                            style: TextStyle(
-                                color: ByteSqueezeColors.muted, fontSize: 12)),
+                        Text(
+                          'Command center',
+                          style: Theme.of(context).textTheme.headlineSmall,
+                        ),
+                        const Text(
+                          'Go anywhere or run a safe server action',
+                          style: TextStyle(
+                            color: ByteSqueezeColors.muted,
+                            fontSize: 12,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -921,10 +944,12 @@ class _CommandCenterState extends State<_CommandCenter> {
                                             .withValues(alpha: .1),
                                         borderRadius: BorderRadius.circular(12),
                                       ),
-                                      child: Icon(action.icon,
-                                          color: enabled
-                                              ? ByteSqueezeColors.cyan
-                                              : ByteSqueezeColors.muted),
+                                      child: Icon(
+                                        action.icon,
+                                        color: enabled
+                                            ? ByteSqueezeColors.cyan
+                                            : ByteSqueezeColors.muted,
+                                      ),
                                     ),
                                     const SizedBox(width: 12),
                                     Expanded(
@@ -932,12 +957,15 @@ class _CommandCenterState extends State<_CommandCenter> {
                                         crossAxisAlignment:
                                             CrossAxisAlignment.start,
                                         children: [
-                                          Text(action.title,
-                                              style: TextStyle(
-                                                  color: enabled
-                                                      ? ByteSqueezeColors.ink
-                                                      : ByteSqueezeColors.muted,
-                                                  fontWeight: FontWeight.w700)),
+                                          Text(
+                                            action.title,
+                                            style: TextStyle(
+                                              color: enabled
+                                                  ? ByteSqueezeColors.ink
+                                                  : ByteSqueezeColors.muted,
+                                              fontWeight: FontWeight.w700,
+                                            ),
+                                          ),
                                           const SizedBox(height: 2),
                                           Text(
                                             enabled
@@ -946,15 +974,18 @@ class _CommandCenterState extends State<_CommandCenter> {
                                             maxLines: 2,
                                             overflow: TextOverflow.ellipsis,
                                             style: const TextStyle(
-                                                color: ByteSqueezeColors.muted,
-                                                fontSize: 11.5),
+                                              color: ByteSqueezeColors.muted,
+                                              fontSize: 11.5,
+                                            ),
                                           ),
                                         ],
                                       ),
                                     ),
-                                    const Icon(Icons.arrow_forward_rounded,
-                                        color: ByteSqueezeColors.muted,
-                                        size: 18),
+                                    const Icon(
+                                      Icons.arrow_forward_rounded,
+                                      color: ByteSqueezeColors.muted,
+                                      size: 18,
+                                    ),
                                   ],
                                 ),
                               ),

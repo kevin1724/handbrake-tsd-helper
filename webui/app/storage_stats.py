@@ -32,6 +32,7 @@ import json
 import os
 import threading
 import time
+from datetime import datetime, timedelta
 from typing import Any
 
 from .config import DATA_DIR
@@ -43,6 +44,7 @@ STATS_LOCK = threading.RLock()
 _stats_cache: dict | None = None
 _stats_signature: tuple[int, int] | None = None
 _summary_cache: dict | None = None
+_analytics_cache: dict[tuple[int, int, str], dict] = {}
 
 
 def _ensure_dict(obj: Any) -> dict:
@@ -62,7 +64,7 @@ def _file_signature() -> tuple[int, int] | None:
 
 
 def _load_unlocked() -> dict:
-    global _stats_cache, _stats_signature, _summary_cache
+    global _stats_cache, _stats_signature, _summary_cache, _analytics_cache
     signature = _file_signature()
     if _stats_cache is not None and signature == _stats_signature:
         return _stats_cache
@@ -86,6 +88,7 @@ def _load_unlocked() -> dict:
     _stats_cache = data
     _stats_signature = signature
     _summary_cache = None
+    _analytics_cache = {}
     return data
 
 
@@ -95,7 +98,7 @@ def _load() -> dict:
 
 
 def _save_unlocked(data: dict) -> None:
-    global _stats_cache, _stats_signature, _summary_cache
+    global _stats_cache, _stats_signature, _summary_cache, _analytics_cache
     temp_path = f"{STATS_FILE}.tmp.{os.getpid()}.{threading.get_ident()}"
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -107,6 +110,7 @@ def _save_unlocked(data: dict) -> None:
         _stats_cache = data
         _stats_signature = _file_signature()
         _summary_cache = None
+        _analytics_cache = {}
     except Exception as exc:
         print(f"[WARN] Failed to save storage_stats.json: {exc}", flush=True)
     finally:
@@ -221,6 +225,180 @@ def get_summary() -> dict:
                 "total_runtime_seconds": round(total_runtime_seconds, 1),
             }
         return _summary_cache.copy()
+
+
+def _analytics_copy(payload: dict) -> dict:
+    copied = payload.copy()
+    copied["trend"] = [row.copy() for row in payload.get("trend", [])]
+    copied["workers"] = [row.copy() for row in payload.get("workers", [])]
+    copied["peak_day"] = (payload.get("peak_day") or {}).copy()
+    return copied
+
+
+def get_dashboard_analytics(
+    days: int = 30,
+    worker_limit: int = 6,
+    *,
+    now_ts: float | None = None,
+) -> dict:
+    """Return compact, durable storage-impact analytics for operational UIs.
+
+    The ledger is newest-first and bounded, while ``totals`` remains lifetime
+    data. Any totals older than the retained ledger are kept visible as an
+    unattributed contribution instead of silently disappearing.
+    """
+    global _analytics_cache
+    days = max(7, min(365, int(days or 30)))
+    worker_limit = max(1, min(20, int(worker_limit or 6)))
+    current_ts = float(now_ts if now_ts is not None else time.time())
+    today = datetime.fromtimestamp(current_ts).date()
+    cache_key = (days, worker_limit, today.isoformat())
+
+    with STATS_LOCK:
+        data = _load_unlocked()
+        cached = _analytics_cache.get(cache_key)
+        if cached is not None:
+            return _analytics_copy(cached)
+
+        rows = _ensure_list(data.get("encodes"))
+        totals = _ensure_dict(data.get("totals"))
+        lifetime_count = max(0, int(totals.get("count") or 0))
+        lifetime_saved = max(0, int(totals.get("saved_bytes") or 0))
+        first_day = today - timedelta(days=days - 1)
+        trend_index = {
+            (first_day + timedelta(days=offset)).isoformat(): {
+                "date": (first_day + timedelta(days=offset)).isoformat(),
+                "saved_bytes": 0,
+                "completed": 0,
+            }
+            for offset in range(days)
+        }
+        workers: dict[str, dict] = {}
+        active_dates = set()
+        row_saved_total = 0
+        total_source_bytes = 0
+        total_output_bytes = 0
+        first_encode_at = 0.0
+        last_encode_at = 0.0
+
+        for row in rows:
+            try:
+                encoded_at = max(0.0, float(row.get("ts") or 0.0))
+            except Exception:
+                encoded_at = 0.0
+            try:
+                saved_bytes = max(0, int(row.get("saved_bytes") or 0))
+            except Exception:
+                saved_bytes = 0
+            try:
+                source_bytes = max(0, int(row.get("src_bytes") or 0))
+            except Exception:
+                source_bytes = 0
+            try:
+                output_bytes = max(0, int(row.get("out_bytes") or 0))
+            except Exception:
+                output_bytes = 0
+            try:
+                runtime_seconds = max(0.0, float(row.get("duration_seconds") or 0.0))
+            except Exception:
+                runtime_seconds = 0.0
+
+            row_saved_total += saved_bytes
+            total_source_bytes += source_bytes
+            total_output_bytes += output_bytes
+            if encoded_at > 0:
+                first_encode_at = encoded_at if not first_encode_at else min(first_encode_at, encoded_at)
+                last_encode_at = max(last_encode_at, encoded_at)
+                encoded_day = datetime.fromtimestamp(encoded_at).date()
+                active_dates.add(encoded_day)
+                point = trend_index.get(encoded_day.isoformat())
+                if point is not None:
+                    point["saved_bytes"] += saved_bytes
+                    point["completed"] += 1
+
+            node_id = str(row.get("node_id") or "").strip()
+            node_name = str(row.get("node_name") or "").strip() or "Main controller"
+            worker_key = node_id or f"legacy::{node_name.casefold()}"
+            worker = workers.setdefault(worker_key, {
+                "node_id": node_id,
+                "node_name": node_name,
+                "completed": 0,
+                "saved_bytes": 0,
+                "runtime_seconds": 0.0,
+            })
+            worker["completed"] += 1
+            worker["saved_bytes"] += saved_bytes
+            worker["runtime_seconds"] += runtime_seconds
+
+        unattributed_count = max(0, lifetime_count - len(rows))
+        unattributed_saved = max(0, lifetime_saved - row_saved_total)
+        if unattributed_count or unattributed_saved:
+            workers["__unattributed__"] = {
+                "node_id": "",
+                "node_name": "Older history",
+                "completed": unattributed_count,
+                "saved_bytes": unattributed_saved,
+                "runtime_seconds": 0.0,
+                "unattributed": True,
+            }
+
+        worker_rows = sorted(
+            workers.values(),
+            key=lambda worker: (int(worker.get("saved_bytes") or 0), int(worker.get("completed") or 0)),
+            reverse=True,
+        )
+        if len(worker_rows) > worker_limit:
+            overflow = worker_rows[worker_limit - 1:]
+            worker_rows = worker_rows[:worker_limit - 1] + [{
+                "node_id": "",
+                "node_name": "Other workers",
+                "completed": sum(int(row.get("completed") or 0) for row in overflow),
+                "saved_bytes": sum(int(row.get("saved_bytes") or 0) for row in overflow),
+                "runtime_seconds": sum(float(row.get("runtime_seconds") or 0.0) for row in overflow),
+                "grouped": True,
+            }]
+        contribution_total = max(1, lifetime_saved or row_saved_total)
+        for worker in worker_rows:
+            worker["runtime_seconds"] = round(float(worker.get("runtime_seconds") or 0.0), 1)
+            worker["share_percent"] = round((int(worker.get("saved_bytes") or 0) / contribution_total) * 100.0, 1)
+
+        trend = list(trend_index.values())
+        recent_saved = sum(int(point["saved_bytes"]) for point in trend)
+        recent_completed = sum(int(point["completed"]) for point in trend)
+        peak_day = max(trend, key=lambda point: int(point.get("saved_bytes") or 0), default={})
+
+        longest_streak = 0
+        streak = 0
+        previous_day = None
+        for active_day in sorted(active_dates):
+            if previous_day is not None and active_day == previous_day + timedelta(days=1):
+                streak += 1
+            else:
+                streak = 1
+            longest_streak = max(longest_streak, streak)
+            previous_day = active_day
+
+        payload = {
+            "window_days": days,
+            "trend": trend,
+            "recent_saved_bytes": recent_saved,
+            "recent_completed": recent_completed,
+            "peak_day": peak_day.copy(),
+            "workers": worker_rows,
+            "worker_count": len([row for row in workers.values() if not row.get("unattributed")]),
+            "tracked_rows": len(rows),
+            "history_complete": lifetime_count <= len(rows),
+            "total_source_bytes": total_source_bytes,
+            "total_output_bytes": total_output_bytes,
+            "efficiency_percent": round((row_saved_total / total_source_bytes) * 100.0, 1) if total_source_bytes else 0.0,
+            "average_saved_bytes": round(lifetime_saved / lifetime_count) if lifetime_count else 0,
+            "active_days": len(active_dates),
+            "longest_streak_days": longest_streak,
+            "first_encode_at": first_encode_at,
+            "last_encode_at": last_encode_at,
+        }
+        _analytics_cache[cache_key] = payload
+        return _analytics_copy(payload)
 
 
 def list_encodes(limit: int = 200) -> list[dict]:

@@ -81,6 +81,28 @@
           <div class="home-card-head"><h2>Current work</h2><a class="home-link" href="/jobs">Open jobs &rarr;</a></div>
           <div id="homeJobs" class="home-card-body"><div class="home-empty">Loading queue...</div></div>
         </section>
+        <section class="home-card home-impact-card v3-only" data-home-widget="impact">
+          <div class="home-card-head"><div><h2>Storage impact</h2><p>Your compression history, not an estimate.</p></div><span class="home-impact-period">Last 30 days</span></div>
+          <div class="home-card-body home-impact-body">
+            <div class="home-impact-hero">
+              <div class="home-impact-total"><span>All-time recovered</span><strong id="homeImpactSaved">--</strong><small id="homeImpactEfficiency">Calculating efficiency</small></div>
+              <div class="home-impact-kpis">
+                <div><span>Completed</span><strong id="homeImpactCompleted">--</strong><small>verified encodes</small></div>
+                <div><span>Average saved</span><strong id="homeImpactAverage">--</strong><small>per encode</small></div>
+                <div><span>Encode time</span><strong id="homeImpactRuntime">--</strong><small>tracked runtime</small></div>
+              </div>
+            </div>
+            <div class="home-savings-chart-shell">
+              <div class="home-savings-chart-head"><span>Daily space recovered</span><strong id="homeImpactRecent">--</strong></div>
+              <svg id="homeSavingsChart" class="home-savings-chart" viewBox="0 0 720 170" preserveAspectRatio="none" role="img" aria-label="Storage savings over the last 30 days"></svg>
+              <div class="home-savings-chart-axis"><span id="homeChartStart">--</span><span id="homeChartPeak">Peak --</span><span id="homeChartEnd">Today</span></div>
+            </div>
+            <div class="home-worker-impact">
+              <div class="home-worker-impact-head"><div><span>Worker contribution</span><small id="homeWorkerImpactSummary">Loading worker history</small></div><strong id="homeWorkerImpactTotal">--</strong></div>
+              <div id="homeWorkerImpactList" class="home-worker-impact-list"><div class="home-empty">Loading worker totals...</div></div>
+            </div>
+          </div>
+        </section>
         <section class="home-card" data-home-widget="activity">
           <div class="home-card-head"><h2>Recent activity</h2><a class="home-link" href="/settings">View history &rarr;</a></div>
           <div id="homeEvents" class="home-card-body"><div class="home-empty">Loading activity...</div></div>
@@ -94,6 +116,13 @@
             <div class="autopilot-score-ring"><strong id="homeAutoScore">0%</strong><div><h3 id="homeAutoMode">Checking setup</h3><p id="homeAutoCopy">Loading readiness checks...</p></div></div>
             <div id="homeAutoAlert" class="home-alert" hidden></div>
             <a href="/autopilot" class="button-link">Review and train Autopilot</a>
+          </div>
+        </section>
+        <section class="home-card home-achievements-card v3-only" data-home-widget="achievements">
+          <div class="home-card-head"><div><h2>Achievements</h2><p id="homeAchievementSummary">Building your next goals.</p></div><span id="homeAchievementLevel" class="home-achievement-level">Level 1</span></div>
+          <div class="home-card-body">
+            <div id="homeAchievementProgress" class="home-achievement-progress"><div class="home-empty">Loading milestones...</div></div>
+            <div id="homeAchievementBadges" class="home-achievement-badges" aria-label="Unlocked achievements"></div>
           </div>
         </section>
         <section class="home-card" data-home-widget="quick">
@@ -114,8 +143,10 @@
       <div class="v3-home-config-head"><div><span class="home-kicker">Your dashboard</span><h2>Choose what stays visible</h2><p>Keep the overview focused on the information you use every day.</p></div><button class="v3-dialog-close" value="close" aria-label="Close dashboard settings">×</button></div>
       <div class="v3-home-config-grid">
         <label><input type="checkbox" value="work" checked><span><strong>Current work</strong><small>Active and waiting transcodes</small></span></label>
+        <label><input type="checkbox" value="impact" checked><span><strong>Storage impact</strong><small>Savings graph and worker contribution</small></span></label>
         <label><input type="checkbox" value="activity" checked><span><strong>Recent activity</strong><small>System events and completed actions</small></span></label>
         <label><input type="checkbox" value="autopilot" checked><span><strong>Autopilot</strong><small>Readiness and feedback reminders</small></span></label>
+        <label><input type="checkbox" value="achievements" checked><span><strong>Achievements</strong><small>Milestones and progress goals</small></span></label>
         <label><input type="checkbox" value="quick" checked><span><strong>Quick actions</strong><small>Shortcuts to common workspaces</small></span></label>
       </div>
       <div class="v3-home-config-actions"><button id="homeWidgetsReset" type="button" class="ghost-btn">Reset</button><button value="done">Done</button></div>
@@ -131,6 +162,76 @@
     const homeText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
     const homeWhen = value => { if (!value) return "Recently"; const d = new Date(Number(value) > 100000000000 ? Number(value) : Number(value) * 1000); return isNaN(d) ? "Recently" : d.toLocaleString(); };
     const homeEscape = value => String(value ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+    const homeFormatHours = value => { const hours = Math.max(0, Number(value || 0)) / 3600; return hours >= 1000 ? `${(hours / 1000).toFixed(1)}k h` : `${Math.round(hours)} h`; };
+    const homeShortDate = value => { const date = new Date(`${value || ""}T00:00:00`); return isNaN(date) ? "--" : date.toLocaleDateString(undefined, { month:"short", day:"numeric" }); };
+    const homeNextMilestone = (value, goals) => goals.find(goal => value < goal) || goals[goals.length - 1] * 2;
+    const homeProgress = (value, target) => Math.max(0, Math.min(100, target > 0 ? (Number(value || 0) / target) * 100 : 0));
+
+    function renderHomeImpact(storage, completed, runtimeSeconds) {
+      const analytics = storage.analytics || {};
+      const savedBytes = Number(storage.saved_bytes || storage.total_saved_bytes || 0);
+      const efficiency = Number(analytics.efficiency_percent || 0);
+      homeText("homeImpactSaved", homeFormatBytes(savedBytes));
+      homeText("homeImpactEfficiency", efficiency > 0 ? `${efficiency.toFixed(1)}% smaller than the original media` : "Efficiency appears after the first completed encode");
+      homeText("homeImpactCompleted", Number(completed || 0).toLocaleString());
+      homeText("homeImpactAverage", homeFormatBytes(analytics.average_saved_bytes || 0));
+      homeText("homeImpactRuntime", homeFormatHours(runtimeSeconds || 0));
+      homeText("homeImpactRecent", `${homeFormatBytes(analytics.recent_saved_bytes || 0)} · ${Number(analytics.recent_completed || 0)} encodes`);
+
+      const points = Array.isArray(analytics.trend) ? analytics.trend : [];
+      const svg = document.getElementById("homeSavingsChart");
+      if (svg) {
+        const width = 720, top = 18, baseline = 146, left = 12, right = 708;
+        const maxValue = Math.max(1, ...points.map(point => Number(point.saved_bytes || 0)));
+        const coordinates = points.map((point, index) => {
+          const x = points.length > 1 ? left + ((right - left) * index / (points.length - 1)) : width / 2;
+          const y = baseline - ((baseline - top) * Number(point.saved_bytes || 0) / maxValue);
+          return [x, y];
+        });
+        const line = coordinates.map(([x,y], index) => `${index ? "L" : "M"}${x.toFixed(1)} ${y.toFixed(1)}`).join(" ");
+        const area = coordinates.length ? `${line} L${coordinates[coordinates.length - 1][0].toFixed(1)} ${baseline} L${coordinates[0][0].toFixed(1)} ${baseline} Z` : "";
+        const peakIndex = points.reduce((best, point, index) => Number(point.saved_bytes || 0) > Number(points[best]?.saved_bytes || 0) ? index : best, 0);
+        const peak = coordinates[peakIndex] || [left, baseline];
+        svg.innerHTML = `<defs><linearGradient id="homeSavingsFill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#38d4e7" stop-opacity=".34"/><stop offset="1" stop-color="#38d4e7" stop-opacity="0"/></linearGradient></defs><g class="home-chart-grid"><line x1="${left}" y1="${top}" x2="${right}" y2="${top}"/><line x1="${left}" y1="82" x2="${right}" y2="82"/><line x1="${left}" y1="${baseline}" x2="${right}" y2="${baseline}"/></g>${area ? `<path class="home-chart-area" d="${area}"/><path class="home-chart-line" d="${line}"/><circle class="home-chart-peak" cx="${peak[0]}" cy="${peak[1]}" r="4"/>` : ""}`;
+        svg.setAttribute("aria-label", `${homeFormatBytes(analytics.recent_saved_bytes || 0)} recovered across ${Number(analytics.recent_completed || 0)} encodes in the last ${analytics.window_days || 30} days`);
+      }
+      homeText("homeChartStart", points.length ? homeShortDate(points[0].date) : "30 days ago");
+      homeText("homeChartEnd", points.length ? homeShortDate(points[points.length - 1].date) : "Today");
+      const peak = analytics.peak_day || {};
+      homeText("homeChartPeak", Number(peak.saved_bytes || 0) > 0 ? `Peak ${homeFormatBytes(peak.saved_bytes)} on ${homeShortDate(peak.date)}` : "No savings yet this month");
+
+      const workers = Array.isArray(analytics.workers) ? analytics.workers : [];
+      homeText("homeWorkerImpactSummary", workers.length ? `${analytics.worker_count || workers.length} contributing nodes · ${analytics.active_days || 0} active days` : "Worker history appears after completed encodes");
+      homeText("homeWorkerImpactTotal", `${Number(completed || 0).toLocaleString()} total`);
+      const workerList = document.getElementById("homeWorkerImpactList");
+      if (workerList) workerList.innerHTML = workers.length ? workers.map((worker, index) => {
+        const share = Math.max(0, Math.min(100, Number(worker.share_percent || 0)));
+        const workerName = worker.display_name || worker.node_name || "Worker";
+        return `<div class="home-worker-impact-row"><span class="home-worker-rank">${index + 1}</span><div><div class="home-worker-impact-copy"><strong>${homeEscape(workerName)}</strong><span>${homeFormatBytes(worker.saved_bytes || 0)} · ${Number(worker.completed || 0)} encodes</span></div><span class="home-worker-impact-track" role="progressbar" aria-label="${homeEscape(workerName)} contribution" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${share.toFixed(1)}"><i style="width:${Math.max(2, share)}%"></i></span></div><b>${share.toFixed(share >= 10 ? 0 : 1)}%</b></div>`;
+      }).join("") : `<div class="home-empty">Complete an encode to begin worker tracking.</div>`;
+
+      const countTarget = homeNextMilestone(completed, [1,10,25,50,100,250,500,1000,2500,5000,10000]);
+      const savedTarget = homeNextMilestone(savedBytes, [1024**3,10*1024**3,50*1024**3,100*1024**3,250*1024**3,500*1024**3,1024**4,2*1024**4,5*1024**4,10*1024**4]);
+      const efficiencyTarget = homeNextMilestone(efficiency, [10,25,40,50,60,70,80,90,95]);
+      const milestones = [
+        { icon:"E", title:`${countTarget.toLocaleString()} encode club`, detail:`${Number(completed || 0).toLocaleString()} completed`, value:completed, target:countTarget },
+        { icon:"S", title:`${homeFormatBytes(savedTarget)} reclaimed`, detail:`${homeFormatBytes(savedBytes)} recovered`, value:savedBytes, target:savedTarget },
+        { icon:"%", title:`${efficiencyTarget}% efficiency`, detail:`Currently ${efficiency.toFixed(1)}%`, value:efficiency, target:efficiencyTarget }
+      ];
+      const progressBox = document.getElementById("homeAchievementProgress");
+      if (progressBox) progressBox.innerHTML = milestones.map(milestone => { const progress = homeProgress(milestone.value, milestone.target); return `<div class="home-achievement-row"><span class="home-achievement-icon">${milestone.icon}</span><div><strong>${homeEscape(milestone.title)}</strong><small>${homeEscape(milestone.detail)}</small><span class="home-achievement-track" role="progressbar" aria-label="${homeEscape(milestone.title)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progress.toFixed(1)}"><i style="width:${progress}%"></i></span></div><b>${Math.round(progress)}%</b></div>`; }).join("");
+      const unlocked = [
+        { label:"First squeeze", ready:completed >= 1 },
+        { label:"Century club", ready:completed >= 100 },
+        { label:"1 TB reclaimed", ready:savedBytes >= 1024**4 },
+        { label:"Distributed power", ready:Number(analytics.worker_count || 0) >= 2 }
+      ];
+      const unlockedCount = unlocked.filter(item => item.ready).length;
+      homeText("homeAchievementSummary", `${unlockedCount} of ${unlocked.length} signature achievements unlocked`);
+      homeText("homeAchievementLevel", `Level ${Math.max(1, Math.floor(Math.log2(Math.max(1, completed))) + 1)}`);
+      const badgeBox = document.getElementById("homeAchievementBadges");
+      if (badgeBox) badgeBox.innerHTML = unlocked.map(item => `<span class="${item.ready ? "is-unlocked" : ""}"><i>${item.ready ? "✓" : "·"}</i>${homeEscape(item.label)}</span>`).join("");
+    }
 
     function renderHome(data) {
       const summary = data.queue?.summary || {};
@@ -142,6 +243,7 @@
       const storage = data.storage || {};
       homeText("homeSavedMetric", homeFormatBytes(storage.saved_bytes || storage.total_saved_bytes || 0));
       homeText("homeSavedDetail", `${storage.count || storage.completed || storage.total_jobs || counts.done || 0} verified encodes`);
+      renderHomeImpact(storage, storage.count || storage.completed || storage.total_jobs || counts.done || 0, summary.total_runtime_seconds || storage.total_runtime_seconds || 0);
       const library = data.library || {};
       homeText("homeLibraryMetric", `${Number(library.movies || 0) + Number(library.shows || 0)} titles`);
       homeText("homeLibraryDetail", `${library.movies || 0} movies, ${library.shows || 0} shows, ${library.episodes || 0} episodes`);
@@ -180,13 +282,18 @@
     }
 
     let homeLoadInFlight = false;
-    const homeWidgetStorageKey = 'bytesqueezeHomeWidgets';
-    const homeWidgetDefaults = ['work', 'activity', 'autopilot', 'quick'];
+    const homeWidgetStorageKey = 'bytesqueezeHomeWidgetsV2';
+    const homeWidgetLegacyStorageKey = 'bytesqueezeHomeWidgets';
+    const homeWidgetDefaults = ['work', 'impact', 'activity', 'autopilot', 'achievements', 'quick'];
 
     function getHomeWidgets() {
       try {
-        const saved = JSON.parse(localStorage.getItem(homeWidgetStorageKey) || 'null');
-        return Array.isArray(saved) ? homeWidgetDefaults.filter(widget => saved.includes(widget)) : [...homeWidgetDefaults];
+        const current = localStorage.getItem(homeWidgetStorageKey);
+        const legacy = localStorage.getItem(homeWidgetLegacyStorageKey);
+        const saved = JSON.parse(current || legacy || 'null');
+        if (!Array.isArray(saved)) return [...homeWidgetDefaults];
+        const migrated = current ? saved : [...saved, 'impact', 'achievements'];
+        return homeWidgetDefaults.filter(widget => migrated.includes(widget));
       } catch (error) {
         return [...homeWidgetDefaults];
       }
@@ -228,7 +335,7 @@
       customize?.querySelectorAll('input[type="checkbox"]').forEach(input => { input.onchange = saveHomeWidgets; });
       const reset = document.getElementById('homeWidgetsReset');
       if (reset) reset.onclick = () => {
-        try { localStorage.removeItem(homeWidgetStorageKey); } catch (error) {}
+        try { localStorage.removeItem(homeWidgetStorageKey); localStorage.removeItem(homeWidgetLegacyStorageKey); } catch (error) {}
         applyHomeWidgets([...homeWidgetDefaults]);
       };
       document.addEventListener("visibilitychange", () => { if (!document.hidden) loadHome(); });

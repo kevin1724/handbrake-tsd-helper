@@ -54,8 +54,8 @@ abstract final class ByteSqueezeTheme {
       surface: ByteSqueezeColors.surface,
       error: ByteSqueezeColors.danger,
     );
-    final radius = classic ? 17.0 : (compact ? 14.0 : 20.0);
-    final verticalControlPadding = compact ? 12.0 : 15.0;
+    final radius = classic ? 17.0 : (compact ? 12.0 : 14.0);
+    final verticalControlPadding = compact ? 10.0 : 12.0;
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
@@ -70,25 +70,38 @@ abstract final class ByteSqueezeTheme {
       ),
       scaffoldBackgroundColor: ByteSqueezeColors.canvas,
       visualDensity: compact ? VisualDensity.compact : VisualDensity.standard,
-      textTheme: const TextTheme(
-        displaySmall:
-            TextStyle(fontWeight: FontWeight.w800, letterSpacing: -1.4),
-        headlineLarge:
-            TextStyle(fontWeight: FontWeight.w800, letterSpacing: -1.0),
-        headlineMedium:
-            TextStyle(fontWeight: FontWeight.w800, letterSpacing: -.7),
-        headlineSmall:
-            TextStyle(fontWeight: FontWeight.w700, letterSpacing: -.4),
-        titleLarge: TextStyle(fontWeight: FontWeight.w700, letterSpacing: -.25),
-        titleMedium: TextStyle(fontWeight: FontWeight.w700),
-        titleSmall: TextStyle(fontWeight: FontWeight.w700),
-        bodyLarge: TextStyle(height: 1.42),
-        bodyMedium: TextStyle(height: 1.4),
-        labelLarge: TextStyle(fontWeight: FontWeight.w700),
-      ).apply(
-        bodyColor: ByteSqueezeColors.ink,
-        displayColor: ByteSqueezeColors.ink,
-      ),
+      textTheme:
+          const TextTheme(
+            displaySmall: TextStyle(
+              fontWeight: FontWeight.w800,
+              letterSpacing: -1.4,
+            ),
+            headlineLarge: TextStyle(
+              fontWeight: FontWeight.w800,
+              letterSpacing: -.7,
+              fontSize: 30,
+            ),
+            headlineMedium: TextStyle(
+              fontWeight: FontWeight.w800,
+              letterSpacing: -.7,
+            ),
+            headlineSmall: TextStyle(
+              fontWeight: FontWeight.w700,
+              letterSpacing: -.4,
+            ),
+            titleLarge: TextStyle(
+              fontWeight: FontWeight.w700,
+              letterSpacing: -.25,
+            ),
+            titleMedium: TextStyle(fontWeight: FontWeight.w700),
+            titleSmall: TextStyle(fontWeight: FontWeight.w700),
+            bodyLarge: TextStyle(height: 1.35),
+            bodyMedium: TextStyle(height: 1.32),
+            labelLarge: TextStyle(fontWeight: FontWeight.w700),
+          ).apply(
+            bodyColor: ByteSqueezeColors.ink,
+            displayColor: ByteSqueezeColors.ink,
+          ),
       cardTheme: CardThemeData(
         elevation: 0,
         color: ByteSqueezeColors.surface,
@@ -126,16 +139,16 @@ abstract final class ByteSqueezeTheme {
         ),
       ),
       navigationBarTheme: NavigationBarThemeData(
-        backgroundColor: const Color(0xF50C1118),
+        backgroundColor: const Color(0xFF0B1017),
         surfaceTintColor: Colors.transparent,
         indicatorColor: primary.withValues(alpha: .16),
         indicatorShape: RoundedRectangleBorder(
-          borderRadius: BorderRadius.circular(14),
+          borderRadius: BorderRadius.circular(compact ? 10 : 12),
         ),
         labelTextStyle: const WidgetStatePropertyAll(
           TextStyle(fontWeight: FontWeight.w700, fontSize: 11),
         ),
-        height: compact ? 66 : 72,
+        height: compact ? 58 : 62,
       ),
       navigationRailTheme: NavigationRailThemeData(
         backgroundColor: ByteSqueezeColors.shell,
@@ -145,29 +158,40 @@ abstract final class ByteSqueezeTheme {
           color: ByteSqueezeColors.ink,
           fontWeight: FontWeight.w700,
         ),
-        unselectedLabelTextStyle:
-            const TextStyle(color: ByteSqueezeColors.muted),
+        unselectedLabelTextStyle: const TextStyle(
+          color: ByteSqueezeColors.muted,
+        ),
       ),
       appBarTheme: const AppBarTheme(
-        backgroundColor: Colors.transparent,
+        backgroundColor: ByteSqueezeColors.canvas,
         surfaceTintColor: Colors.transparent,
         elevation: 0,
         centerTitle: false,
+        toolbarHeight: 52,
+        titleTextStyle: TextStyle(
+          color: ByteSqueezeColors.ink,
+          fontSize: 20,
+          fontWeight: FontWeight.w800,
+          letterSpacing: -.35,
+        ),
       ),
       dialogTheme: DialogThemeData(
         backgroundColor: ByteSqueezeColors.shell,
         surfaceTintColor: Colors.transparent,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(22)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
       ),
       bottomSheetTheme: const BottomSheetThemeData(
         backgroundColor: ByteSqueezeColors.navy,
         surfaceTintColor: Colors.transparent,
         modalBarrierColor: Color(0xB8000000),
+        shape: RoundedRectangleBorder(
+          borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+        ),
       ),
       snackBarTheme: SnackBarThemeData(
         backgroundColor: ByteSqueezeColors.raised,
         contentTextStyle: const TextStyle(color: ByteSqueezeColors.ink),
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(15)),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
         behavior: SnackBarBehavior.floating,
       ),
       filledButtonTheme: FilledButtonThemeData(
@@ -202,6 +226,24 @@ abstract final class ByteSqueezeTheme {
         labelStyle: const TextStyle(fontWeight: FontWeight.w600),
       ),
       dividerColor: ByteSqueezeColors.line,
+      dividerTheme: const DividerThemeData(
+        color: ByteSqueezeColors.subtleLine,
+        thickness: 1,
+        space: 1,
+      ),
+      listTileTheme: const ListTileThemeData(
+        iconColor: ByteSqueezeColors.softInk,
+        textColor: ByteSqueezeColors.ink,
+        minVerticalPadding: 8,
+      ),
+      tooltipTheme: TooltipThemeData(
+        decoration: BoxDecoration(
+          color: ByteSqueezeColors.raised,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: ByteSqueezeColors.line),
+        ),
+        textStyle: const TextStyle(color: ByteSqueezeColors.ink, fontSize: 12),
+      ),
       progressIndicatorTheme: ProgressIndicatorThemeData(
         color: primary,
         linearTrackColor: const Color(0xFF242D3A),

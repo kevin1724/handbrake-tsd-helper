@@ -25,118 +25,100 @@ class MoreScreen extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
-              const Text('SETTINGS & SERVER',
-                  style: TextStyle(
-                      color: ByteSqueezeColors.cyan,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w800,
-                      letterSpacing: 1.6)),
-              const SizedBox(height: 5),
-              Text('Control room',
-                  style: Theme.of(context).textTheme.headlineLarge),
-              const SizedBox(height: 4),
-              const Text('App experience, encoder safety, and server health',
-                  style: TextStyle(color: ByteSqueezeColors.muted)),
-              const SizedBox(height: 18),
-              SurfaceCard(
-                gradient: const LinearGradient(
-                  begin: Alignment.topLeft,
-                  end: Alignment.bottomRight,
-                  colors: [Color(0xFF123A72), Color(0xFF09172F)],
-                ),
-                borderColor: const Color(0xFF24568F),
-                child: Row(
-                  children: [
-                    const BrandMark(size: 62, showName: false),
-                    const SizedBox(width: 15),
-                    Expanded(
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Text(
-                              controller.demoMode
-                                  ? 'ByteSqueeze demo'
-                                  : (controller.session?.deviceName ??
-                                      'ByteSqueeze'),
-                              style: Theme.of(context).textTheme.titleLarge),
-                          const SizedBox(height: 3),
-                          if (controller.statsForNerds) ...[
-                            Text(controller.serverLabel,
-                                maxLines: 1,
-                                overflow: TextOverflow.ellipsis,
-                                style: const TextStyle(
-                                    color: ByteSqueezeColors.muted)),
-                            const SizedBox(height: 8),
-                          ],
-                          StatusPill(
-                              label: controller.canControl
-                                  ? 'Control access'
-                                  : 'Read-only access',
-                              color: controller.canControl
-                                  ? ByteSqueezeColors.mint
-                                  : ByteSqueezeColors.amber,
-                              icon: Icons.shield_outlined),
-                        ],
-                      ),
-                    ),
-                  ],
-                ),
+              CompactPageHeader(
+                title: 'More',
+                status: controller.demoMode ? 'Demo' : 'Connected',
+                statusColor: controller.demoMode
+                    ? ByteSqueezeColors.violet
+                    : ByteSqueezeColors.mint,
+                summary: controller.statsForNerds
+                    ? controller.serverLabel
+                    : '${controller.canControl ? 'Control' : 'Read-only'} access · $online nodes online',
               ),
-              const SectionHeader(title: 'Server'),
-              SurfaceCard(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
+              const SectionHeader(title: 'Encoding'),
+              _SettingsGroup(
+                children: [
+                  _MoreTile(
+                    icon: Icons.developer_board_rounded,
+                    color: ByteSqueezeColors.cyan,
+                    title: 'Encoding capacity & safety',
+                    subtitle: !controller.statsForNerds
+                        ? 'Encoder capacity and safety limits'
+                        : controller.serverSupportsOperationsSettings
+                            ? '${controller.operations['hardware_transcode_concurrency'] ?? asMap(controller.jobs['summary'])['hardware_transcode_concurrency'] ?? 1} GPU slots · CPU stays at one'
+                            : 'Server update needed for mobile controls',
+                    onTap: () => _open(
+                      context,
+                      OperationsSettingsPage(controller: controller),
+                    ),
+                  ),
+                ],
+              ),
+              const SectionHeader(title: 'Library'),
+              _SettingsGroup(
+                children: [
+                  _MoreTile(
+                    icon: Icons.calendar_month_rounded,
+                    color: ByteSqueezeColors.blue,
+                    title: 'Upcoming episodes',
+                    subtitle: 'Release calendar for tracked shows',
+                    onTap: () =>
+                        _open(context, CalendarScreen(controller: controller)),
+                  ),
+                ],
+              ),
+              const SectionHeader(title: 'Nodes & storage'),
+              _SettingsGroup(
+                children: [
+                  _MoreTile(
+                    icon: Icons.hub_rounded,
+                    color: ByteSqueezeColors.cyan,
+                    title: 'Encoding nodes',
+                    subtitle: controller.statsForNerds
+                        ? '$online online · ${nodeRows.length + 1} total'
+                        : 'Manage the main controller and linked workers',
+                    onTap: () =>
+                        _open(context, NodesPage(controller: controller)),
+                  ),
+                  _MoreTile(
+                    icon: Icons.savings_outlined,
+                    color: ByteSqueezeColors.mint,
+                    title: 'Storage savings',
+                    subtitle: controller.statsForNerds
+                        ? '${formatBytes(storageSummary['saved_bytes'])} reclaimed across ${storageSummary['count'] ?? 0} encodes'
+                        : 'Review the space ByteSqueeze reclaimed',
+                    onTap: () =>
+                        _open(context, StoragePage(controller: controller)),
+                  ),
+                ],
+              ),
+              const SectionHeader(title: 'App'),
+              _SettingsGroup(
+                children: [
+                  _MoreTile(
+                    icon: Icons.dashboard_customize_rounded,
+                    color: ByteSqueezeColors.violet,
+                    title: 'Interface',
+                    subtitle: controller.useV3
+                        ? '${controller.compactInterface ? 'Compact' : 'Comfortable'} · optional UI controls'
+                        : 'V2 Classic is active',
+                    onTap: () =>
+                        _open(context, InterfacePage(controller: controller)),
+                  ),
+                  _MoreTile(
+                    icon: Icons.security_rounded,
+                    color: ByteSqueezeColors.blue,
+                    title: 'Connection & security',
+                    subtitle: 'Server address, access scope, and secure tokens',
+                    onTap: () =>
+                        _open(context, ConnectionPage(controller: controller)),
+                  ),
+                ],
+              ),
+              if (controller.statsForNerds) ...[
+                const SectionHeader(title: 'Diagnostics'),
+                _SettingsGroup(
                   children: [
-                    _MoreTile(
-                      icon: Icons.dashboard_customize_rounded,
-                      color: ByteSqueezeColors.violet,
-                      title: 'Interface & UI',
-                      subtitle: controller.useV3
-                          ? 'V3 · ${controller.compactInterface ? 'compact' : 'comfortable'} density'
-                          : 'V2 Classic fallback is active',
-                      onTap: () => _open(
-                          context, InterfacePage(controller: controller)),
-                    ),
-                    _MoreTile(
-                      icon: Icons.developer_board_rounded,
-                      color: ByteSqueezeColors.cyan,
-                      title: 'Encoding capacity & safety',
-                      subtitle: !controller.statsForNerds
-                          ? 'Encoder capacity and safety limits'
-                          : controller.serverSupportsOperationsSettings
-                          ? '${controller.operations['hardware_transcode_concurrency'] ?? asMap(controller.jobs['summary'])['hardware_transcode_concurrency'] ?? 1} GPU slots · CPU stays at one'
-                          : 'Server update needed for mobile controls',
-                      onTap: () => _open(
-                          context, OperationsSettingsPage(controller: controller)),
-                    ),
-                    _MoreTile(
-                      icon: Icons.calendar_month_rounded,
-                      color: ByteSqueezeColors.blue,
-                      title: 'Upcoming episodes',
-                      subtitle: 'Release calendar for tracked shows',
-                      onTap: () => _open(
-                          context, CalendarScreen(controller: controller)),
-                    ),
-                    _MoreTile(
-                      icon: Icons.hub_rounded,
-                      color: ByteSqueezeColors.cyan,
-                      title: 'Encoding nodes',
-                      subtitle: controller.statsForNerds
-                          ? '$online online · ${nodeRows.length + 1} total'
-                          : 'Manage the main controller and linked workers',
-                      onTap: () =>
-                          _open(context, NodesPage(controller: controller)),
-                    ),
-                    _MoreTile(
-                      icon: Icons.savings_outlined,
-                      color: ByteSqueezeColors.mint,
-                      title: 'Storage savings',
-                      subtitle: controller.statsForNerds
-                          ? '${formatBytes(storageSummary['saved_bytes'])} reclaimed across ${storageSummary['count'] ?? 0} encodes'
-                          : 'Review the space ByteSqueeze reclaimed',
-                      onTap: () =>
-                          _open(context, StoragePage(controller: controller)),
-                    ),
                     if (controller.statsForNerds)
                       _MoreTile(
                         icon: Icons.bolt_rounded,
@@ -148,62 +130,55 @@ class MoreScreen extends StatelessWidget {
                       ),
                   ],
                 ),
-              ),
-              const SectionHeader(title: 'ByteSqueeze'),
-              SurfaceCard(
-                padding: const EdgeInsets.symmetric(vertical: 4),
-                child: Column(
-                  children: [
-                    _MoreTile(
-                      icon: Icons.security_rounded,
-                      color: ByteSqueezeColors.blue,
-                      title: 'Connection & security',
-                      subtitle:
-                          'Pairing scope, server address, and token storage',
-                      onTap: () => _open(
-                          context, ConnectionPage(controller: controller)),
-                    ),
-                    _MoreTile(
-                      icon: Icons.info_outline_rounded,
-                      color: ByteSqueezeColors.muted,
-                      title: 'About',
-                      subtitle: 'ByteSqueeze $appVersion',
-                      onTap: () => showAboutDialog(
-                        context: context,
-                        applicationName: 'ByteSqueeze',
-                        applicationVersion: '$appVersion+$appBuildNumber',
-                        applicationIcon: ClipRRect(
-                          borderRadius: BorderRadius.circular(18),
-                          child: Image.asset(
-                              'assets/branding/bytesqueeze_icon.png',
-                              width: 72,
-                              height: 72),
+              ],
+              const SectionHeader(title: 'About'),
+              _SettingsGroup(
+                children: [
+                  _MoreTile(
+                    icon: Icons.info_outline_rounded,
+                    color: ByteSqueezeColors.muted,
+                    title: 'About',
+                    subtitle: 'ByteSqueeze $appVersion',
+                    onTap: () => showAboutDialog(
+                      context: context,
+                      applicationName: 'ByteSqueeze',
+                      applicationVersion: '$appVersion+$appBuildNumber',
+                      applicationIcon: ClipRRect(
+                        borderRadius: BorderRadius.circular(18),
+                        child: Image.asset(
+                          'assets/branding/bytesqueeze_icon.png',
+                          width: 72,
+                          height: 72,
                         ),
-                        children: const [
-                          Text(
-                              'A cross-platform remote control for HandBrake TSD Helper. All encoding stays on the Docker-hosted server.')
-                        ],
                       ),
+                      children: const [
+                        Text(
+                          'A cross-platform remote control for HandBrake TSD Helper. All encoding stays on the Docker-hosted server.',
+                        ),
+                      ],
                     ),
-                  ],
-                ),
+                  ),
+                ],
               ),
               const SizedBox(height: 18),
               OutlinedButton.icon(
                 onPressed: () => _disconnect(context),
-                icon: const Icon(Icons.logout_rounded,
-                    color: ByteSqueezeColors.danger),
+                icon: const Icon(
+                  Icons.logout_rounded,
+                  color: ByteSqueezeColors.danger,
+                ),
                 label: Text(
-                    controller.demoMode
-                        ? 'Exit demo'
-                        : 'Disconnect this device',
-                    style: const TextStyle(color: ByteSqueezeColors.danger)),
+                  controller.demoMode ? 'Exit demo' : 'Disconnect this device',
+                  style: const TextStyle(color: ByteSqueezeColors.danger),
+                ),
                 style: OutlinedButton.styleFrom(
                   padding: const EdgeInsets.symmetric(vertical: 15),
                   side: BorderSide(
-                      color: ByteSqueezeColors.danger.withValues(alpha: .45)),
+                    color: ByteSqueezeColors.danger.withValues(alpha: .45),
+                  ),
                   shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(16)),
+                    borderRadius: BorderRadius.circular(16),
+                  ),
                 ),
               ),
             ],
@@ -224,14 +199,17 @@ class MoreScreen extends StatelessWidget {
               builder: (context) => AlertDialog(
                 title: const Text('Disconnect ByteSqueeze?'),
                 content: const Text(
-                    'The server address and mobile tokens will be removed from this device. You can pair it again later.'),
+                  'The server address and mobile tokens will be removed from this device. You can pair it again later.',
+                ),
                 actions: [
                   TextButton(
-                      onPressed: () => Navigator.pop(context, false),
-                      child: const Text('Cancel')),
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('Cancel'),
+                  ),
                   FilledButton(
-                      onPressed: () => Navigator.pop(context, true),
-                      child: const Text('Disconnect')),
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('Disconnect'),
+                  ),
                 ],
               ),
             ) ==
@@ -269,16 +247,23 @@ class _InterfacePageState extends State<InterfacePage> {
             child: const Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(Icons.auto_awesome_rounded,
-                    color: ByteSqueezeColors.cyan, size: 30),
+                Icon(
+                  Icons.auto_awesome_rounded,
+                  color: ByteSqueezeColors.cyan,
+                  size: 30,
+                ),
                 SizedBox(width: 13),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('V3 is the current ByteSqueeze experience',
-                          style: TextStyle(
-                              fontWeight: FontWeight.w800, fontSize: 17)),
+                      Text(
+                        'V3 is the current ByteSqueeze experience',
+                        style: TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 17,
+                        ),
+                      ),
                       SizedBox(height: 5),
                       Text(
                         'Your server, pairing, library, queue, and Smart Preset data stay unchanged when the interface switches.',
@@ -334,9 +319,8 @@ class _InterfacePageState extends State<InterfacePage> {
             ],
             selected: {controller.interfaceDensity},
             showSelectedIcon: false,
-            onSelectionChanged: controller.useV3
-                ? (values) => _setDensity(values.first)
-                : null,
+            onSelectionChanged:
+                controller.useV3 ? (values) => _setDensity(values.first) : null,
           ),
           const SizedBox(height: 12),
           Text(
@@ -344,11 +328,14 @@ class _InterfacePageState extends State<InterfacePage> {
                 ? 'This preference is stored on this phone only.'
                 : 'Density is saved and will apply when you return to V3.',
             style: const TextStyle(
-                color: ByteSqueezeColors.muted, fontSize: 12),
+              color: ByteSqueezeColors.muted,
+              fontSize: 12,
+            ),
           ),
           const SectionHeader(
             title: 'UI visibility',
-            subtitle: 'Keep everyday screens focused; restore optional detail here',
+            subtitle:
+                'Keep everyday screens focused; restore optional detail here',
           ),
           SurfaceCard(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
@@ -357,21 +344,27 @@ class _InterfacePageState extends State<InterfacePage> {
                 SwitchListTile.adaptive(
                   value: controller.showSecondaryUi,
                   onChanged: _setSecondaryUi,
-                  secondary: const Icon(Icons.widgets_outlined,
-                      color: ByteSqueezeColors.cyan),
+                  secondary: const Icon(
+                    Icons.widgets_outlined,
+                    color: ByteSqueezeColors.cyan,
+                  ),
                   title: const Text('Show secondary controls'),
                   subtitle: const Text(
-                      'Restores helper cards, extra filters, refresh buttons, and the live operations dock.'),
+                    'Restores helper cards, extra filters, refresh buttons, and the live operations dock.',
+                  ),
                 ),
                 const Divider(height: 1),
                 SwitchListTile.adaptive(
                   value: controller.statsForNerds,
                   onChanged: _setStatsForNerds,
-                  secondary: const Icon(Icons.data_object_rounded,
-                      color: ByteSqueezeColors.violet),
+                  secondary: const Icon(
+                    Icons.data_object_rounded,
+                    color: ByteSqueezeColors.violet,
+                  ),
                   title: const Text('Stats for nerds'),
                   subtitle: const Text(
-                      'Shows exact paths, server addresses, bitrates, event logs, and technical counters.'),
+                    'Shows exact paths, server addresses, bitrates, event logs, and technical counters.',
+                  ),
                 ),
               ],
             ),
@@ -399,6 +392,33 @@ class _InterfacePageState extends State<InterfacePage> {
   Future<void> _setStatsForNerds(bool value) async {
     await controller.setStatsForNerds(value);
     if (mounted) setState(() {});
+  }
+}
+
+class _SettingsGroup extends StatelessWidget {
+  const _SettingsGroup({required this.children});
+
+  final List<Widget> children;
+
+  @override
+  Widget build(BuildContext context) {
+    return Material(
+      color: ByteSqueezeColors.surface,
+      shape: RoundedRectangleBorder(
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: ByteSqueezeColors.subtleLine),
+      ),
+      clipBehavior: Clip.antiAlias,
+      child: Column(
+        children: [
+          for (var index = 0; index < children.length; index++) ...[
+            children[index],
+            if (index != children.length - 1)
+              const Divider(indent: 52, endIndent: 12),
+          ],
+        ],
+      ),
+    );
   }
 }
 
@@ -445,15 +465,19 @@ class _ExperienceOption extends StatelessWidget {
                 Row(
                   children: [
                     Expanded(
-                      child: Text(title,
-                          style: Theme.of(context).textTheme.titleLarge),
+                      child: Text(
+                        title,
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                     ),
                     StatusPill(label: badge, color: color),
                   ],
                 ),
                 const SizedBox(height: 6),
-                Text(description,
-                    style: const TextStyle(color: ByteSqueezeColors.muted)),
+                Text(
+                  description,
+                  style: const TextStyle(color: ByteSqueezeColors.muted),
+                ),
               ],
             ),
           ),
@@ -474,8 +498,7 @@ class OperationsSettingsPage extends StatefulWidget {
   final AppController controller;
 
   @override
-  State<OperationsSettingsPage> createState() =>
-      _OperationsSettingsPageState();
+  State<OperationsSettingsPage> createState() => _OperationsSettingsPageState();
 }
 
 class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
@@ -492,11 +515,11 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
     final operations = controller.operations;
     final summary = asMap(controller.jobs['summary']);
     _hardwareSlots = ((operations['hardware_transcode_concurrency'] ??
-                summary['hardware_transcode_concurrency'] ??
-                1) as num)
-            .toInt()
-            .clamp(1, 8)
-            .toInt();
+            summary['hardware_transcode_concurrency'] ??
+            1) as num)
+        .toInt()
+        .clamp(1, 8)
+        .toInt();
     _autoStop = operations['auto_stop_large_output_enabled'] == true;
     _stopPercent =
         ((operations['auto_stop_large_output_percent'] as num?)?.toDouble() ??
@@ -520,20 +543,26 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
               child: const Row(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Icon(Icons.system_update_alt_rounded,
-                      color: ByteSqueezeColors.amber),
+                  Icon(
+                    Icons.system_update_alt_rounded,
+                    color: ByteSqueezeColors.amber,
+                  ),
                   SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
-                        Text('Server update required',
-                            style: TextStyle(fontWeight: FontWeight.w800)),
+                        Text(
+                          'Server update required',
+                          style: TextStyle(fontWeight: FontWeight.w800),
+                        ),
                         SizedBox(height: 4),
                         Text(
                           'The rest of ByteSqueeze remains connected. Update the TSD server to version 3.15 or newer to change these encoder controls from the app.',
                           style: TextStyle(
-                              color: ByteSqueezeColors.softInk, fontSize: 12.5),
+                            color: ByteSqueezeColors.softInk,
+                            fontSize: 12.5,
+                          ),
                         ),
                       ],
                     ),
@@ -552,18 +581,25 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
             borderColor: ByteSqueezeColors.cyan.withValues(alpha: .38),
             child: Row(
               children: [
-                const Icon(Icons.developer_board_rounded,
-                    color: ByteSqueezeColors.cyan, size: 34),
+                const Icon(
+                  Icons.developer_board_rounded,
+                  color: ByteSqueezeColors.cyan,
+                  size: 34,
+                ),
                 const SizedBox(width: 13),
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('$_hardwareSlots simultaneous GPU job${_hardwareSlots == 1 ? '' : 's'}',
-                          style: Theme.of(context).textTheme.titleLarge),
+                      Text(
+                        '$_hardwareSlots simultaneous GPU job${_hardwareSlots == 1 ? '' : 's'}',
+                        style: Theme.of(context).textTheme.titleLarge,
+                      ),
                       const SizedBox(height: 3),
-                      const Text('CPU/software encoding always stays at one',
-                          style: TextStyle(color: ByteSqueezeColors.softInk)),
+                      const Text(
+                        'CPU/software encoding always stays at one',
+                        style: TextStyle(color: ByteSqueezeColors.softInk),
+                      ),
                     ],
                   ),
                 ),
@@ -590,8 +626,10 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
                 Row(
                   children: [
                     const Expanded(
-                      child: Text('Simultaneous hardware transcodes',
-                          style: TextStyle(fontWeight: FontWeight.w700)),
+                      child: Text(
+                        'Simultaneous hardware transcodes',
+                        style: TextStyle(fontWeight: FontWeight.w700),
+                      ),
                     ),
                     Container(
                       width: 48,
@@ -601,11 +639,14 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
                         color: ByteSqueezeColors.cyan.withValues(alpha: .12),
                         borderRadius: BorderRadius.circular(12),
                       ),
-                      child: Text('$_hardwareSlots',
-                          style: const TextStyle(
-                              color: ByteSqueezeColors.cyan,
-                              fontSize: 20,
-                              fontWeight: FontWeight.w800)),
+                      child: Text(
+                        '$_hardwareSlots',
+                        style: const TextStyle(
+                          color: ByteSqueezeColors.cyan,
+                          fontSize: 20,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ),
                   ],
                 ),
@@ -623,7 +664,9 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
                 const Text(
                   'ByteSqueeze fills available GPU slots. A software encode remains exclusive and will never run beside another transcode.',
                   style: TextStyle(
-                      color: ByteSqueezeColors.muted, fontSize: 12),
+                    color: ByteSqueezeColors.muted,
+                    fontSize: 12,
+                  ),
                 ),
               ],
             ),
@@ -655,10 +698,13 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
                       const Expanded(
                         child: Text('Stop at projected source size'),
                       ),
-                      Text('${_stopPercent.round()}%',
-                          style: const TextStyle(
-                              color: ByteSqueezeColors.amber,
-                              fontWeight: FontWeight.w800)),
+                      Text(
+                        '${_stopPercent.round()}%',
+                        style: const TextStyle(
+                          color: ByteSqueezeColors.amber,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ],
                   ),
                   Slider(
@@ -677,14 +723,14 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
           ),
           const SizedBox(height: 14),
           FilledButton.icon(
-            onPressed: controller.canControl && supported && !_saving
-                ? _save
-                : null,
+            onPressed:
+                controller.canControl && supported && !_saving ? _save : null,
             icon: _saving
                 ? const SizedBox(
                     width: 18,
                     height: 18,
-                    child: CircularProgressIndicator(strokeWidth: 2))
+                    child: CircularProgressIndicator(strokeWidth: 2),
+                  )
                 : const Icon(Icons.save_rounded),
             label: const Text('Save encoder settings'),
           ),
@@ -695,7 +741,9 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
                 : 'No connection was lost. This page is read-only until the server is updated.',
             textAlign: TextAlign.center,
             style: const TextStyle(
-                color: ByteSqueezeColors.muted, fontSize: 11.5),
+              color: ByteSqueezeColors.muted,
+              fontSize: 11.5,
+            ),
           ),
         ],
       ),
@@ -711,9 +759,11 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
         'auto_stop_large_output_percent': _stopPercent.round(),
       });
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-        content: Text('Encoder capacity and safety settings saved.'),
-      ));
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Encoder capacity and safety settings saved.'),
+        ),
+      );
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -726,12 +776,13 @@ class _OperationsSettingsPageState extends State<OperationsSettingsPage> {
 }
 
 class _MoreTile extends StatelessWidget {
-  const _MoreTile(
-      {required this.icon,
-      required this.color,
-      required this.title,
-      required this.subtitle,
-      required this.onTap});
+  const _MoreTile({
+    required this.icon,
+    required this.color,
+    required this.title,
+    required this.subtitle,
+    required this.onTap,
+  });
 
   final IconData icon;
   final Color color;
@@ -743,28 +794,30 @@ class _MoreTile extends StatelessWidget {
   Widget build(BuildContext context) {
     return ListTile(
       onTap: onTap,
-      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
-      leading: DecoratedBox(
-        decoration: BoxDecoration(
-            color: color.withValues(alpha: .12),
-            borderRadius: BorderRadius.circular(12)),
-        child: Padding(
-            padding: const EdgeInsets.all(10), child: Icon(icon, color: color)),
-      ),
+      minTileHeight: 58,
+      contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 2),
+      leading: Icon(icon, color: color, size: 22),
       title: Text(title, style: const TextStyle(fontWeight: FontWeight.w700)),
-      subtitle: Text(subtitle,
-          maxLines: 2,
-          overflow: TextOverflow.ellipsis,
-          style: const TextStyle(color: ByteSqueezeColors.muted, fontSize: 12)),
-      trailing: const Icon(Icons.chevron_right_rounded,
-          color: ByteSqueezeColors.muted),
+      subtitle: Text(
+        subtitle,
+        maxLines: 2,
+        overflow: TextOverflow.ellipsis,
+        style: const TextStyle(color: ByteSqueezeColors.muted, fontSize: 12),
+      ),
+      trailing: const Icon(
+        Icons.chevron_right_rounded,
+        color: ByteSqueezeColors.muted,
+      ),
     );
   }
 }
 
 class _DetailScaffold extends StatelessWidget {
-  const _DetailScaffold(
-      {required this.title, required this.child, this.actions});
+  const _DetailScaffold({
+    required this.title,
+    required this.child,
+    this.actions,
+  });
 
   final String title;
   final Widget child;
@@ -772,11 +825,17 @@ class _DetailScaffold extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final classic =
+        Theme.of(context).colorScheme.primary == ByteSqueezeColors.blue;
     return Scaffold(
       appBar: AppBar(title: Text(title), actions: actions),
       body: DecoratedBox(
-          decoration: const BoxDecoration(gradient: ByteSqueezeColors.backdrop),
-          child: child),
+        decoration: BoxDecoration(
+          color: classic ? null : ByteSqueezeColors.canvas,
+          gradient: classic ? ByteSqueezeColors.backdrop : null,
+        ),
+        child: child,
+      ),
     );
   }
 }
@@ -791,19 +850,19 @@ class NodesPage extends StatefulWidget {
 }
 
 class _NodesPageState extends State<NodesPage> {
-  Future<void> _run(Future<void> Function() action,
-      {String success = 'Linked node updated.'}) async {
+  Future<void> _run(
+    Future<void> Function() action, {
+    String success = 'Linked node updated.',
+  }) async {
     try {
       await action();
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text(success)),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text(success)));
     } catch (error) {
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('$error')),
-      );
+      ScaffoldMessenger.of(context)
+          .showSnackBar(SnackBar(content: Text('$error')));
     }
   }
 
@@ -825,11 +884,13 @@ class _NodesPageState extends State<NodesPage> {
         ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, input.text.trim()),
-              child: const Text('Save')),
+            onPressed: () => Navigator.pop(context, input.text.trim()),
+            child: const Text('Save'),
+          ),
         ],
       ),
     );
@@ -847,8 +908,10 @@ class _NodesPageState extends State<NodesPage> {
 
   Future<void> _capacity(Map<String, dynamic> node) async {
     final current =
-        ((node['hardware_transcode_concurrency'] as num?)?.toInt() ?? 1)
-            .clamp(1, 8);
+        ((node['hardware_transcode_concurrency'] as num?)?.toInt() ?? 1).clamp(
+      1,
+      8,
+    );
     final selected = await showDialog<int>(
       context: context,
       builder: (context) => SimpleDialog(
@@ -858,9 +921,11 @@ class _NodesPageState extends State<NodesPage> {
             SimpleDialogOption(
               onPressed: () => Navigator.pop(context, value),
               child: ListTile(
-                leading: Icon(value == current
-                    ? Icons.radio_button_checked_rounded
-                    : Icons.radio_button_off_rounded),
+                leading: Icon(
+                  value == current
+                      ? Icons.radio_button_checked_rounded
+                      : Icons.radio_button_off_rounded,
+                ),
                 title: Text('$value GPU job${value == 1 ? '' : 's'}'),
                 subtitle: value == 1
                     ? const Text('CPU/software work always remains exclusive')
@@ -882,22 +947,28 @@ class _NodesPageState extends State<NodesPage> {
   }
 
   Future<void> _confirmNodeAction(
-      Map<String, dynamic> node, String action) async {
+    Map<String, dynamic> node,
+    String action,
+  ) async {
     final unlink = action == 'unlink';
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (context) => AlertDialog(
         title: Text(unlink ? 'Unlink this worker?' : 'Clear worker history?'),
-        content: Text(unlink
-            ? 'The controller will stop assigning work to ${node['name'] ?? 'this worker'}. Media and persistent worker state are not deleted.'
-            : 'Completed and failed rows and their logs will be cleared from ${node['name'] ?? 'this worker'}. Active jobs are preserved.'),
+        content: Text(
+          unlink
+              ? 'The controller will stop assigning work to ${node['name'] ?? 'this worker'}. Media and persistent worker state are not deleted.'
+              : 'Completed and failed rows and their logs will be cleared from ${node['name'] ?? 'this worker'}. Active jobs are preserved.',
+        ),
         actions: [
           TextButton(
-              onPressed: () => Navigator.pop(context, false),
-              child: const Text('Cancel')),
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
           FilledButton(
-              onPressed: () => Navigator.pop(context, true),
-              child: Text(unlink ? 'Unlink' : 'Clear')),
+            onPressed: () => Navigator.pop(context, true),
+            child: Text(unlink ? 'Unlink' : 'Clear'),
+          ),
         ],
       ),
     );
@@ -908,8 +979,7 @@ class _NodesPageState extends State<NodesPage> {
     );
   }
 
-  Future<void> _handleAction(
-      Map<String, dynamic> node, String action) async {
+  Future<void> _handleAction(Map<String, dynamic> node, String action) async {
     if (action == 'rename') return _rename(node);
     if (action == 'capacity') return _capacity(node);
     if (action == 'unlink' || action == 'clear_finished') {
@@ -930,8 +1000,9 @@ class _NodesPageState extends State<NodesPage> {
       title: 'Encoding nodes',
       actions: [
         IconButton(
-            onPressed: widget.controller.refreshAll,
-            icon: const Icon(Icons.refresh_rounded))
+          onPressed: widget.controller.refreshAll,
+          icon: const Icon(Icons.refresh_rounded),
+        ),
       ],
       child: ListView(
         padding: const EdgeInsets.all(16),
@@ -981,47 +1052,63 @@ class _NodeCard extends StatelessWidget {
           Row(
             children: [
               Stack(
-            clipBehavior: Clip.none,
-            children: [
-              DecoratedBox(
-                decoration: BoxDecoration(
-                    color: ByteSqueezeColors.blue.withValues(alpha: .12),
-                    borderRadius: BorderRadius.circular(15)),
-                child: const Padding(
-                    padding: EdgeInsets.all(13),
-                    child: Icon(Icons.computer_rounded,
-                        color: ByteSqueezeColors.cyan, size: 28)),
-              ),
-              Positioned(
-                  right: -2,
-                  bottom: -2,
-                  child: Container(
+                clipBehavior: Clip.none,
+                children: [
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      color: ByteSqueezeColors.blue.withValues(alpha: .12),
+                      borderRadius: BorderRadius.circular(15),
+                    ),
+                    child: const Padding(
+                      padding: EdgeInsets.all(13),
+                      child: Icon(
+                        Icons.computer_rounded,
+                        color: ByteSqueezeColors.cyan,
+                        size: 28,
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    right: -2,
+                    bottom: -2,
+                    child: Container(
                       width: 13,
                       height: 13,
                       decoration: BoxDecoration(
-                          color: online
-                              ? ByteSqueezeColors.mint
-                              : ByteSqueezeColors.danger,
-                          shape: BoxShape.circle,
-                          border: Border.all(
-                              color: ByteSqueezeColors.surface, width: 2)))),
-            ],
-          ),
+                        color: online
+                            ? ByteSqueezeColors.mint
+                            : ByteSqueezeColors.danger,
+                        shape: BoxShape.circle,
+                        border: Border.all(
+                          color: ByteSqueezeColors.surface,
+                          width: 2,
+                        ),
+                      ),
+                    ),
+                  ),
+                ],
+              ),
               const SizedBox(width: 15),
               Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('${node['name'] ?? (local ? 'TSD Main' : 'Worker')}',
-                    style: const TextStyle(fontWeight: FontWeight.w700)),
-                const SizedBox(height: 4),
-                Text(local
-                    ? 'Controller · protocol ${node['protocol_version'] ?? 2}'
-                    : 'Linked worker · $capacity GPU slot${capacity == 1 ? '' : 's'} · protocol ${node['protocol_version'] ?? 2}',
-                    style: const TextStyle(
-                        color: ByteSqueezeColors.muted, fontSize: 12)),
-              ],
-            ),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      '${node['name'] ?? (local ? 'TSD Main' : 'Worker')}',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    const SizedBox(height: 4),
+                    Text(
+                      local
+                          ? 'Controller · protocol ${node['protocol_version'] ?? 2}'
+                          : 'Linked worker · $capacity GPU slot${capacity == 1 ? '' : 's'} · protocol ${node['protocol_version'] ?? 2}',
+                      style: const TextStyle(
+                        color: ByteSqueezeColors.muted,
+                        fontSize: 12,
+                      ),
+                    ),
+                  ],
+                ),
               ),
               StatusPill(label: online ? status : 'offline', color: color),
               if (!local)
@@ -1060,8 +1147,10 @@ class _NodeCard extends StatelessWidget {
                     PopupMenuItem(
                       value: 'unlink',
                       child: ListTile(
-                        leading: Icon(Icons.link_off_rounded,
-                            color: ByteSqueezeColors.danger),
+                        leading: Icon(
+                          Icons.link_off_rounded,
+                          color: ByteSqueezeColors.danger,
+                        ),
                         title: Text('Unlink worker'),
                       ),
                     ),
@@ -1102,70 +1191,93 @@ class StoragePage extends StatelessWidget {
         children: [
           SurfaceCard(
             gradient: const LinearGradient(
-                colors: [Color(0xFF0E5C58), Color(0xFF0A2235)]),
+              colors: [Color(0xFF0E5C58), Color(0xFF0A2235)],
+            ),
             borderColor: const Color(0xFF18796F),
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Icon(Icons.savings_rounded,
-                    color: ByteSqueezeColors.mint, size: 34),
+                const Icon(
+                  Icons.savings_rounded,
+                  color: ByteSqueezeColors.mint,
+                  size: 34,
+                ),
                 const SizedBox(height: 22),
-                Text(formatBytes(summary['saved_bytes']),
-                    style: Theme.of(context).textTheme.displaySmall),
-                const Text('total space reclaimed',
-                    style: TextStyle(color: ByteSqueezeColors.muted)),
+                Text(
+                  formatBytes(summary['saved_bytes']),
+                  style: Theme.of(context).textTheme.displaySmall,
+                ),
+                const Text(
+                  'total space reclaimed',
+                  style: TextStyle(color: ByteSqueezeColors.muted),
+                ),
                 const SizedBox(height: 10),
                 Text(
-                    '${summary['count'] ?? 0} completed encodes · ${formatDuration(summary['total_runtime_seconds'])} processing time',
-                    style: const TextStyle(color: ByteSqueezeColors.mint)),
+                  '${summary['count'] ?? 0} completed encodes · ${formatDuration(summary['total_runtime_seconds'])} processing time',
+                  style: const TextStyle(color: ByteSqueezeColors.mint),
+                ),
               ],
             ),
           ),
           const SectionHeader(title: 'Recent savings'),
           if (rows.isEmpty)
             const EmptyState(
-                icon: Icons.savings_outlined,
-                title: 'No completed encodes',
-                message:
-                    'Savings appear after TSD verifies an output and records the result.')
+              icon: Icons.savings_outlined,
+              title: 'No completed encodes',
+              message:
+                  'Savings appear after TSD verifies an output and records the result.',
+            )
           else
-            ...rows.map((row) => Padding(
-                  padding: const EdgeInsets.only(bottom: 9),
-                  child: SurfaceCard(
-                    padding: const EdgeInsets.all(15),
-                    child: Row(
-                      children: [
-                        const CircleAvatar(
-                            backgroundColor: Color(0x223FE1AE),
-                            child: Icon(Icons.arrow_downward_rounded,
-                                color: ByteSqueezeColors.mint)),
-                        const SizedBox(width: 12),
-                        Expanded(
-                          child: Column(
-                            crossAxisAlignment: CrossAxisAlignment.start,
-                            children: [
-                              Text(fileName(row['src']),
-                                  maxLines: 1,
-                                  overflow: TextOverflow.ellipsis,
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w700)),
-                              const SizedBox(height: 3),
-                              Text(
-                                  '${row['encoder'] ?? row['preset'] ?? 'encode'} · ${relativeTime(row['ts'])}',
-                                  style: const TextStyle(
-                                      color: ByteSqueezeColors.muted,
-                                      fontSize: 12)),
-                            ],
-                          ),
+            ...rows.map(
+              (row) => Padding(
+                padding: const EdgeInsets.only(bottom: 9),
+                child: SurfaceCard(
+                  padding: const EdgeInsets.all(15),
+                  child: Row(
+                    children: [
+                      const CircleAvatar(
+                        backgroundColor: Color(0x223FE1AE),
+                        child: Icon(
+                          Icons.arrow_downward_rounded,
+                          color: ByteSqueezeColors.mint,
                         ),
-                        Text(formatBytes(row['saved_bytes']),
-                            style: const TextStyle(
-                                color: ByteSqueezeColors.mint,
-                                fontWeight: FontWeight.w700)),
-                      ],
-                    ),
+                      ),
+                      const SizedBox(width: 12),
+                      Expanded(
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(
+                              fileName(row['src']),
+                              maxLines: 1,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(
+                                fontWeight: FontWeight.w700,
+                              ),
+                            ),
+                            const SizedBox(height: 3),
+                            Text(
+                              '${row['encoder'] ?? row['preset'] ?? 'encode'} · ${relativeTime(row['ts'])}',
+                              style: const TextStyle(
+                                color: ByteSqueezeColors.muted,
+                                fontSize: 12,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                      Text(
+                        formatBytes(row['saved_bytes']),
+                        style: const TextStyle(
+                          color: ByteSqueezeColors.mint,
+                          fontWeight: FontWeight.w700,
+                        ),
+                      ),
+                    ],
                   ),
-                )),
+                ),
+              ),
+            ),
         ],
       ),
     );
@@ -1201,25 +1313,31 @@ class EventsPage extends StatelessWidget {
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
                   Container(
-                      width: 10,
-                      height: 10,
-                      margin: const EdgeInsets.only(top: 5),
-                      decoration:
-                          BoxDecoration(color: color, shape: BoxShape.circle)),
+                    width: 10,
+                    height: 10,
+                    margin: const EdgeInsets.only(top: 5),
+                    decoration: BoxDecoration(
+                      color: color,
+                      shape: BoxShape.circle,
+                    ),
+                  ),
                   const SizedBox(width: 12),
                   Expanded(
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         Text(
-                            '${event['message'] ?? event['type'] ?? 'Server event'}',
-                            style:
-                                const TextStyle(fontWeight: FontWeight.w600)),
+                          '${event['message'] ?? event['type'] ?? 'Server event'}',
+                          style: const TextStyle(fontWeight: FontWeight.w600),
+                        ),
                         const SizedBox(height: 5),
                         Text(
-                            '${event['type'] ?? 'event'} · ${relativeTime(event['ts'])}',
-                            style: const TextStyle(
-                                color: ByteSqueezeColors.muted, fontSize: 12)),
+                          '${event['type'] ?? 'event'} · ${relativeTime(event['ts'])}',
+                          style: const TextStyle(
+                            color: ByteSqueezeColors.muted,
+                            fontSize: 12,
+                          ),
+                        ),
                       ],
                     ),
                   ),
@@ -1254,7 +1372,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
     super.initState();
     _primary = TextEditingController(text: controller.session?.baseUrl ?? '');
     _fallback = TextEditingController(
-        text: controller.session?.fallbackBaseUrl ?? '');
+      text: controller.session?.fallbackBaseUrl ?? '',
+    );
   }
 
   @override
@@ -1276,31 +1395,35 @@ class _ConnectionPageState extends State<ConnectionPage> {
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const StatusPill(
-                    label: 'Bearer token pairing',
-                    color: ByteSqueezeColors.mint,
-                    icon: Icons.lock_rounded),
+                  label: 'Bearer token pairing',
+                  color: ByteSqueezeColors.mint,
+                  icon: Icons.lock_rounded,
+                ),
                 const SizedBox(height: 18),
                 _KeyValue(label: 'Server', value: controller.serverLabel),
                 _KeyValue(
-                    label: 'Current route',
-                    value: controller.demoMode
-                        ? 'Demo'
-                        : controller.api.activeBaseUrl),
+                  label: 'Current route',
+                  value: controller.demoMode
+                      ? 'Demo'
+                      : controller.api.activeBaseUrl,
+                ),
                 _KeyValue(
-                    label: 'Device',
-                    value: controller.demoMode
-                        ? 'Demo mode'
-                        : (controller.session?.deviceName ?? 'ByteSqueeze')),
+                  label: 'Device',
+                  value: controller.demoMode
+                      ? 'Demo mode'
+                      : (controller.session?.deviceName ?? 'ByteSqueeze'),
+                ),
                 _KeyValue(
-                    label: 'Permission',
-                    value: controller.canControl
-                        ? 'Read and control'
-                        : 'Read only'),
+                  label: 'Permission',
+                  value:
+                      controller.canControl ? 'Read and control' : 'Read only',
+                ),
                 _KeyValue(
-                    label: 'Device ID',
-                    value: controller.demoMode
-                        ? 'demo'
-                        : (controller.session?.deviceId ?? '—')),
+                  label: 'Device ID',
+                  value: controller.demoMode
+                      ? 'demo'
+                      : (controller.session?.deviceId ?? '—'),
+                ),
               ],
             ),
           ),
@@ -1309,12 +1432,15 @@ class _ConnectionPageState extends State<ConnectionPage> {
             child: Column(
               crossAxisAlignment: CrossAxisAlignment.stretch,
               children: [
-                Text('Automatic address fallback',
-                    style: Theme.of(context).textTheme.titleLarge),
+                Text(
+                  'Automatic address fallback',
+                  style: Theme.of(context).textTheme.titleLarge,
+                ),
                 const SizedBox(height: 5),
                 const Text(
-                    'ByteSqueeze tries the current route, then your home and away addresses. It switches only when a connection fails.',
-                    style: TextStyle(color: ByteSqueezeColors.muted)),
+                  'ByteSqueeze tries the current route, then your home and away addresses. It switches only when a connection fails.',
+                  style: TextStyle(color: ByteSqueezeColors.muted),
+                ),
                 const SizedBox(height: 15),
                 TextField(
                   controller: _primary,
@@ -1346,7 +1472,8 @@ class _ConnectionPageState extends State<ConnectionPage> {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2))
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.save_outlined),
                   label: const Text('Save connection addresses'),
                 ),
@@ -1362,8 +1489,10 @@ class _ConnectionPageState extends State<ConnectionPage> {
                 Icon(Icons.security_rounded, color: ByteSqueezeColors.amber),
                 SizedBox(width: 12),
                 Expanded(
-                    child: Text(
-                        'Tokens are kept in platform secure storage. For remote access, put TSD behind an authenticated HTTPS reverse proxy instead of exposing port 8080 directly.')),
+                  child: Text(
+                    'Tokens are kept in platform secure storage. For remote access, put TSD behind an authenticated HTTPS reverse proxy instead of exposing port 8080 directly.',
+                  ),
+                ),
               ],
             ),
           ),
@@ -1377,9 +1506,13 @@ class _ConnectionPageState extends State<ConnectionPage> {
     try {
       await controller.updateServerAddresses(_primary.text, _fallback.text);
       if (!mounted) return;
-      ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
           content: Text(
-              'Connection addresses saved. Automatic fallback is active.')));
+            'Connection addresses saved. Automatic fallback is active.',
+          ),
+        ),
+      );
     } catch (error) {
       if (mounted) {
         ScaffoldMessenger.of(context)
@@ -1404,12 +1537,18 @@ class _KeyValue extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Text(label,
-              style: const TextStyle(
-                  color: ByteSqueezeColors.muted, fontSize: 12)),
+          Text(
+            label,
+            style: const TextStyle(
+              color: ByteSqueezeColors.muted,
+              fontSize: 12,
+            ),
+          ),
           const SizedBox(height: 3),
-          SelectableText(value,
-              style: const TextStyle(fontWeight: FontWeight.w600)),
+          SelectableText(
+            value,
+            style: const TextStyle(fontWeight: FontWeight.w600),
+          ),
         ],
       ),
     );

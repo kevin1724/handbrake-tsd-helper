@@ -147,7 +147,7 @@ from .smart_presets import (
 )
 
 from .events import load_event_summaries, load_events, clear_events, log_event
-from .storage_stats import get_summary as get_storage_summary, list_encodes as list_storage_encodes, clear_stats as clear_storage_stats, record_encode
+from .storage_stats import get_summary as get_storage_summary, get_dashboard_analytics as get_storage_dashboard_analytics, list_encodes as list_storage_encodes, clear_stats as clear_storage_stats, record_encode
 from .media_metadata import artwork_path as media_artwork_path, enrich_library as enrich_media_library
 from .node_linking import (
     accept_pairing,
@@ -8622,6 +8622,25 @@ def register_routes(app):
         for row in active:
             row.pop("smart_feedback_context", None)
         autopilot = _autopilot_status_payload(compact=True)
+        nodes = list_nodes_public()
+        storage = get_storage_summary()
+        analytics = get_storage_dashboard_analytics(days=30, worker_limit=6)
+        current_node_names = {
+            str(node.get("id") or ""): str(node.get("name") or "").strip()
+            for node in nodes
+            if node.get("id") and node.get("name")
+        }
+        display_name_counts = {}
+        for worker in analytics.get("workers", []):
+            display_name = current_node_names.get(str(worker.get("node_id") or "")) or str(worker.get("node_name") or "Worker")
+            worker["display_name"] = display_name
+            display_name_counts[display_name.casefold()] = display_name_counts.get(display_name.casefold(), 0) + 1
+        for worker in analytics.get("workers", []):
+            display_name = str(worker.get("display_name") or "Worker")
+            node_id = str(worker.get("node_id") or "")
+            if node_id and display_name_counts.get(display_name.casefold(), 0) > 1:
+                worker["display_name"] = f"{display_name} · {node_id[:6]}"
+        storage["analytics"] = analytics
         return jsonify(
             ok=True,
             queue={"paused": get_queue_state(), "summary": get_job_summary(), "active": active[:8]},
@@ -8631,8 +8650,8 @@ def register_routes(app):
                 "episodes": int(library.get("episodes") or 0),
                 "updated_at": library.get("updated_at") or 0,
             },
-            storage=get_storage_summary(),
-            nodes=list_nodes_public(),
+            storage=storage,
+            nodes=nodes,
             autopilot={
                 "autopilot": autopilot.get("autopilot"),
                 "readiness": autopilot.get("readiness"),
@@ -8770,7 +8789,10 @@ def register_routes(app):
                 "configured": bool(library.get("configured")),
             },
             automation=_autopilot_status_payload(compact=True),
-            storage=get_storage_summary(),
+            storage={
+                **get_storage_summary(),
+                "analytics": get_storage_dashboard_analytics(),
+            },
             events=load_event_summaries(limit=8),
         )
 
@@ -9346,7 +9368,12 @@ def register_routes(app):
             limit = max(1, min(500, int(request.args.get("limit") or 100)))
         except (TypeError, ValueError):
             limit = 100
-        return jsonify(ok=True, summary=get_storage_summary(), encodes=list_storage_encodes(limit=limit))
+        return jsonify(
+            ok=True,
+            summary=get_storage_summary(),
+            analytics=get_storage_dashboard_analytics(),
+            encodes=list_storage_encodes(limit=limit),
+        )
 
     @app.route("/api/mobile/v1/smart_presets", methods=["GET", "POST"])
     def mobile_smart_presets_api():

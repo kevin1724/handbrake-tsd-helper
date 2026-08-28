@@ -1,4 +1,5 @@
 import 'dart:convert';
+import 'dart:math' as math;
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
@@ -39,13 +40,13 @@ class _LibraryScreenState extends State<LibraryScreen> {
       final files = asList(item['files'])
           .map((row) => '${asMap(row)['path'] ?? ''}')
           .join(' ');
-      final matchesSearch = query.isEmpty ||
+      final matchesSearch =
+          query.isEmpty ||
           '${item['title'] ?? ''} ${item['year'] ?? ''} $files'
               .toLowerCase()
               .contains(query);
       return matchesSearch && _matchesQuickFilter(item);
-    }).toList()
-      ..sort(_compareItems);
+    }).toList()..sort(_compareItems);
     final stats = asMap(widget.controller.library['stats']);
     final configured = widget.controller.library['configured'] != false;
     final tmdbConfigured = widget.controller.library['tmdb_configured'] == true;
@@ -62,74 +63,22 @@ class _LibraryScreenState extends State<LibraryScreen> {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.stretch,
                 children: [
-                  Row(
-                    children: [
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            const Text('YOUR MEDIA',
-                                style: TextStyle(
-                                    color: ByteSqueezeColors.cyan,
-                                    fontSize: 11,
-                                    fontWeight: FontWeight.w800,
-                                    letterSpacing: 1.6)),
-                            const SizedBox(height: 5),
-                            Text('Library',
-                                style:
-                                    Theme.of(context).textTheme.headlineLarge),
-                            const SizedBox(height: 4),
-                            Text(
-                              '${(stats['movies'] as num?)?.toInt() ?? all.length} movies · ${(stats['shows'] as num?)?.toInt() ?? 0} shows · ${(stats['episodes'] as num?)?.toInt() ?? 0} episodes',
-                              style: const TextStyle(
-                                  color: ByteSqueezeColors.muted),
-                            ),
-                          ],
-                        ),
-                      ),
-                      if (widget.controller.showSecondaryUi)
-                        IconButton.filledTonal(
-                          tooltip: 'Refresh library on server',
-                          onPressed: widget.controller.canControl &&
-                                  !widget.controller.busy
-                              ? () => _run(widget.controller.refreshLibrary)
-                              : null,
-                          icon: const Icon(Icons.sync_rounded),
-                        ),
-                    ],
+                  CompactPageHeader(
+                    title: 'Library',
+                    summary:
+                        '${(stats['movies'] as num?)?.toInt() ?? 0} movies · ${(stats['shows'] as num?)?.toInt() ?? 0} shows · ${(stats['episodes'] as num?)?.toInt() ?? 0} episodes',
+                    trailing: widget.controller.showSecondaryUi
+                        ? IconButton(
+                            tooltip: 'Refresh library on server',
+                            onPressed:
+                                widget.controller.canControl &&
+                                    !widget.controller.busy
+                                ? () => _run(widget.controller.refreshLibrary)
+                                : null,
+                            icon: const Icon(Icons.sync_rounded),
+                          )
+                        : null,
                   ),
-                  if (widget.controller.showSecondaryUi) ...[
-                    const SizedBox(height: 16),
-                    SurfaceCard(
-                      borderColor:
-                          ByteSqueezeColors.cyan.withValues(alpha: .38),
-                      child: const Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
-                        children: [
-                          Icon(Icons.auto_awesome_rounded,
-                              color: ByteSqueezeColors.cyan),
-                          SizedBox(width: 12),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text('Preview, tune, then queue',
-                                    style: TextStyle(
-                                        fontWeight: FontWeight.w800)),
-                                SizedBox(height: 4),
-                                Text(
-                                  'Open a title to compare a real Smart encode. Shows also support one-tap season previews and queues.',
-                                  style: TextStyle(
-                                      color: ByteSqueezeColors.muted,
-                                      fontSize: 12.5),
-                                ),
-                              ],
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ],
                   if (widget.controller.statsForNerds) ...[
                     const SizedBox(height: 12),
                     Row(
@@ -152,34 +101,14 @@ class _LibraryScreenState extends State<LibraryScreen> {
                                 ? 'TMDb posters are used first; other artwork fills any gaps.'
                                 : 'Local, TVmaze, and Apple artwork work without an API key.',
                             style: const TextStyle(
-                                color: ByteSqueezeColors.muted,
-                                fontSize: 11.5),
+                              color: ByteSqueezeColors.muted,
+                              fontSize: 11.5,
+                            ),
                           ),
                         ),
                       ],
                     ),
                   ],
-                  const SizedBox(height: 12),
-                  SegmentedButton<bool>(
-                    segments: const [
-                      ButtonSegment(
-                          value: false,
-                          icon: Icon(Icons.movie_outlined),
-                          label: Text('Movies')),
-                      ButtonSegment(
-                          value: true,
-                          icon: Icon(Icons.tv_rounded),
-                          label: Text('Shows')),
-                    ],
-                    selected: {_shows},
-                    onSelectionChanged: (value) =>
-                        setState(() => _shows = value.first),
-                    showSelectedIcon: false,
-                    style: ButtonStyle(
-                        shape: WidgetStatePropertyAll(RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(14)))),
-                  ),
-                  const SizedBox(height: 12),
                   TextField(
                     controller: _search,
                     onChanged: (_) => setState(() {}),
@@ -197,25 +126,50 @@ class _LibraryScreenState extends State<LibraryScreen> {
                             ),
                     ),
                   ),
-                  if (widget.controller.showSecondaryUi) ...[
-                    const SizedBox(height: 10),
-                    Row(
+                  const SizedBox(height: 10),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: SegmentedButton<bool>(
+                          segments: const [
+                            ButtonSegment(value: false, label: Text('Movies')),
+                            ButtonSegment(value: true, label: Text('Shows')),
+                          ],
+                          selected: {_shows},
+                          onSelectionChanged: (value) =>
+                              setState(() => _shows = value.first),
+                          showSelectedIcon: false,
+                        ),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 8),
+                  Row(
                     children: [
                       Expanded(
                         child: SingleChildScrollView(
                           scrollDirection: Axis.horizontal,
                           child: Row(
                             children: [
-                              for (final filter in const [
+                              for (final filter in [
                                 ('all', 'All', Icons.apps_rounded),
-                                ('savings', 'Best savings', Icons.compress_rounded),
+                                (
+                                  'savings',
+                                  'Best savings',
+                                  Icons.compress_rounded,
+                                ),
                                 ('hdr', 'HDR', Icons.hdr_on_rounded),
-                                ('tracked', 'Tracked', Icons.notifications_active_outlined),
+                                if (_shows)
+                                  (
+                                    'tracked',
+                                    'Tracked',
+                                    Icons.notifications_active_outlined,
+                                  ),
                               ]) ...[
                                 FilterChip(
                                   selected: _quickFilter == filter.$1,
-                                  onSelected: (_) => setState(
-                                      () => _quickFilter = filter.$1),
+                                  onSelected: (_) =>
+                                      setState(() => _quickFilter = filter.$1),
                                   avatar: Icon(filter.$3, size: 17),
                                   label: Text(filter.$2),
                                 ),
@@ -232,12 +186,17 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         onSelected: (value) => setState(() => _sort = value),
                         itemBuilder: (context) => const [
                           PopupMenuItem(
-                              value: 'recommended',
-                              child: Text('Recommended savings')),
+                            value: 'recommended',
+                            child: Text('Recommended savings'),
+                          ),
                           PopupMenuItem(
-                              value: 'size', child: Text('Largest source')),
+                            value: 'size',
+                            child: Text('Largest source'),
+                          ),
                           PopupMenuItem(
-                              value: 'title', child: Text('Title A–Z')),
+                            value: 'title',
+                            child: Text('Title A–Z'),
+                          ),
                         ],
                         child: DecoratedBox(
                           decoration: BoxDecoration(
@@ -252,20 +211,23 @@ class _LibraryScreenState extends State<LibraryScreen> {
                         ),
                       ),
                     ],
-                    ),
-                  ],
+                  ),
                   if (!configured) ...[
                     const SizedBox(height: 14),
                     const SurfaceCard(
                       borderColor: ByteSqueezeColors.amber,
                       child: Row(
                         children: [
-                          Icon(Icons.folder_off_outlined,
-                              color: ByteSqueezeColors.amber),
+                          Icon(
+                            Icons.folder_off_outlined,
+                            color: ByteSqueezeColors.amber,
+                          ),
                           SizedBox(width: 12),
                           Expanded(
-                              child: Text(
-                                  'Map Movies and Shows folders in the TSD web settings, then refresh here.')),
+                            child: Text(
+                              'Map Movies and Shows folders in the TSD web settings, then refresh here.',
+                            ),
+                          ),
                         ],
                       ),
                     ),
@@ -280,17 +242,27 @@ class _LibraryScreenState extends State<LibraryScreen> {
                           : 'Latest files discovered on mapped drives',
                     ),
                     _MediaRail(
-                      items: (_shows
-                              ? all
-                                  .where((item) => item['tracked'] == true)
-                                  .toList()
-                              : asList(asMap(widget.controller
-                                      .library['catalog'])['recently_added'])
-                                  .map(asMap)
-                                  .where((item) => item['type'] == 'movie')
-                                  .toList())
-                          .take(12)
-                          .toList(),
+                      items:
+                          (_shows
+                                  ? all
+                                        .where(
+                                          (item) => item['tracked'] == true,
+                                        )
+                                        .toList()
+                                  : asList(
+                                          asMap(
+                                            widget
+                                                .controller
+                                                .library['catalog'],
+                                          )['recently_added'],
+                                        )
+                                        .map(asMap)
+                                        .where(
+                                          (item) => item['type'] == 'movie',
+                                        )
+                                        .toList())
+                              .take(12)
+                              .toList(),
                       isShow: _shows,
                       onTap: _openDetails,
                     ),
@@ -306,9 +278,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       child: Text(
                         '${items.length} ${_shows ? 'show${items.length == 1 ? '' : 's'}' : 'movie${items.length == 1 ? '' : 's'}'} shown',
                         style: const TextStyle(
-                            color: ByteSqueezeColors.muted,
-                            fontWeight: FontWeight.w700,
-                            fontSize: 12),
+                          color: ByteSqueezeColors.muted,
+                          fontWeight: FontWeight.w700,
+                          fontSize: 12,
+                        ),
                       ),
                     ),
                   if (items.isEmpty)
@@ -316,42 +289,53 @@ class _LibraryScreenState extends State<LibraryScreen> {
                       icon: _shows
                           ? Icons.tv_off_outlined
                           : Icons.movie_filter_outlined,
-                      title:
-                          query.isEmpty ? 'Nothing scanned yet' : 'No matches',
+                      title: query.isEmpty
+                          ? 'Nothing scanned yet'
+                          : 'No matches',
                       message: query.isEmpty
                           ? 'Run a library refresh after mapping media folders in TSD.'
                           : 'Try another title or year.',
-                    )
-                  else
-                    LayoutBuilder(
-                      builder: (context, constraints) {
-                        final width = constraints.maxWidth;
-                        final columns = width >= 1100
-                            ? 7
-                            : (width >= 820 ? 5 : (width >= 540 ? 4 : 2));
-                        return GridView.builder(
-                          shrinkWrap: true,
-                          physics: const NeverScrollableScrollPhysics(),
-                          gridDelegate:
-                              SliverGridDelegateWithFixedCrossAxisCount(
-                            crossAxisCount: columns,
-                            mainAxisSpacing: 14,
-                            crossAxisSpacing: 12,
-                            childAspectRatio: .58,
-                          ),
-                          itemCount: items.length,
-                          itemBuilder: (context, index) => _MediaTile(
-                            item: items[index],
-                            isShow: _shows,
-                            onTap: () => _openDetails(items[index]),
-                          ),
-                        );
-                      },
                     ),
                 ],
               ),
             ),
           ),
+          if (items.isNotEmpty)
+            SliverLayoutBuilder(
+              builder: (context, constraints) {
+                final viewport = constraints.crossAxisExtent;
+                final baseInset = viewport < 600 ? 14.0 : 24.0;
+                final centeredInset = math
+                    .max(baseInset, (viewport - 1280) / 2 + baseInset)
+                    .toDouble();
+                final usable = viewport - centeredInset * 2;
+                final columns = usable >= 1100
+                    ? 7
+                    : (usable >= 820 ? 5 : (usable >= 540 ? 4 : 2));
+                return SliverPadding(
+                  padding: EdgeInsets.fromLTRB(
+                    centeredInset,
+                    0,
+                    centeredInset,
+                    24,
+                  ),
+                  sliver: SliverGrid.builder(
+                    gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+                      crossAxisCount: columns,
+                      mainAxisSpacing: 12,
+                      crossAxisSpacing: 10,
+                      childAspectRatio: .61,
+                    ),
+                    itemCount: items.length,
+                    itemBuilder: (context, index) => _MediaTile(
+                      item: items[index],
+                      isShow: _shows,
+                      onTap: () => _openDetails(items[index]),
+                    ),
+                  ),
+                );
+              },
+            ),
         ],
       ),
     );
@@ -365,7 +349,10 @@ class _LibraryScreenState extends State<LibraryScreen> {
       backgroundColor: ByteSqueezeColors.navy,
       showDragHandle: true,
       builder: (context) => _MediaDetails(
-          controller: widget.controller, item: item, isShow: _shows),
+        controller: widget.controller,
+        item: item,
+        isShow: _shows,
+      ),
     );
     if (mounted) setState(() {});
   }
@@ -457,13 +444,19 @@ class _MediaRail extends StatelessWidget {
                 children: [
                   Expanded(child: PosterArt(item: item, borderRadius: 16)),
                   const SizedBox(height: 7),
-                  Text('${item['title'] ?? 'Unknown'}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w700)),
-                  Text('${item['year'] ?? ''}',
-                      style: const TextStyle(
-                          color: ByteSqueezeColors.muted, fontSize: 11.5)),
+                  Text(
+                    '${item['title'] ?? 'Unknown'}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w700),
+                  ),
+                  Text(
+                    '${item['year'] ?? ''}',
+                    style: const TextStyle(
+                      color: ByteSqueezeColors.muted,
+                      fontSize: 11.5,
+                    ),
+                  ),
                 ],
               ),
             ),
@@ -475,8 +468,11 @@ class _MediaRail extends StatelessWidget {
 }
 
 class _MediaTile extends StatelessWidget {
-  const _MediaTile(
-      {required this.item, required this.isShow, required this.onTap});
+  const _MediaTile({
+    required this.item,
+    required this.isShow,
+    required this.onTap,
+  });
 
   final Map<String, dynamic> item;
   final bool isShow;
@@ -487,10 +483,10 @@ class _MediaTile extends StatelessWidget {
     final prediction = asMap(item['prediction']);
     final savings = (prediction['savings_percent'] as num?)?.round();
     return Material(
-      color: ByteSqueezeColors.surface.withValues(alpha: .72),
+      color: ByteSqueezeColors.surface,
       shape: RoundedRectangleBorder(
-        borderRadius: BorderRadius.circular(19),
-        side: const BorderSide(color: ByteSqueezeColors.line),
+        borderRadius: BorderRadius.circular(12),
+        side: const BorderSide(color: ByteSqueezeColors.subtleLine),
       ),
       clipBehavior: Clip.antiAlias,
       child: InkWell(
@@ -519,12 +515,14 @@ class _MediaTile extends StatelessWidget {
                         ? const StatusPill(
                             label: 'Tracked',
                             color: ByteSqueezeColors.mint,
-                            icon: Icons.notifications_active_outlined)
+                            icon: Icons.notifications_active_outlined,
+                          )
                         : savings != null
-                            ? StatusPill(
-                                label: '$savings% save',
-                                color: ByteSqueezeColors.cyan)
-                            : const SizedBox.shrink(),
+                        ? StatusPill(
+                            label: '$savings% save',
+                            color: ByteSqueezeColors.cyan,
+                          )
+                        : const SizedBox.shrink(),
                   ),
                 ],
               ),
@@ -534,10 +532,12 @@ class _MediaTile extends StatelessWidget {
               child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('${item['title'] ?? 'Unknown'}',
-                      maxLines: 1,
-                      overflow: TextOverflow.ellipsis,
-                      style: const TextStyle(fontWeight: FontWeight.w800)),
+                  Text(
+                    '${item['title'] ?? 'Unknown'}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(fontWeight: FontWeight.w800),
+                  ),
                   const SizedBox(height: 3),
                   Text(
                     isShow
@@ -546,7 +546,9 @@ class _MediaTile extends StatelessWidget {
                     maxLines: 1,
                     overflow: TextOverflow.ellipsis,
                     style: const TextStyle(
-                        color: ByteSqueezeColors.muted, fontSize: 11.5),
+                      color: ByteSqueezeColors.muted,
+                      fontSize: 11.5,
+                    ),
                   ),
                 ],
               ),
@@ -559,8 +561,11 @@ class _MediaTile extends StatelessWidget {
 }
 
 class _MediaDetails extends StatefulWidget {
-  const _MediaDetails(
-      {required this.controller, required this.item, required this.isShow});
+  const _MediaDetails({
+    required this.controller,
+    required this.item,
+    required this.isShow,
+  });
 
   final AppController controller;
   final Map<String, dynamic> item;
@@ -617,7 +622,8 @@ class _MediaDetailsState extends State<_MediaDetails> {
       messenger.showSnackBar(
         SnackBar(
           content: Text(
-              '${scopeLabel ?? widget.item['title']} queued for ${_targetLabel()}.'),
+            '${scopeLabel ?? widget.item['title']} queued for ${_targetLabel()}.',
+          ),
         ),
       );
     } catch (error) {
@@ -648,9 +654,11 @@ class _MediaDetailsState extends State<_MediaDetails> {
       _smartTuning = tuning;
       _preview = <String, dynamic>{};
     });
-    ScaffoldMessenger.of(context).showSnackBar(const SnackBar(
-      content: Text('Smart guardrails applied to this queue only.'),
-    ));
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Smart guardrails applied to this queue only.'),
+      ),
+    );
   }
 
   Future<void> _generatePreview({List<String>? paths}) async {
@@ -675,10 +683,10 @@ class _MediaDetailsState extends State<_MediaDetails> {
       if (mounted) setState(() => _preview = result);
     } catch (error) {
       if (!mounted) return;
-      setState(() => _preview = <String, dynamic>{
-            'state': 'error',
-            'message': '$error',
-          });
+      setState(
+        () =>
+            _preview = <String, dynamic>{'state': 'error', 'message': '$error'},
+      );
       ScaffoldMessenger.of(context)
           .showSnackBar(SnackBar(content: Text('$error')));
     } finally {
@@ -710,8 +718,7 @@ class _MediaDetailsState extends State<_MediaDetails> {
     );
   }
 
-  Map<int, List<Map<String, dynamic>>> _seasonGroups(
-      List<dynamic> values) {
+  Map<int, List<Map<String, dynamic>>> _seasonGroups(List<dynamic> values) {
     final groups = <int, List<Map<String, dynamic>>>{};
     for (final value in values) {
       final file = asMap(value);
@@ -719,12 +726,15 @@ class _MediaDetailsState extends State<_MediaDetails> {
       groups.putIfAbsent(season, () => <Map<String, dynamic>>[]).add(file);
     }
     for (final rows in groups.values) {
-      rows.sort((a, b) =>
-          ((a['episode'] as num?)?.toInt() ?? 0)
-              .compareTo((b['episode'] as num?)?.toInt() ?? 0));
+      rows.sort(
+        (a, b) => ((a['episode'] as num?)?.toInt() ?? 0).compareTo(
+          (b['episode'] as num?)?.toInt() ?? 0,
+        ),
+      );
     }
-    return Map.fromEntries(groups.entries.toList()
-      ..sort((a, b) => a.key.compareTo(b.key)));
+    return Map.fromEntries(
+      groups.entries.toList()..sort((a, b) => a.key.compareTo(b.key)),
+    );
   }
 
   List<String> _filePaths(Iterable<Map<String, dynamic>> files) => files
@@ -763,20 +773,21 @@ class _MediaDetailsState extends State<_MediaDetails> {
     final seasons = widget.isShow
         ? _seasonGroups(files)
         : <int, List<Map<String, dynamic>>>{};
-    final posterSource = '${widget.item['poster_source'] ?? widget.item['metadata_source'] ?? widget.item['source'] ?? ''}'
-        .toLowerCase();
+    final posterSource =
+        '${widget.item['poster_source'] ?? widget.item['metadata_source'] ?? widget.item['source'] ?? ''}'
+            .toLowerCase();
     final artworkLabel = posterSource == 'tmdb'
         ? 'Artwork: TMDb'
         : (posterSource == 'tvmaze'
-            ? 'Artwork: TVmaze'
-            : (posterSource == 'apple'
-                ? 'Artwork: Apple'
-                : (posterSource == 'local' ? 'Artwork: local' : '')));
+              ? 'Artwork: TVmaze'
+              : (posterSource == 'apple'
+                    ? 'Artwork: Apple'
+                    : (posterSource == 'local' ? 'Artwork: local' : '')));
     return DraggableScrollableSheet(
       expand: false,
-      initialChildSize: .88,
-      minChildSize: .5,
-      maxChildSize: .96,
+      initialChildSize: .96,
+      minChildSize: .64,
+      maxChildSize: 1,
       builder: (context, scrollController) => ListView(
         controller: scrollController,
         padding: const EdgeInsets.fromLTRB(20, 6, 20, 40),
@@ -785,19 +796,24 @@ class _MediaDetailsState extends State<_MediaDetails> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
               SizedBox(
-                  width: 118,
-                  height: 177,
-                  child: PosterArt(item: widget.item, borderRadius: 16)),
+                width: 118,
+                height: 177,
+                child: PosterArt(item: widget.item, borderRadius: 16),
+              ),
               const SizedBox(width: 18),
               Expanded(
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                    Text('${widget.item['title'] ?? 'Unknown'}',
-                        style: Theme.of(context).textTheme.headlineSmall),
+                    Text(
+                      '${widget.item['title'] ?? 'Unknown'}',
+                      style: Theme.of(context).textTheme.headlineSmall,
+                    ),
                     const SizedBox(height: 7),
-                    Text('${widget.item['year'] ?? ''}',
-                        style: const TextStyle(color: ByteSqueezeColors.muted)),
+                    Text(
+                      '${widget.item['year'] ?? ''}',
+                      style: const TextStyle(color: ByteSqueezeColors.muted),
+                    ),
                     const SizedBox(height: 14),
                     Wrap(
                       spacing: 7,
@@ -805,26 +821,32 @@ class _MediaDetailsState extends State<_MediaDetails> {
                       children: [
                         if (widget.isShow)
                           StatusPill(
-                              label:
-                                  '${widget.item['episode_count'] ?? files.length} episodes',
-                              icon: Icons.tv_rounded),
+                            label:
+                                '${widget.item['episode_count'] ?? files.length} episodes',
+                            icon: Icons.tv_rounded,
+                          ),
                         if (!widget.isShow)
                           StatusPill(
-                              label: formatBytes(widget.item['size_bytes'] ??
-                                  widget.item['total_size_bytes']),
-                              icon: Icons.storage_rounded),
+                            label: formatBytes(
+                              widget.item['size_bytes'] ??
+                                  widget.item['total_size_bytes'],
+                            ),
+                            icon: Icons.storage_rounded,
+                          ),
                         if (widget.item['quality'] != null)
                           StatusPill(
-                              label: '${widget.item['quality']}',
-                              color: ByteSqueezeColors.mint),
+                            label: '${widget.item['quality']}',
+                            color: ByteSqueezeColors.mint,
+                          ),
                         if (artworkLabel.isNotEmpty &&
                             widget.controller.statsForNerds)
                           StatusPill(
-                              label: artworkLabel,
-                              color: posterSource == 'tmdb'
-                                  ? ByteSqueezeColors.mint
-                                  : ByteSqueezeColors.blue,
-                              icon: Icons.image_outlined),
+                            label: artworkLabel,
+                            color: posterSource == 'tmdb'
+                                ? ByteSqueezeColors.mint
+                                : ByteSqueezeColors.blue,
+                            icon: Icons.image_outlined,
+                          ),
                       ],
                     ),
                   ],
@@ -839,18 +861,25 @@ class _MediaDetailsState extends State<_MediaDetails> {
               child: SwitchListTile.adaptive(
                 value: widget.item['tracked'] == true,
                 onChanged: widget.controller.canControl ? _track : null,
-                title: const Text('Track new episodes',
-                    style: TextStyle(fontWeight: FontWeight.w700)),
+                title: const Text(
+                  'Track new episodes',
+                  style: TextStyle(fontWeight: FontWeight.w700),
+                ),
                 subtitle: const Text(
-                    'Add release dates to Calendar and watch mapped drives for new files.'),
-                secondary: const Icon(Icons.notifications_active_outlined,
-                    color: ByteSqueezeColors.cyan),
+                  'Add release dates to Calendar and watch mapped drives for new files.',
+                ),
+                secondary: const Icon(
+                  Icons.notifications_active_outlined,
+                  color: ByteSqueezeColors.cyan,
+                ),
               ),
             ),
             if (widget.item['tracked'] == true)
               SurfaceCard(
-                padding:
-                    const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 12,
+                  vertical: 4,
+                ),
                 child: Column(
                   children: [
                     SwitchListTile.adaptive(
@@ -858,15 +887,19 @@ class _MediaDetailsState extends State<_MediaDetails> {
                       value: widget.item['monitor_releases'] != false,
                       onChanged: widget.controller.canControl
                           ? (value) async {
-                              setState(() =>
-                                  widget.item['monitor_releases'] = value);
-                              await widget.controller
-                                  .trackShow(widget.item, true);
+                              setState(
+                                () => widget.item['monitor_releases'] = value,
+                              );
+                              await widget.controller.trackShow(
+                                widget.item,
+                                true,
+                              );
                             }
                           : null,
                       title: const Text('Upcoming episode calendar'),
-                      subtitle:
-                          const Text('Show known release dates from TVmaze.'),
+                      subtitle: const Text(
+                        'Show known release dates from TVmaze.',
+                      ),
                       secondary: const Icon(Icons.calendar_month_outlined),
                     ),
                     const Divider(height: 1),
@@ -875,15 +908,20 @@ class _MediaDetailsState extends State<_MediaDetails> {
                       value: widget.item['auto_queue_downloads'] != false,
                       onChanged: widget.controller.canControl
                           ? (value) async {
-                              setState(() =>
-                                  widget.item['auto_queue_downloads'] = value);
-                              await widget.controller
-                                  .trackShow(widget.item, true);
+                              setState(
+                                () =>
+                                    widget.item['auto_queue_downloads'] = value,
+                              );
+                              await widget.controller.trackShow(
+                                widget.item,
+                                true,
+                              );
                             }
                           : null,
                       title: const Text('Auto-queue finished downloads'),
                       subtitle: const Text(
-                          'Wait until a new file stops changing, then queue it.'),
+                        'Wait until a new file stops changing, then queue it.',
+                      ),
                       secondary: const Icon(Icons.download_done_rounded),
                     ),
                   ],
@@ -891,8 +929,9 @@ class _MediaDetailsState extends State<_MediaDetails> {
               ),
           ],
           const SectionHeader(
-              title: 'Smart plan',
-              subtitle: 'Every episode gets its own probe, HDR decision, quality floor, and preset snapshot'),
+            title: 'Smart plan',
+            subtitle: 'Every episode gets its own probe, HDR decision, quality floor, and preset snapshot',
+          ),
           SurfaceCard(
             borderColor: ByteSqueezeColors.cyan.withValues(alpha: .34),
             child: Column(
@@ -907,8 +946,10 @@ class _MediaDetailsState extends State<_MediaDetails> {
                       ),
                       child: const Padding(
                         padding: EdgeInsets.all(10),
-                        child: Icon(Icons.auto_awesome_rounded,
-                            color: ByteSqueezeColors.cyan),
+                        child: Icon(
+                          Icons.auto_awesome_rounded,
+                          color: ByteSqueezeColors.cyan,
+                        ),
                       ),
                     ),
                     const SizedBox(width: 11),
@@ -920,8 +961,7 @@ class _MediaDetailsState extends State<_MediaDetails> {
                             widget.isShow
                                 ? '${_paths.length} episodes in full-show scope'
                                 : 'One movie in queue scope',
-                            style: const TextStyle(
-                                fontWeight: FontWeight.w800),
+                            style: const TextStyle(fontWeight: FontWeight.w800),
                           ),
                           const SizedBox(height: 3),
                           Text(
@@ -929,8 +969,9 @@ class _MediaDetailsState extends State<_MediaDetails> {
                                 ? 'Using your learned Smart profile'
                                 : '${_smartTuning.length} temporary guardrails applied',
                             style: const TextStyle(
-                                color: ByteSqueezeColors.muted,
-                                fontSize: 12),
+                              color: ByteSqueezeColors.muted,
+                              fontSize: 12,
+                            ),
                           ),
                         ],
                       ),
@@ -948,17 +989,22 @@ class _MediaDetailsState extends State<_MediaDetails> {
                 FilledButton.tonalIcon(
                   onPressed: _paths.isEmpty
                       ? null
-                      : () => _openSizeWizard(files.isNotEmpty
-                          ? asMap(files.first)
-                          : <String, dynamic>{'path': _paths.first}),
+                      : () => _openSizeWizard(
+                          files.isNotEmpty
+                              ? asMap(files.first)
+                              : <String, dynamic>{'path': _paths.first},
+                        ),
                   icon: const Icon(Icons.straighten_rounded),
-                  label: Text(widget.isShow
-                      ? 'Size Wizard for first episode'
-                      : 'Open in Size Wizard'),
+                  label: Text(
+                    widget.isShow
+                        ? 'Size Wizard for first episode'
+                        : 'Open in Size Wizard',
+                  ),
                 ),
                 const SizedBox(height: 9),
                 OutlinedButton.icon(
-                  onPressed: widget.controller.canControl &&
+                  onPressed:
+                      widget.controller.canControl &&
                           !_previewWorking &&
                           _paths.isNotEmpty
                       ? _generatePreview
@@ -967,23 +1013,26 @@ class _MediaDetailsState extends State<_MediaDetails> {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2))
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.compare_rounded),
-                  label: Text(_preview.isEmpty
-                      ? (widget.isShow
-                          ? 'Preview first episode’s Smart encode'
-                          : 'Preview real Smart encode')
-                      : 'Refresh Smart preview'),
+                  label: Text(
+                    _preview.isEmpty
+                        ? (widget.isShow
+                              ? 'Preview first episode’s Smart encode'
+                              : 'Preview real Smart encode')
+                        : 'Refresh Smart preview',
+                  ),
                 ),
               ],
             ),
           ),
           if (_preview.isNotEmpty)
-            _LibraryPreviewCard(
-                preview: _preview, working: _previewWorking),
+            _LibraryPreviewCard(preview: _preview, working: _previewWorking),
           const SectionHeader(
-              title: 'Queue destination',
-              subtitle: 'All encoding stays on the server or selected worker'),
+            title: 'Queue destination',
+            subtitle: 'All encoding stays on the server or selected worker',
+          ),
           DropdownButtonFormField<String>(
             initialValue: _queueTarget,
             decoration: const InputDecoration(
@@ -1005,10 +1054,12 @@ class _MediaDetailsState extends State<_MediaDetails> {
               ...asList(widget.controller.nodes['nodes'])
                   .map(asMap)
                   .where((row) => row['online'] == true)
-                  .map((row) => DropdownMenuItem(
-                        value: 'node:${row['id']}',
-                        child: Text('${row['name'] ?? 'Worker node'}'),
-                      )),
+                  .map(
+                    (row) => DropdownMenuItem(
+                      value: 'node:${row['id']}',
+                      child: Text('${row['name'] ?? 'Worker node'}'),
+                    ),
+                  ),
             ],
             onChanged: _working
                 ? null
@@ -1026,11 +1077,14 @@ class _MediaDetailsState extends State<_MediaDetails> {
                       ? const SizedBox(
                           width: 18,
                           height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2))
+                          child: CircularProgressIndicator(strokeWidth: 2),
+                        )
                       : const Icon(Icons.auto_awesome_rounded),
-                  label: Text(widget.isShow
-                      ? 'Smart Queue Full Show'
-                      : 'Smart Queue Movie'),
+                  label: Text(
+                    widget.isShow
+                        ? 'Smart Queue Full Show'
+                        : 'Smart Queue Movie',
+                  ),
                 ),
               ),
               const SizedBox(width: 9),
@@ -1045,27 +1099,30 @@ class _MediaDetailsState extends State<_MediaDetails> {
                 ],
                 child: const DecoratedBox(
                   decoration: BoxDecoration(
-                      color: ByteSqueezeColors.raised,
-                      borderRadius: BorderRadius.all(Radius.circular(14))),
+                    color: ByteSqueezeColors.raised,
+                    borderRadius: BorderRadius.all(Radius.circular(14)),
+                  ),
                   child: Padding(
-                      padding: EdgeInsets.all(14),
-                      child: Icon(Icons.more_horiz_rounded)),
+                    padding: EdgeInsets.all(14),
+                    child: Icon(Icons.more_horiz_rounded),
+                  ),
                 ),
               ),
             ],
           ),
           if (widget.isShow && seasons.isNotEmpty) ...[
             const SectionHeader(
-                title: 'Seasons',
-                subtitle: 'Preview one episode; queue planning remains independent for every episode'),
+              title: 'Seasons',
+              subtitle: 'Preview one episode; queue planning remains independent for every episode',
+            ),
             ...seasons.entries.map((entry) {
               final season = entry.key;
               final rows = entry.value;
               final paths = _filePaths(rows);
               final totalBytes = rows.fold<int>(
-                  0,
-                  (sum, row) =>
-                      sum + ((row['size_bytes'] as num?)?.toInt() ?? 0));
+                0,
+                (sum, row) => sum + ((row['size_bytes'] as num?)?.toInt() ?? 0),
+              );
               return Padding(
                 padding: const EdgeInsets.only(bottom: 10),
                 child: SurfaceCard(
@@ -1074,26 +1131,35 @@ class _MediaDetailsState extends State<_MediaDetails> {
                     tilePadding: const EdgeInsets.fromLTRB(14, 5, 8, 5),
                     childrenPadding: const EdgeInsets.only(bottom: 8),
                     leading: CircleAvatar(
-                      backgroundColor:
-                          ByteSqueezeColors.blue.withValues(alpha: .14),
-                      child: Text(season > 0 ? '$season' : '—',
-                          style: const TextStyle(
-                              color: ByteSqueezeColors.cyan,
-                              fontWeight: FontWeight.w800)),
+                      backgroundColor: ByteSqueezeColors.blue.withValues(
+                        alpha: .14,
+                      ),
+                      child: Text(
+                        season > 0 ? '$season' : '—',
+                        style: const TextStyle(
+                          color: ByteSqueezeColors.cyan,
+                          fontWeight: FontWeight.w800,
+                        ),
+                      ),
                     ),
-                    title: Text(season > 0 ? 'Season $season' : 'Specials',
-                        style: const TextStyle(fontWeight: FontWeight.w800)),
+                    title: Text(
+                      season > 0 ? 'Season $season' : 'Specials',
+                      style: const TextStyle(fontWeight: FontWeight.w800),
+                    ),
                     subtitle: Text(
                       '${rows.length} episode${rows.length == 1 ? '' : 's'} · ${formatBytes(totalBytes)}',
                       style: const TextStyle(
-                          color: ByteSqueezeColors.muted, fontSize: 12),
+                        color: ByteSqueezeColors.muted,
+                        fontSize: 12,
+                      ),
                     ),
                     trailing: Wrap(
                       spacing: 3,
                       children: [
                         IconButton(
                           tooltip: 'Preview the first episode in this season',
-                          onPressed: widget.controller.canControl &&
+                          onPressed:
+                              widget.controller.canControl &&
                                   !_previewWorking &&
                                   paths.isNotEmpty
                               ? () => _generatePreview(paths: paths)
@@ -1102,16 +1168,17 @@ class _MediaDetailsState extends State<_MediaDetails> {
                         ),
                         IconButton.filledTonal(
                           tooltip: 'Smart Queue this season',
-                          onPressed: widget.controller.canControl &&
+                          onPressed:
+                              widget.controller.canControl &&
                                   !_working &&
                                   paths.isNotEmpty
                               ? () => _queue(
-                                    'smart',
-                                    paths: paths,
-                                    scopeLabel: season > 0
-                                        ? '${widget.item['title']} Season $season'
-                                        : '${widget.item['title']} Specials',
-                                  )
+                                  'smart',
+                                  paths: paths,
+                                  scopeLabel: season > 0
+                                      ? '${widget.item['title']} Season $season'
+                                      : '${widget.item['title']} Specials',
+                                )
                               : null,
                           icon: const Icon(Icons.add_to_queue_rounded),
                         ),
@@ -1123,14 +1190,21 @@ class _MediaDetailsState extends State<_MediaDetails> {
                         leading: Text(
                           'E${file['episode'] ?? '—'}',
                           style: const TextStyle(
-                              color: ByteSqueezeColors.cyan,
-                              fontWeight: FontWeight.w800),
+                            color: ByteSqueezeColors.cyan,
+                            fontWeight: FontWeight.w800,
+                          ),
                         ),
-                        title: Text(fileName(file['path']),
-                            maxLines: 1, overflow: TextOverflow.ellipsis),
-                        subtitle: Text(formatBytes(file['size_bytes']),
-                            style: const TextStyle(
-                                color: ByteSqueezeColors.muted)),
+                        title: Text(
+                          fileName(file['path']),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        subtitle: Text(
+                          formatBytes(file['size_bytes']),
+                          style: const TextStyle(
+                            color: ByteSqueezeColors.muted,
+                          ),
+                        ),
                         trailing: IconButton(
                           tooltip: 'Open this episode in Size Wizard',
                           onPressed: () => _openSizeWizard(file),
@@ -1143,19 +1217,29 @@ class _MediaDetailsState extends State<_MediaDetails> {
               );
             }),
           ] else if (files.isNotEmpty) ...[
-            SectionHeader(title: 'Files', subtitle: '${files.length} media files'),
+            SectionHeader(
+              title: 'Files',
+              subtitle: '${files.length} media files',
+            ),
             SurfaceCard(
               padding: const EdgeInsets.symmetric(vertical: 4),
               child: Column(
                 children: files.take(100).map((row) {
                   final file = asMap(row);
                   return ListTile(
-                    leading: const Icon(Icons.movie_outlined,
-                        color: ByteSqueezeColors.cyan),
-                    title: Text(fileName(file['path']),
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                    subtitle: Text(formatBytes(file['size_bytes']),
-                        style: const TextStyle(color: ByteSqueezeColors.muted)),
+                    leading: const Icon(
+                      Icons.movie_outlined,
+                      color: ByteSqueezeColors.cyan,
+                    ),
+                    title: Text(
+                      fileName(file['path']),
+                      maxLines: 1,
+                      overflow: TextOverflow.ellipsis,
+                    ),
+                    subtitle: Text(
+                      formatBytes(file['size_bytes']),
+                      style: const TextStyle(color: ByteSqueezeColors.muted),
+                    ),
                     trailing: IconButton(
                       tooltip: 'Open in Size Wizard',
                       onPressed: () => _openSizeWizard(file),
@@ -1181,29 +1265,30 @@ class _LibraryPreviewCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final result = asMap(preview['result']);
-    final progress =
-        (((preview['progress'] as num?)?.toDouble() ?? 0) / 100)
-            .clamp(0, 1)
-            .toDouble();
+    final progress = (((preview['progress'] as num?)?.toDouble() ?? 0) / 100)
+        .clamp(0, 1)
+        .toDouble();
     final oldFrame = '${result['old_b64'] ?? ''}';
     final newFrame = '${result['new_b64'] ?? ''}';
     final ready = preview['state'] == 'done';
     final encoder = '${result['encoder_label'] ?? result['encoder'] ?? ''}';
-    final dimensions = result['out_width'] != null && result['out_height'] != null
+    final dimensions =
+        result['out_width'] != null && result['out_height'] != null
         ? '${result['out_width']}×${result['out_height']}'
         : '';
     return Padding(
       padding: const EdgeInsets.only(top: 10),
       child: SurfaceCard(
-        borderColor:
-            ready ? ByteSqueezeColors.mint : ByteSqueezeColors.line,
+        borderColor: ready ? ByteSqueezeColors.mint : ByteSqueezeColors.line,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
             Row(
               children: [
                 Icon(
-                  ready ? Icons.check_circle_rounded : Icons.movie_filter_rounded,
+                  ready
+                      ? Icons.check_circle_rounded
+                      : Icons.movie_filter_rounded,
                   color: ready
                       ? ByteSqueezeColors.mint
                       : ByteSqueezeColors.cyan,
@@ -1217,9 +1302,10 @@ class _LibraryPreviewCard extends StatelessWidget {
                 ),
                 if (ready && (encoder.isNotEmpty || dimensions.isNotEmpty))
                   StatusPill(
-                    label: [encoder, dimensions]
-                        .where((value) => value.isNotEmpty)
-                        .join(' · '),
+                    label: [
+                      encoder,
+                      dimensions,
+                    ].where((value) => value.isNotEmpty).join(' · '),
                     color: ByteSqueezeColors.mint,
                   ),
               ],
@@ -1230,45 +1316,52 @@ class _LibraryPreviewCard extends StatelessWidget {
             Text(
               '${preview['message'] ?? (working ? 'Encoding a short matched sample…' : 'Preview finished.')}',
               style: const TextStyle(
-                  color: ByteSqueezeColors.muted, fontSize: 12),
+                color: ByteSqueezeColors.muted,
+                fontSize: 12,
+              ),
             ),
             if (ready && oldFrame.isNotEmpty && newFrame.isNotEmpty) ...[
               const SizedBox(height: 12),
-              LayoutBuilder(builder: (context, constraints) {
-                final frames = [
-                  _LibraryPreviewFrame(label: 'Original', value: oldFrame),
-                  _LibraryPreviewFrame(label: 'Smart proposal', value: newFrame),
-                ];
-                if (constraints.maxWidth >= 520) {
-                  return Row(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Expanded(child: frames[0]),
-                      const SizedBox(width: 9),
-                      Expanded(child: frames[1]),
-                    ],
+              LayoutBuilder(
+                builder: (context, constraints) {
+                  final frames = [
+                    _LibraryPreviewFrame(label: 'Original', value: oldFrame),
+                    _LibraryPreviewFrame(
+                      label: 'Smart proposal',
+                      value: newFrame,
+                    ),
+                  ];
+                  if (constraints.maxWidth >= 520) {
+                    return Row(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Expanded(child: frames[0]),
+                        const SizedBox(width: 9),
+                        Expanded(child: frames[1]),
+                      ],
+                    );
+                  }
+                  return Column(
+                    children: [frames[0], const SizedBox(height: 9), frames[1]],
                   );
-                }
-                return Column(
-                  children: [
-                    frames[0],
-                    const SizedBox(height: 9),
-                    frames[1],
-                  ],
-                );
-              }),
+                },
+              ),
               const SizedBox(height: 8),
               const Text(
                 'Frames are captured at the same moment so faces, text, motion detail, and dark areas are easy to compare.',
                 style: TextStyle(
-                    color: ByteSqueezeColors.muted, fontSize: 11.5),
+                  color: ByteSqueezeColors.muted,
+                  fontSize: 11.5,
+                ),
               ),
             ] else if (ready) ...[
               const SizedBox(height: 8),
               const Text(
                 'Demo preview metadata is ready. Connect to your server to render matched source and proposal frames.',
                 style: TextStyle(
-                    color: ByteSqueezeColors.muted, fontSize: 11.5),
+                  color: ByteSqueezeColors.muted,
+                  fontSize: 11.5,
+                ),
               ),
             ],
           ],
@@ -1293,11 +1386,14 @@ class _LibraryPreviewFrame extends StatelessWidget {
     final previewBytes = bytes;
     final image = previewBytes == null
         ? const SizedBox(
-        height: 120,
-        child: Center(child: Icon(Icons.broken_image_outlined)),
-      )
-        : Image.memory(previewBytes,
-            fit: BoxFit.contain, gaplessPlayback: true);
+            height: 120,
+            child: Center(child: Icon(Icons.broken_image_outlined)),
+          )
+        : Image.memory(
+            previewBytes,
+            fit: BoxFit.contain,
+            gaplessPlayback: true,
+          );
     return Material(
       color: const Color(0xFF020713),
       borderRadius: BorderRadius.circular(14),
@@ -1319,16 +1415,22 @@ class _LibraryPreviewFrame extends StatelessWidget {
                 child: Row(
                   children: [
                     Expanded(
-                      child: Text(label.toUpperCase(),
-                          style: const TextStyle(
-                              color: ByteSqueezeColors.muted,
-                              fontSize: 10,
-                              fontWeight: FontWeight.w900,
-                              letterSpacing: 1)),
+                      child: Text(
+                        label.toUpperCase(),
+                        style: const TextStyle(
+                          color: ByteSqueezeColors.muted,
+                          fontSize: 10,
+                          fontWeight: FontWeight.w900,
+                          letterSpacing: 1,
+                        ),
+                      ),
                     ),
                     if (previewBytes != null)
-                      const Icon(Icons.zoom_out_map_rounded,
-                          color: ByteSqueezeColors.muted, size: 15),
+                      const Icon(
+                        Icons.zoom_out_map_rounded,
+                        color: ByteSqueezeColors.muted,
+                        size: 15,
+                      ),
                   ],
                 ),
               ),
@@ -1358,10 +1460,7 @@ class _LibraryPreviewFrame extends StatelessWidget {
             Positioned(
               top: 8,
               left: 12,
-              child: StatusPill(
-                label: label,
-                color: ByteSqueezeColors.cyan,
-              ),
+              child: StatusPill(label: label, color: ByteSqueezeColors.cyan),
             ),
             Positioned(
               top: 5,
@@ -1411,10 +1510,9 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
     _compatibility = '${widget.initial['compatibility'] ?? 'learned'}';
     _audio = '${widget.initial['audio_strategy'] ?? 'learned'}';
     _subtitles = '${widget.initial['subtitle_mode'] ?? 'learned'}';
-    _targetScale =
-        ((widget.initial['target_scale'] as num?)?.toDouble() ?? 1)
-            .clamp(.7, 1.3)
-            .toDouble();
+    _targetScale = ((widget.initial['target_scale'] as num?)?.toDouble() ?? 1)
+        .clamp(.7, 1.3)
+        .toDouble();
     if (_resolutionLocked) _resolution = 'keep';
     if (_audioLocked) _audio = 'copy';
     if (_subtitlesLocked) _subtitles = 'all';
@@ -1461,12 +1559,18 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text('Fine-tune Smart Queue',
-                          style: TextStyle(
-                              fontSize: 21, fontWeight: FontWeight.w900)),
+                      Text(
+                        'Fine-tune Smart Queue',
+                        style: TextStyle(
+                          fontSize: 21,
+                          fontWeight: FontWeight.w900,
+                        ),
+                      ),
                       SizedBox(height: 3),
-                      Text('Guardrails for this queue only',
-                          style: TextStyle(color: ByteSqueezeColors.muted)),
+                      Text(
+                        'Guardrails for this queue only',
+                        style: TextStyle(color: ByteSqueezeColors.muted),
+                      ),
                     ],
                   ),
                 ),
@@ -1482,30 +1586,23 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
                   borderColor: ByteSqueezeColors.cyan,
                   child: Text(
                     [
-                      if (_resolutionLocked) 'source resolution',
-                      if (widget.profile['keep_black_bars'] != false)
-                        'black bars',
-                      if (widget.profile['keep_aspect_ratio'] != false)
-                        'aspect ratio',
-                      if (_audioLocked) 'audio passthrough',
-                      if (widget.profile['keep_all_audio_languages'] != false)
-                        'all audio languages',
-                      if (_subtitlesLocked) 'all subtitles',
-                    ].isEmpty
+                          if (_resolutionLocked) 'source resolution',
+                          if (widget.profile['keep_black_bars'] != false)
+                            'black bars',
+                          if (widget.profile['keep_aspect_ratio'] != false)
+                            'aspect ratio',
+                          if (_audioLocked) 'audio passthrough',
+                          if (widget.profile['keep_all_audio_languages'] !=
+                              false)
+                            'all audio languages',
+                          if (_subtitlesLocked) 'all subtitles',
+                        ].isEmpty
                         ? 'No saved hard protections are enabled. These choices guide this queue without changing your learned profile.'
-                        : 'Saved protections are locked: ${[
-                            if (_resolutionLocked) 'source resolution',
-                            if (widget.profile['keep_black_bars'] != false)
-                              'black bars',
-                            if (widget.profile['keep_aspect_ratio'] != false)
-                              'aspect ratio',
-                            if (_audioLocked) 'audio passthrough',
-                            if (widget.profile['keep_all_audio_languages'] != false)
-                              'all audio languages',
-                            if (_subtitlesLocked) 'all subtitles',
-                          ].join(', ')}.',
+                        : 'Saved protections are locked: ${[if (_resolutionLocked) 'source resolution', if (widget.profile['keep_black_bars'] != false) 'black bars', if (widget.profile['keep_aspect_ratio'] != false) 'aspect ratio', if (_audioLocked) 'audio passthrough', if (widget.profile['keep_all_audio_languages'] != false) 'all audio languages', if (_subtitlesLocked) 'all subtitles'].join(', ')}.',
                     style: const TextStyle(
-                        color: ByteSqueezeColors.muted, fontSize: 12.5),
+                      color: ByteSqueezeColors.muted,
+                      fontSize: 12.5,
+                    ),
                   ),
                 ),
                 _tuningDropdown(
@@ -1556,8 +1653,7 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
                     'modern': 'Modern / H.265',
                     'maximum': 'Maximum compression',
                   },
-                  onChanged: (value) =>
-                      setState(() => _compatibility = value),
+                  onChanged: (value) => setState(() => _compatibility = value),
                 ),
                 _tuningDropdown(
                   label: 'Audio',
@@ -1592,18 +1688,21 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
                       Row(
                         children: [
                           const Expanded(
-                            child: Text('Size vs. detail',
-                                style: TextStyle(fontWeight: FontWeight.w800)),
+                            child: Text(
+                              'Size vs. detail',
+                              style: TextStyle(fontWeight: FontWeight.w800),
+                            ),
                           ),
                           Text(
                             _targetScale == 1
                                 ? 'Learned target'
                                 : (_targetScale < 1
-                                    ? '${((1 - _targetScale) * 100).round()}% smaller'
-                                    : '${((_targetScale - 1) * 100).round()}% more detail'),
+                                      ? '${((1 - _targetScale) * 100).round()}% smaller'
+                                      : '${((_targetScale - 1) * 100).round()}% more detail'),
                             style: const TextStyle(
-                                color: ByteSqueezeColors.cyan,
-                                fontWeight: FontWeight.w700),
+                              color: ByteSqueezeColors.cyan,
+                              fontWeight: FontWeight.w700,
+                            ),
                           ),
                         ],
                       ),
@@ -1618,14 +1717,20 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
                       const Row(
                         mainAxisAlignment: MainAxisAlignment.spaceBetween,
                         children: [
-                          Text('Smaller',
-                              style: TextStyle(
-                                  color: ByteSqueezeColors.muted,
-                                  fontSize: 11)),
-                          Text('More detail',
-                              style: TextStyle(
-                                  color: ByteSqueezeColors.muted,
-                                  fontSize: 11)),
+                          Text(
+                            'Smaller',
+                            style: TextStyle(
+                              color: ByteSqueezeColors.muted,
+                              fontSize: 11,
+                            ),
+                          ),
+                          Text(
+                            'More detail',
+                            style: TextStyle(
+                              color: ByteSqueezeColors.muted,
+                              fontSize: 11,
+                            ),
+                          ),
                         ],
                       ),
                     ],
@@ -1661,10 +1766,10 @@ class _SmartTuneSheetState extends State<_SmartTuneSheet> {
         initialValue: value,
         decoration: InputDecoration(labelText: label),
         items: values.entries
-            .map((entry) => DropdownMenuItem(
-                  value: entry.key,
-                  child: Text(entry.value),
-                ))
+            .map(
+              (entry) =>
+                  DropdownMenuItem(value: entry.key, child: Text(entry.value)),
+            )
             .toList(),
         onChanged: onChanged == null
             ? null

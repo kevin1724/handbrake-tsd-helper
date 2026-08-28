@@ -14,10 +14,10 @@ void main() {
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
     await tester.pumpAndSettle();
 
-    expect(find.text('ByteSqueeze'), findsOneWidget);
-    expect(find.text('Media operations are ready.'), findsOneWidget);
-    expect(find.text('1 running'), findsOneWidget);
-    expect(find.text('Library'), findsOneWidget);
+    expect(find.text('Overview'), findsWidgets);
+    expect(find.text('Encoding now'), findsOneWidget);
+    expect(find.text('Storage impact'), findsOneWidget);
+    expect(find.text('Saved by worker'), findsOneWidget);
     expect(find.text('Automate'), findsOneWidget);
     expect(find.text('More'), findsOneWidget);
   });
@@ -35,17 +35,17 @@ void main() {
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
     await tester.pumpAndSettle();
 
-    expect(find.text('Overview'), findsOneWidget);
-    expect(find.text('Library'), findsOneWidget);
-    expect(find.text('Queue'), findsOneWidget);
-    expect(find.text('Autopilot'), findsOneWidget);
-    expect(find.text('Settings'), findsOneWidget);
+    expect(find.text('Overview'), findsWidgets);
+    expect(find.text('Library'), findsWidgets);
+    expect(find.text('Queue'), findsWidgets);
+    expect(find.text('Autopilot'), findsWidgets);
+    expect(find.text('Settings'), findsWidgets);
     expect(find.byType(NavigationBar), findsNothing);
 
-    await tester.tap(find.text('Library'));
+    await tester.tap(find.text('Library').first);
     await tester.pumpAndSettle();
     expect(controller.selectedTab, 1);
-    expect(find.text('YOUR MEDIA'), findsWidgets);
+    expect(find.textContaining('movies ·'), findsWidgets);
   });
 
   testWidgets('V3 command center exposes navigation and safe actions',
@@ -60,8 +60,7 @@ void main() {
 
     expect(find.text('Command center'), findsOneWidget);
     expect(find.text('Open Library'), findsOneWidget);
-    await tester.scrollUntilVisible(
-        find.text('Queue with Smart Presets'), 220,
+    await tester.scrollUntilVisible(find.text('Queue with Smart Presets'), 220,
         scrollable: find.byType(Scrollable).last);
     await tester.pumpAndSettle();
     expect(find.text('Queue with Smart Presets'), findsOneWidget);
@@ -75,9 +74,12 @@ void main() {
 
     await tester.tap(find.byIcon(Icons.tune_outlined));
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('Interface & UI'), 220,
+    await tester.scrollUntilVisible(find.text('Interface'), 220,
         scrollable: find.byType(Scrollable).first);
-    await tester.tap(find.text('Interface & UI'));
+    final interfaceTile = find.widgetWithText(ListTile, 'Interface');
+    await tester.drag(find.byType(ListView).first, const Offset(0, -140));
+    await tester.pumpAndSettle();
+    await tester.tap(interfaceTile);
     await tester.pumpAndSettle();
 
     expect(find.text('V3'), findsOneWidget);
@@ -109,7 +111,8 @@ void main() {
     expect(find.text('Stop unexpectedly large outputs'), findsOneWidget);
   });
 
-  testWidgets('older server keeps the app connected and explains one limitation',
+  testWidgets(
+      'older server keeps the app connected and explains one limitation',
       (tester) async {
     final controller = AppController()..enterDemo();
     controller.serverSupportsOperationsSettings = false;
@@ -162,7 +165,7 @@ void main() {
     await tester.tap(find.byIcon(Icons.motion_photos_on_outlined));
     await tester.pumpAndSettle();
 
-    expect(find.textContaining('across all nodes'), findsOneWidget);
+    expect(find.textContaining('completed ·'), findsOneWidget);
     expect(find.textContaining('Office Encoder'), findsOneWidget);
     final menus = find.byType(PopupMenuButton<String>);
     expect(menus, findsWidgets);
@@ -214,10 +217,13 @@ void main() {
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
     await tester.pumpAndSettle();
 
-    await tester.tap(find.byIcon(Icons.video_library_outlined));
+    await tester.tap(find.descendant(
+      of: find.byType(NavigationBar),
+      matching: find.byIcon(Icons.video_library_outlined),
+    ));
     await tester.pumpAndSettle();
 
-    expect(find.text('Preview, tune, then queue'), findsOneWidget);
+    expect(find.text('Preview, tune, then queue'), findsNothing);
     expect(find.text('Best savings'), findsOneWidget);
 
     await tester.tap(find.text('Shows'));
@@ -244,16 +250,21 @@ void main() {
         scrollable: detailsScroll);
     expect(find.text('Smart Queue Full Show'), findsOneWidget);
     await tester.scrollUntilVisible(
-        find.text('Preview one episode; queue planning remains independent for every episode'), 220,
+        find.text(
+            'Preview one episode; queue planning remains independent for every episode'),
+        220,
         scrollable: detailsScroll);
-    expect(find.text('Preview one episode; queue planning remains independent for every episode'),
+    expect(
+        find.text(
+            'Preview one episode; queue planning remains independent for every episode'),
         findsOneWidget);
     await tester.scrollUntilVisible(find.text('Season 1'), 220,
         scrollable: detailsScroll);
     expect(find.text('Season 1'), findsOneWidget);
   });
 
-  testWidgets('default UI is focused and optional detail is restored in settings',
+  testWidgets(
+      'default UI is focused and optional detail is restored in settings',
       (tester) async {
     final controller = AppController()..enterDemo();
     await tester.pumpWidget(ByteSqueezeApp(controller: controller));
@@ -262,13 +273,16 @@ void main() {
     await tester.tap(find.byIcon(Icons.video_library_outlined));
     await tester.pumpAndSettle();
     expect(find.text('Preview, tune, then queue'), findsNothing);
-    expect(find.text('Best savings'), findsNothing);
+    expect(find.text('Best savings'), findsOneWidget);
 
     await tester.tap(find.byIcon(Icons.tune_outlined));
     await tester.pumpAndSettle();
-    await tester.scrollUntilVisible(find.text('Interface & UI'), 220,
+    await tester.scrollUntilVisible(find.text('Interface'), 220,
         scrollable: find.byType(Scrollable).first);
-    await tester.tap(find.text('Interface & UI'));
+    final interfaceTile = find.widgetWithText(ListTile, 'Interface');
+    await tester.drag(find.byType(ListView).first, const Offset(0, -140));
+    await tester.pumpAndSettle();
+    await tester.tap(interfaceTile);
     await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('Show secondary controls'), 220,
         scrollable: find.byType(Scrollable).first);
@@ -317,7 +331,7 @@ void main() {
 
     expect(find.text('Size Wizard'), findsOneWidget);
     expect(find.textContaining('source FPS preserved'), findsOneWidget);
-    expect(find.text('Queue this Wizard plan'), findsOneWidget);
+    expect(find.text('Queue encode'), findsOneWidget);
     final wizardScroll = find
         .descendant(
           of: find.byType(ListView).last,
@@ -329,5 +343,53 @@ void main() {
     await tester.tap(find.text('Main controller'));
     await tester.pumpAndSettle();
     expect(find.text('Next available node'), findsOneWidget);
+  });
+
+  testWidgets('V3 stays usable across phone, foldable, tablet, and landscape',
+      (tester) async {
+    const sizes = [
+      Size(360, 800),
+      Size(390, 844),
+      Size(430, 932),
+      Size(650, 900),
+      Size(768, 1024),
+      Size(1024, 768),
+    ];
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+
+    for (final size in sizes) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      final controller = AppController()..enterDemo();
+      await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+      await tester.pumpAndSettle();
+      expect(tester.takeException(), isNull, reason: 'Overview at $size');
+
+      for (var tab = 1; tab < 5; tab++) {
+        controller.selectTab(tab);
+        await tester.pumpAndSettle();
+        expect(tester.takeException(), isNull, reason: 'Tab $tab at $size');
+      }
+    }
+  });
+
+  testWidgets('pairing is compact on narrow and large phones', (tester) async {
+    addTearDown(() {
+      tester.view.resetPhysicalSize();
+      tester.view.resetDevicePixelRatio();
+    });
+    for (final size in const [Size(360, 800), Size(430, 932)]) {
+      tester.view.physicalSize = size;
+      tester.view.devicePixelRatio = 1;
+      final controller = AppController()..booting = false;
+      await tester.pumpWidget(ByteSqueezeApp(controller: controller));
+      await tester.pumpAndSettle();
+      expect(find.text('Connect to ByteSqueeze'), findsOneWidget);
+      expect(find.text('Connect'), findsOneWidget);
+      expect(tester.takeException(), isNull, reason: 'Pairing at $size');
+    }
   });
 }

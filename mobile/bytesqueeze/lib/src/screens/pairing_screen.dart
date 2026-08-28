@@ -51,12 +51,12 @@ class _PairingScreenState extends State<PairingScreen> {
   @override
   Widget build(BuildContext context) {
     return Scaffold(
-      body: DecoratedBox(
-        decoration: const BoxDecoration(gradient: ByteSqueezeColors.backdrop),
+      body: ColoredBox(
+        color: ByteSqueezeColors.canvas,
         child: SafeArea(
           child: Center(
             child: SingleChildScrollView(
-              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 30),
+              padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
               child: ConstrainedBox(
                 constraints: const BoxConstraints(maxWidth: 520),
                 child: Form(
@@ -68,60 +68,54 @@ class _PairingScreenState extends State<PairingScreen> {
                         child: Hero(
                           tag: 'bytesqueeze-icon',
                           child: ClipRRect(
-                            borderRadius: BorderRadius.circular(38),
+                            borderRadius: BorderRadius.circular(20),
                             child: Image.asset(
                               'assets/branding/bytesqueeze_icon.png',
-                              width: 150,
-                              height: 150,
+                              width: 82,
+                              height: 82,
                             ),
                           ),
                         ),
                       ),
-                      const SizedBox(height: 24),
-                      Text('Your TSD control center, in your pocket.',
-                          style: Theme.of(context).textTheme.headlineLarge,
-                          textAlign: TextAlign.center),
-                      const SizedBox(height: 10),
-                      const Text(
-                        'ByteSqueeze manages the server that does the heavy work. Your phone only monitors and controls it.',
-                        style: TextStyle(
-                            color: ByteSqueezeColors.muted, fontSize: 16),
+                      const SizedBox(height: 18),
+                      Text(
+                        'Connect to ByteSqueeze',
+                        style: Theme.of(context).textTheme.headlineMedium,
                         textAlign: TextAlign.center,
                       ),
-                      const SizedBox(height: 28),
-                      SurfaceCard(
-                        padding: const EdgeInsets.all(20),
-                        gradient: const LinearGradient(
-                          begin: Alignment.topLeft,
-                          end: Alignment.bottomRight,
-                          colors: [Color(0xFF102B57), Color(0xFF0B1832)],
+                      const SizedBox(height: 6),
+                      const Text(
+                        'Enter the server address and one-time pairing code.',
+                        style: TextStyle(
+                          color: ByteSqueezeColors.muted,
+                          fontSize: 13,
                         ),
-                        borderColor: const Color(0xFF24548B),
+                        textAlign: TextAlign.center,
+                      ),
+                      const SizedBox(height: 20),
+                      SurfaceCard(
+                        padding: const EdgeInsets.all(16),
+                        borderColor: ByteSqueezeColors.cyan.withValues(
+                          alpha: .3,
+                        ),
                         child: Column(
                           crossAxisAlignment: CrossAxisAlignment.stretch,
                           children: [
                             Row(
                               children: [
-                                const DecoratedBox(
-                                  decoration: BoxDecoration(
-                                      color: Color(0x2231D6FF),
-                                      shape: BoxShape.circle),
-                                  child: Padding(
-                                    padding: EdgeInsets.all(10),
-                                    child: Icon(Icons.link_rounded,
-                                        color: ByteSqueezeColors.cyan),
+                                const Icon(
+                                  Icons.link_rounded,
+                                  color: ByteSqueezeColors.cyan,
+                                ),
+                                const SizedBox(width: 10),
+                                Expanded(
+                                  child: Text(
+                                    'Server connection',
+                                    style: Theme.of(context)
+                                        .textTheme
+                                        .titleMedium,
                                   ),
                                 ),
-                                const SizedBox(width: 12),
-                                Expanded(
-                                    child: Text('Pair with TSD',
-                                        style: Theme.of(context)
-                                            .textTheme
-                                            .titleLarge)),
-                                const StatusPill(
-                                    label: 'Secure',
-                                    color: ByteSqueezeColors.mint,
-                                    icon: Icons.lock_outline_rounded),
                               ],
                             ),
                             const SizedBox(height: 20),
@@ -137,8 +131,8 @@ class _PairingScreenState extends State<PairingScreen> {
                               ),
                               validator: (value) =>
                                   (value ?? '').trim().length < 4
-                                      ? 'Enter the server address.'
-                                      : null,
+                                  ? 'Enter the server address.'
+                                  : null,
                             ),
                             const SizedBox(height: 12),
                             TextFormField(
@@ -147,7 +141,8 @@ class _PairingScreenState extends State<PairingScreen> {
                               autocorrect: false,
                               inputFormatters: [
                                 FilteringTextInputFormatter.allow(
-                                    RegExp('[a-zA-Z0-9-]')),
+                                  RegExp('[a-zA-Z0-9-]'),
+                                ),
                                 LengthLimitingTextInputFormatter(9),
                               ],
                               decoration: const InputDecoration(
@@ -157,27 +152,33 @@ class _PairingScreenState extends State<PairingScreen> {
                               ),
                               validator: (value) =>
                                   (value ?? '').replaceAll('-', '').length != 8
-                                      ? 'Enter the eight-character code.'
-                                      : null,
+                                  ? 'Enter the eight-character code.'
+                                  : null,
                               onFieldSubmitted: (_) => _pair(),
                             ),
                             const SizedBox(height: 8),
                             TextButton.icon(
                               onPressed: () => setState(
-                                  () => _showAdvanced = !_showAdvanced),
-                              icon: Icon(_showAdvanced
-                                  ? Icons.expand_less
-                                  : Icons.tune_rounded),
-                              label: Text(_showAdvanced
-                                  ? 'Hide connection options'
-                                  : 'Connection options'),
+                                () => _showAdvanced = !_showAdvanced,
+                              ),
+                              icon: Icon(
+                                _showAdvanced
+                                    ? Icons.expand_less
+                                    : Icons.tune_rounded,
+                              ),
+                              label: Text(
+                                _showAdvanced
+                                    ? 'Hide connection options'
+                                    : 'Connection options',
+                              ),
                             ),
                             AnimatedSize(
                               duration: const Duration(milliseconds: 220),
                               child: _showAdvanced
                                   ? Padding(
-                                      padding:
-                                          const EdgeInsets.only(bottom: 12),
+                                      padding: const EdgeInsets.only(
+                                        bottom: 12,
+                                      ),
                                       child: Column(
                                         children: [
                                           TextFormField(
@@ -185,22 +186,23 @@ class _PairingScreenState extends State<PairingScreen> {
                                             keyboardType: TextInputType.url,
                                             autocorrect: false,
                                             decoration: const InputDecoration(
-                                              labelText:
-                                                  'Away / Tailscale address (optional)',
+                                              labelText: 'Away / Tailscale address (optional)',
                                               hintText: 'http://100.x.x.x:8080',
-                                              prefixIcon:
-                                                  Icon(Icons.route_rounded),
-                                              helperText:
-                                                  'Used automatically when the home address cannot be reached.',
+                                              prefixIcon: Icon(
+                                                Icons.route_rounded,
+                                              ),
+                                              helperText: 'Used automatically when the home address cannot be reached.',
                                             ),
                                           ),
                                           const SizedBox(height: 12),
                                           TextFormField(
                                             controller: _name,
                                             decoration: const InputDecoration(
-                                                labelText: 'Device name',
-                                                prefixIcon: Icon(Icons
-                                                    .phone_android_rounded)),
+                                              labelText: 'Device name',
+                                              prefixIcon: Icon(
+                                                Icons.phone_android_rounded,
+                                              ),
+                                            ),
                                           ),
                                         ],
                                       ),
@@ -214,11 +216,13 @@ class _PairingScreenState extends State<PairingScreen> {
                                       width: 18,
                                       height: 18,
                                       child: CircularProgressIndicator(
-                                          strokeWidth: 2))
+                                        strokeWidth: 2,
+                                      ),
+                                    )
                                   : const Icon(Icons.link_rounded),
-                              label: Text(widget.controller.busy
-                                  ? 'Pairing…'
-                                  : 'Connect ByteSqueeze'),
+                              label: Text(
+                                widget.controller.busy ? 'Pairing…' : 'Connect',
+                              ),
                             ),
                           ],
                         ),
@@ -234,23 +238,28 @@ class _PairingScreenState extends State<PairingScreen> {
                           padding: const EdgeInsets.symmetric(vertical: 15),
                           side: const BorderSide(color: ByteSqueezeColors.line),
                           shape: RoundedRectangleBorder(
-                              borderRadius: BorderRadius.circular(16)),
+                            borderRadius: BorderRadius.circular(16),
+                          ),
                         ),
                       ),
-                      const SizedBox(height: 22),
+                      const SizedBox(height: 16),
                       const Row(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          Icon(Icons.info_outline_rounded,
-                              size: 18, color: ByteSqueezeColors.muted),
+                          Icon(
+                            Icons.info_outline_rounded,
+                            size: 18,
+                            color: ByteSqueezeColors.muted,
+                          ),
                           SizedBox(width: 9),
                           Expanded(
                             child: Text(
-                              'Generate the code in TSD Settings > Linked Nodes, under Companion app access. A Tailscale address can be saved as the automatic away-from-home fallback.',
+                              'Generate a code in ByteSqueeze Settings → Linked Nodes → Companion app access.',
                               style: TextStyle(
-                                  color: ByteSqueezeColors.muted,
-                                  fontSize: 12.5,
-                                  height: 1.4),
+                                color: ByteSqueezeColors.muted,
+                                fontSize: 12.5,
+                                height: 1.4,
+                              ),
                             ),
                           ),
                         ],

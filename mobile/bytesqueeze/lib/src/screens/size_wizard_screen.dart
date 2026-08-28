@@ -128,15 +128,6 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
     );
   }
 
-  String _formatSizeMb(dynamic value) {
-    final mb = value is num ? value.toDouble() : double.tryParse('$value');
-    if (mb == null || mb <= 0) return 'Calculating';
-    if (mb >= 1024) {
-      return '${(mb / 1024).toStringAsFixed(2)} GB (${mb.toStringAsFixed(0)} MB)';
-    }
-    return '${mb.toStringAsFixed(mb >= 100 ? 0 : 1)} MB';
-  }
-
   Future<void> _queue() async {
     if (_queueing || _loading) return;
     setState(() {
@@ -156,9 +147,7 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
           content: Text(
-            learned
-                ? 'Queued and saved as a Smart Preset preference.'
-                : 'Queued. This source was already active, so learning was not duplicated.',
+            learned ? 'Queued and saved as a Smart Preset preference.' : 'Queued. This source was already active, so learning was not duplicated.',
           ),
         ),
       );
@@ -176,12 +165,23 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
     final estimates = asMap(_plan['estimates']);
     final output = asMap(estimates['output_resolution']);
     final autoTarget = asMap(estimates['auto_target']);
-    final learning = asMap(_response['learning']);
     final learned = asMap(_response['learned_defaults']);
     final sourceWidth = (probe['width'] as num?)?.toInt() ?? 0;
     final sourceHeight = (probe['height'] as num?)?.toInt() ?? 0;
     final outputWidth = (output['width'] as num?)?.toInt() ?? sourceWidth;
     final outputHeight = (output['height'] as num?)?.toInt() ?? sourceHeight;
+    final sourceBytes = (probe['source_size_bytes'] as num?)?.toDouble() ?? 0;
+    final estimatedMb =
+        (estimates['estimated_output_mb'] as num?)?.toDouble() ?? 0;
+    final outputBytes = estimatedMb * 1024 * 1024;
+    final savedBytes = (sourceBytes - outputBytes)
+        .clamp(0, double.infinity)
+        .toDouble();
+    final savingsPercent = sourceBytes > 0
+        ? savedBytes / sourceBytes * 100
+        : 0.0;
+    final encoderLabel =
+        '${estimates['encoder_label'] ?? estimates['encoder'] ?? 'Smart encoder'}';
 
     return Scaffold(
       appBar: AppBar(title: const Text('Size Wizard')),
@@ -190,10 +190,12 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
           : ListView(
               padding: const EdgeInsets.fromLTRB(16, 10, 16, 120),
               children: [
-                Text(widget.title,
-                    maxLines: 2,
-                    overflow: TextOverflow.ellipsis,
-                    style: Theme.of(context).textTheme.headlineSmall),
+                Text(
+                  widget.title,
+                  maxLines: 2,
+                  overflow: TextOverflow.ellipsis,
+                  style: Theme.of(context).textTheme.headlineSmall,
+                ),
                 const SizedBox(height: 5),
                 Text(
                   sourceWidth > 0
@@ -201,53 +203,44 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                       : 'Source FPS is always preserved',
                   style: const TextStyle(color: ByteSqueezeColors.muted),
                 ),
-                const SizedBox(height: 14),
-                SurfaceCard(
-                  borderColor: ByteSqueezeColors.cyan.withValues(alpha: .38),
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.stretch,
-                    children: [
-                      Row(
-                        children: [
-                          const Icon(Icons.auto_awesome_rounded,
-                              color: ByteSqueezeColors.cyan),
-                          const SizedBox(width: 10),
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  '${_response['smart_candidate_name'] ?? 'Smart starting point'}',
-                                  style: const TextStyle(
-                                      fontWeight: FontWeight.w800),
-                                ),
-                                Text(
-                                  learned['sample_count'] == null
-                                      ? 'Protected by your saved Smart Preset guardrails'
-                                      : '${learned['sample_count']} similar approved choice${learned['sample_count'] == 1 ? '' : 's'} considered',
-                                  style: const TextStyle(
-                                      color: ByteSqueezeColors.muted,
-                                      fontSize: 12),
-                                ),
-                              ],
-                            ),
-                          ),
-                          IconButton(
-                            tooltip: 'Restore Smart starting point',
-                            onPressed: _loading ? null : () => _load(smartStart: true),
-                            icon: const Icon(Icons.restore_rounded),
-                          ),
-                        ],
-                      ),
-                      if (controller.showSecondaryUi) ...[
-                        const SizedBox(height: 8),
-                        Text(
-                          '${learning['feedback_count'] ?? 0} learned decisions are saved. Queueing this plan adds another preference for similar media.',
-                          style: const TextStyle(
-                              color: ByteSqueezeColors.softInk, fontSize: 12),
-                        ),
-                      ],
-                    ],
+                const SizedBox(height: 12),
+                _EstimateHero(
+                  sourceBytes: sourceBytes,
+                  outputBytes: outputBytes,
+                  savedBytes: savedBytes,
+                  savingsPercent: savingsPercent,
+                  outputWidth: outputWidth,
+                  outputHeight: outputHeight,
+                  encoder: encoderLabel,
+                  hdr: probe['is_hdr'] == true,
+                  loading: _loading,
+                ),
+                const SizedBox(height: 10),
+                Material(
+                  color: ByteSqueezeColors.surface,
+                  borderRadius: BorderRadius.circular(12),
+                  child: ListTile(
+                    dense: true,
+                    leading: const Icon(
+                      Icons.auto_awesome_rounded,
+                      color: ByteSqueezeColors.cyan,
+                    ),
+                    title: Text(
+                      '${_response['smart_candidate_name'] ?? 'Smart starting point'}',
+                      style: const TextStyle(fontWeight: FontWeight.w700),
+                    ),
+                    subtitle: Text(
+                      learned['sample_count'] == null
+                          ? 'Uses saved Smart Preset guardrails'
+                          : '${learned['sample_count']} similar choices considered',
+                    ),
+                    trailing: IconButton(
+                      tooltip: 'Restore Smart starting point',
+                      onPressed: _loading
+                          ? null
+                          : () => _load(smartStart: true),
+                      icon: const Icon(Icons.restore_rounded),
+                    ),
                   ),
                 ),
                 const SectionHeader(title: 'Size and picture'),
@@ -273,11 +266,14 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                             Expanded(
                               child: TextField(
                                 controller: _targetSize,
-                                keyboardType: const TextInputType.numberWithOptions(
-                                    decimal: true),
+                                keyboardType:
+                                    const TextInputType.numberWithOptions(
+                                      decimal: true,
+                                    ),
                                 onChanged: (_) => _targetChanged(),
-                                decoration:
-                                    const InputDecoration(labelText: 'Target size'),
+                                decoration: const InputDecoration(
+                                  labelText: 'Target size',
+                                ),
                               ),
                             ),
                             const SizedBox(width: 10),
@@ -285,7 +281,8 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                               width: 105,
                               child: _dropdown(
                                 label: 'Unit',
-                                value: '${_options['target_size_unit'] ?? 'GB'}',
+                                value:
+                                    '${_options['target_size_unit'] ?? 'GB'}',
                                 values: const ['MB', 'GB'],
                                 onChanged: (value) =>
                                     _setOption('target_size_unit', value),
@@ -298,7 +295,14 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                       _dropdown(
                         label: 'Resolution',
                         value: '${_options['resolution_mode'] ?? 'keep'}',
-                        values: const ['auto', 'keep', '2160', '1440', '1080', '720'],
+                        values: const [
+                          'auto',
+                          'keep',
+                          '2160',
+                          '1440',
+                          '1080',
+                          '720',
+                        ],
                         labels: const {
                           'auto': 'Smart choice',
                           'keep': 'Keep source',
@@ -330,12 +334,16 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                   padding: EdgeInsets.zero,
                   child: ExpansionTile(
                     initiallyExpanded: controller.showSecondaryUi,
-                    title: const Text('Codec, hardware, audio, and subtitles',
-                        style: TextStyle(fontWeight: FontWeight.w800)),
+                    title: const Text(
+                      'Codec, hardware, audio, and subtitles',
+                      style: TextStyle(fontWeight: FontWeight.w800),
+                    ),
                     subtitle: Text(
                       '${_options['encoder_family'] ?? 'software'} · ${_options['video_codec'] ?? 'h265'} ${_options['bit_depth'] ?? '10'}-bit · ${_options['audio_mode'] ?? 'copy'} audio',
                       style: const TextStyle(
-                          color: ByteSqueezeColors.muted, fontSize: 12),
+                        color: ByteSqueezeColors.muted,
+                        fontSize: 12,
+                      ),
                     ),
                     childrenPadding: const EdgeInsets.fromLTRB(14, 0, 14, 16),
                     children: [
@@ -343,7 +351,11 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                         label: 'Video codec',
                         value: '${_options['video_codec'] ?? 'h265'}',
                         values: const ['h265', 'h264', 'av1'],
-                        labels: const {'h265': 'H.265 / HEVC', 'h264': 'H.264', 'av1': 'AV1'},
+                        labels: const {
+                          'h265': 'H.265 / HEVC',
+                          'h264': 'H.264',
+                          'av1': 'AV1',
+                        },
                         onChanged: (value) => _setOption('video_codec', value),
                       ),
                       const SizedBox(height: 11),
@@ -351,7 +363,10 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                         label: 'Encoder',
                         value: '${_options['encoder_family'] ?? 'software'}',
                         values: const ['software', 'qsv'],
-                        labels: const {'software': 'Software / CPU', 'qsv': 'Intel Quick Sync'},
+                        labels: const {
+                          'software': 'Software / CPU',
+                          'qsv': 'Intel Quick Sync',
+                        },
                         onChanged: (value) =>
                             _setOption('encoder_family', value),
                       ),
@@ -397,36 +412,14 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                         label: 'Subtitles',
                         value: '${_options['subtitle_mode'] ?? 'all'}',
                         values: const ['all', 'first', 'none'],
-                        labels: const {'all': 'Keep all', 'first': 'First matching', 'none': 'None'},
+                        labels: const {
+                          'all': 'Keep all',
+                          'first': 'First matching',
+                          'none': 'None',
+                        },
                         onChanged: (value) =>
                             _setOption('subtitle_mode', value),
                       ),
-                    ],
-                  ),
-                ),
-                const SectionHeader(title: 'Estimated result'),
-                SurfaceCard(
-                  child: Column(
-                    children: [
-                      if (_loading) ...[
-                        const LinearProgressIndicator(minHeight: 2),
-                        const SizedBox(height: 12),
-                      ],
-                      _resultRow('Output',
-                          outputWidth > 0 ? '$outputWidth×$outputHeight' : 'Calculating'),
-                      _resultRow('Encoder',
-                          '${estimates['encoder_label'] ?? estimates['encoder'] ?? 'Calculating'}'),
-                      _resultRow(
-                        'Estimated final file',
-                        _formatSizeMb(
-                          estimates['estimated_output_mb'] ??
-                              (_plan['inputs'] is Map
-                                  ? asMap(_plan['inputs'])['target_mb']
-                                  : null),
-                        ),
-                      ),
-                      _resultRow('Estimated time',
-                          '${estimates['eta_human'] ?? 'Not available'}'),
                     ],
                   ),
                 ),
@@ -435,15 +428,14 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                   OutlinedButton.icon(
                     onPressed: _loading
                         ? null
-                        : () => _load(
-                              smartStart: false,
-                              revision: _editRevision,
-                            ),
+                        : () =>
+                              _load(smartStart: false, revision: _editRevision),
                     icon: _loading
                         ? const SizedBox(
                             width: 17,
                             height: 17,
-                            child: CircularProgressIndicator(strokeWidth: 2))
+                            child: CircularProgressIndicator(strokeWidth: 2),
+                          )
                         : const Icon(Icons.calculate_outlined),
                     label: const Text('Update estimate'),
                   ),
@@ -454,24 +446,40 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.stretch,
                       children: [
-                        _resultRow('Source FPS', '${probe['fps'] ?? 'unknown'}'),
-                        _resultRow('Video bitrate',
-                            '${estimates['video_bitrate_kbps'] ?? 'unknown'} kbps'),
-                        _resultRow('Source bytes', '${probe['source_size_bytes'] ?? 'unknown'}'),
+                        _resultRow(
+                          'Source FPS',
+                          '${probe['fps'] ?? 'unknown'}',
+                        ),
+                        _resultRow(
+                          'Video bitrate',
+                          '${estimates['video_bitrate_kbps'] ?? 'unknown'} kbps',
+                        ),
+                        _resultRow(
+                          'Source bytes',
+                          '${probe['source_size_bytes'] ?? 'unknown'}',
+                        ),
                         const SizedBox(height: 8),
-                        const Text('Source path',
-                            style: TextStyle(
-                                color: ByteSqueezeColors.muted, fontSize: 11)),
-                        SelectableText(widget.path,
-                            style: const TextStyle(fontSize: 11)),
+                        const Text(
+                          'Source path',
+                          style: TextStyle(
+                            color: ByteSqueezeColors.muted,
+                            fontSize: 11,
+                          ),
+                        ),
+                        SelectableText(
+                          widget.path,
+                          style: const TextStyle(fontSize: 11),
+                        ),
                       ],
                     ),
                   ),
                 ],
                 if (_error.isNotEmpty) ...[
                   const SizedBox(height: 12),
-                  Text(_error,
-                      style: const TextStyle(color: ByteSqueezeColors.danger)),
+                  Text(
+                    _error,
+                    style: const TextStyle(color: ByteSqueezeColors.danger),
+                  ),
                 ],
                 const SectionHeader(title: 'Queue destination'),
                 _dropdown(
@@ -487,20 +495,41 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
               ],
             ),
       bottomNavigationBar: SafeArea(
-        minimum: const EdgeInsets.fromLTRB(16, 8, 16, 12),
-        child: FilledButton.icon(
-          onPressed: controller.canControl && !_loading && !_queueing
-              ? _queue
-              : null,
-          icon: _queueing
-              ? const SizedBox(
-                  width: 18,
-                  height: 18,
-                  child: CircularProgressIndicator(strokeWidth: 2))
-              : const Icon(Icons.add_to_queue_rounded),
-          label: Text(_queueing ? 'Queueing…' : 'Queue this Wizard plan'),
-          style: FilledButton.styleFrom(
-              padding: const EdgeInsets.symmetric(vertical: 15)),
+        minimum: const EdgeInsets.fromLTRB(14, 8, 14, 10),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Padding(
+              padding: const EdgeInsets.only(left: 4, right: 4, bottom: 7),
+              child: Text(
+                '${_destination == 'best' ? 'Next available node' : 'Main controller'} · $encoderLabel',
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+                textAlign: TextAlign.center,
+                style: const TextStyle(
+                  color: ByteSqueezeColors.muted,
+                  fontSize: 11.5,
+                ),
+              ),
+            ),
+            FilledButton.icon(
+              onPressed: controller.canControl && !_loading && !_queueing
+                  ? _queue
+                  : null,
+              icon: _queueing
+                  ? const SizedBox(
+                      width: 18,
+                      height: 18,
+                      child: CircularProgressIndicator(strokeWidth: 2),
+                    )
+                  : const Icon(Icons.add_to_queue_rounded),
+              label: Text(_queueing ? 'Queueing…' : 'Queue encode'),
+              style: FilledButton.styleFrom(
+                padding: const EdgeInsets.symmetric(vertical: 14),
+              ),
+            ),
+          ],
         ),
       ),
     );
@@ -519,10 +548,12 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
       initialValue: safeValue,
       decoration: InputDecoration(labelText: label),
       items: values
-          .map((item) => DropdownMenuItem(
-                value: item,
-                child: Text(labels[item] ?? item),
-              ))
+          .map(
+            (item) => DropdownMenuItem(
+              value: item,
+              child: Text(labels[item] ?? item),
+            ),
+          )
           .toList(),
       onChanged: _loading
           ? null
@@ -533,19 +564,157 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
   }
 
   Widget _resultRow(String label, String value) => Padding(
-        padding: const EdgeInsets.symmetric(vertical: 5),
-        child: Row(
-          children: [
-            Expanded(
-                child: Text(label,
-                    style: const TextStyle(color: ByteSqueezeColors.muted))),
-            const SizedBox(width: 12),
-            Flexible(
-              child: Text(value,
-                  textAlign: TextAlign.right,
-                  style: const TextStyle(fontWeight: FontWeight.w700)),
-            ),
-          ],
+    padding: const EdgeInsets.symmetric(vertical: 5),
+    child: Row(
+      children: [
+        Expanded(
+          child: Text(
+            label,
+            style: const TextStyle(color: ByteSqueezeColors.muted),
+          ),
         ),
-      );
+        const SizedBox(width: 12),
+        Flexible(
+          child: Text(
+            value,
+            textAlign: TextAlign.right,
+            style: const TextStyle(fontWeight: FontWeight.w700),
+          ),
+        ),
+      ],
+    ),
+  );
+}
+
+class _EstimateHero extends StatelessWidget {
+  const _EstimateHero({
+    required this.sourceBytes,
+    required this.outputBytes,
+    required this.savedBytes,
+    required this.savingsPercent,
+    required this.outputWidth,
+    required this.outputHeight,
+    required this.encoder,
+    required this.hdr,
+    required this.loading,
+  });
+
+  final double sourceBytes;
+  final double outputBytes;
+  final double savedBytes;
+  final double savingsPercent;
+  final int outputWidth;
+  final int outputHeight;
+  final String encoder;
+  final bool hdr;
+  final bool loading;
+
+  @override
+  Widget build(BuildContext context) {
+    final ready = sourceBytes > 0 && outputBytes > 0;
+    return SurfaceCard(
+      padding: const EdgeInsets.all(16),
+      borderColor: ByteSqueezeColors.cyan.withValues(alpha: .36),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          if (loading) ...[
+            const LinearProgressIndicator(minHeight: 2),
+            const SizedBox(height: 12),
+          ],
+          Row(
+            children: [
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'CURRENT SIZE',
+                      style: TextStyle(
+                        color: ByteSqueezeColors.muted,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerLeft,
+                      child: Text(
+                        ready ? formatBytes(sourceBytes) : '—',
+                        style: Theme.of(context).textTheme.headlineSmall,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              const Padding(
+                padding: EdgeInsets.symmetric(horizontal: 12),
+                child: Icon(
+                  Icons.arrow_forward_rounded,
+                  color: ByteSqueezeColors.muted,
+                ),
+              ),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    const Text(
+                      'ESTIMATED SIZE',
+                      style: TextStyle(
+                        color: ByteSqueezeColors.cyan,
+                        fontSize: 9,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: 1,
+                      ),
+                    ),
+                    const SizedBox(height: 3),
+                    FittedBox(
+                      fit: BoxFit.scaleDown,
+                      alignment: Alignment.centerRight,
+                      child: Text(
+                        ready ? formatBytes(outputBytes) : 'Calculating',
+                        style: Theme.of(context).textTheme.headlineSmall
+                            ?.copyWith(color: ByteSqueezeColors.cyan),
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 14),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(999),
+            child: LinearProgressIndicator(
+              value: ready ? (savingsPercent / 100).clamp(0, 1).toDouble() : 0,
+              minHeight: 7,
+              color: ByteSqueezeColors.mint,
+            ),
+          ),
+          const SizedBox(height: 8),
+          Text(
+            ready
+                ? 'Save ~${formatBytes(savedBytes)} · ${savingsPercent.toStringAsFixed(0)}% smaller'
+                : 'Building a title-specific estimate…',
+            style: const TextStyle(
+              color: ByteSqueezeColors.mint,
+              fontWeight: FontWeight.w700,
+            ),
+          ),
+          const SizedBox(height: 5),
+          Text(
+            '$encoder · ${outputWidth > 0 ? '$outputWidth×$outputHeight' : 'source resolution'} · ${hdr ? 'HDR preserved' : 'SDR'} · source FPS',
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: ByteSqueezeColors.muted,
+              fontSize: 11.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
 }

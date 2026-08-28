@@ -28,6 +28,7 @@ from webui.app import events as app_events  # noqa: E402
 from webui.app import jobs as app_jobs  # noqa: E402
 from webui.app import node_linking as app_node_linking  # noqa: E402
 from webui.app import routes as app_routes  # noqa: E402
+from webui.app import storage_stats as app_storage_stats  # noqa: E402
 from webui.app import wizard_llm as app_wizard_llm  # noqa: E402
 from webui.app.media_metadata import _cache_sidecar, _choose_movie, _sidecar_directories  # noqa: E402
 from webui.app.smart_presets import (  # noqa: E402
@@ -95,6 +96,9 @@ class ApiRouteSmokeTests(unittest.TestCase):
         home_page = self.client.get("/")
         self.assertEqual(home_page.status_code, 200)
         self.assertIn(b"<h1>Overview</h1>", home_page.data)
+        self.assertIn(b'id="homeSavingsChart"', home_page.data)
+        self.assertIn(b'id="homeWorkerImpactList"', home_page.data)
+        self.assertIn(b'id="homeAchievementProgress"', home_page.data)
         jobs_page = self.client.get("/jobs")
         self.assertEqual(jobs_page.status_code, 200)
         self.assertIn(b"<h1>Queue</h1>", jobs_page.data)
@@ -1711,6 +1715,8 @@ class ApiRouteSmokeTests(unittest.TestCase):
             patch("webui.app.routes._beta_load_library_cache", side_effect=AssertionError("full catalog loaded")),
             patch("webui.app.routes._beta_load_library_summary", return_value=lightweight_library),
             patch("webui.app.routes._autopilot_status_payload", return_value=compact_autopilot) as autopilot_status,
+            patch("webui.app.routes.get_storage_summary", return_value={"count": 3, "saved_bytes": 1200}),
+            patch("webui.app.routes.get_storage_dashboard_analytics", return_value={"workers": [{"node_name": "Worker 1"}]}) as storage_analytics,
         ):
             response = self.client.get("/api/home/summary")
 
@@ -1718,7 +1724,51 @@ class ApiRouteSmokeTests(unittest.TestCase):
         payload = response.get_json()
         self.assertEqual(payload["library"]["movies"], 12)
         self.assertEqual(payload["library"]["episodes"], 88)
+        self.assertEqual(payload["storage"]["analytics"]["workers"][0]["node_name"], "Worker 1")
         autopilot_status.assert_called_once_with(compact=True)
+        storage_analytics.assert_called_once_with(days=30, worker_limit=6)
+
+    def test_storage_dashboard_analytics_tracks_trends_workers_and_efficiency(self):
+        now = datetime.now()
+        rows = [
+            {
+                "ts": now.timestamp(),
+                "node_id": "worker-a",
+                "node_name": "Worker A",
+                "src_bytes": 1000,
+                "out_bytes": 400,
+                "saved_bytes": 600,
+                "duration_seconds": 120,
+            },
+            {
+                "ts": (now - timedelta(days=1)).timestamp(),
+                "node_id": "worker-b",
+                "node_name": "Worker B",
+                "src_bytes": 800,
+                "out_bytes": 500,
+                "saved_bytes": 300,
+                "duration_seconds": 60,
+            },
+        ]
+        ledger = {"encodes": rows, "totals": {"count": 3, "saved_bytes": 1200}}
+        original_cache = app_storage_stats._analytics_cache
+        try:
+            app_storage_stats._analytics_cache = {}
+            with patch.object(app_storage_stats, "_load_unlocked", return_value=ledger):
+                analytics = app_storage_stats.get_dashboard_analytics(days=7, worker_limit=6, now_ts=now.timestamp())
+        finally:
+            app_storage_stats._analytics_cache = original_cache
+
+        self.assertEqual(len(analytics["trend"]), 7)
+        self.assertEqual(analytics["recent_completed"], 2)
+        self.assertEqual(analytics["recent_saved_bytes"], 900)
+        self.assertEqual(analytics["efficiency_percent"], 50.0)
+        self.assertEqual(analytics["worker_count"], 2)
+        self.assertEqual(analytics["workers"][0]["node_name"], "Worker A")
+        self.assertEqual(analytics["workers"][0]["saved_bytes"], 600)
+        self.assertIn("Older history", [worker["node_name"] for worker in analytics["workers"]])
+        self.assertEqual(analytics["longest_streak_days"], 2)
+        self.assertFalse(analytics["history_complete"])
 
     def test_event_history_is_compacted_once_and_cached(self):
         events_path = os.path.join(TEST_DATA, "performance-events.json")

@@ -30,8 +30,10 @@ String formatBytes(dynamic value, {int decimals = 1}) {
       value is num ? value.toDouble() : double.tryParse('$value') ?? 0;
   if (bytes <= 0) return '0 B';
   const units = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-  final exponent =
-      math.min(units.length - 1, (math.log(bytes) / math.log(1024)).floor());
+  final exponent = math.min(
+    units.length - 1,
+    (math.log(bytes) / math.log(1024)).floor(),
+  );
   final amount = bytes / math.pow(1024, exponent);
   return '${amount.toStringAsFixed(exponent == 0 ? 0 : decimals)} ${units[exponent]}';
 }
@@ -52,7 +54,8 @@ String relativeTime(dynamic timestamp) {
       : double.tryParse('$timestamp') ?? 0;
   if (seconds <= 0) return 'No recent activity';
   final difference = DateTime.now().difference(
-      DateTime.fromMillisecondsSinceEpoch((seconds * 1000).round()));
+    DateTime.fromMillisecondsSinceEpoch((seconds * 1000).round()),
+  );
   if (difference.inMinutes < 1) return 'Just now';
   if (difference.inHours < 1) return '${difference.inMinutes}m ago';
   if (difference.inDays < 1) return '${difference.inHours}h ago';
@@ -79,21 +82,26 @@ Color statusColor(String status) {
 }
 
 class PageInsets extends StatelessWidget {
-  const PageInsets({super.key, required this.child});
+  const PageInsets({super.key, required this.child, this.top = 8, this.bottom});
 
   final Widget child;
+  final double top;
+  final double? bottom;
 
   @override
   Widget build(BuildContext context) {
+    final classic =
+        Theme.of(context).colorScheme.primary == ByteSqueezeColors.blue;
+    final narrow = MediaQuery.sizeOf(context).width < 880;
     return Center(
       child: ConstrainedBox(
         constraints: const BoxConstraints(maxWidth: 1280),
         child: Padding(
           padding: EdgeInsets.fromLTRB(
-            MediaQuery.sizeOf(context).width < 600 ? 16 : 24,
-            8,
-            MediaQuery.sizeOf(context).width < 600 ? 16 : 24,
-            MediaQuery.sizeOf(context).width < 880 ? 184 : 104,
+            MediaQuery.sizeOf(context).width < 600 ? 14 : 24,
+            top,
+            MediaQuery.sizeOf(context).width < 600 ? 14 : 24,
+            bottom ?? (classic ? (narrow ? 184 : 104) : (narrow ? 24 : 40)),
           ),
           child: child,
         ),
@@ -120,8 +128,10 @@ class SurfaceCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final compact = Theme.of(context).visualDensity == VisualDensity.compact;
-    final radius = BorderRadius.circular(compact ? 15 : 20);
+    final theme = Theme.of(context);
+    final classic = theme.colorScheme.primary == ByteSqueezeColors.blue;
+    final compact = theme.visualDensity == VisualDensity.compact;
+    final radius = BorderRadius.circular(classic ? 17 : (compact ? 12 : 14));
     return Material(
       color: Colors.transparent,
       borderRadius: radius,
@@ -135,13 +145,15 @@ class SurfaceCard extends StatelessWidget {
             color: borderColor ?? ByteSqueezeColors.line,
             width: .7,
           ),
-          boxShadow: const [
-            BoxShadow(
-              color: Color(0x33000000),
-              blurRadius: 22,
-              offset: Offset(0, 12),
-            ),
-          ],
+          boxShadow: classic
+              ? const [
+                  BoxShadow(
+                    color: Color(0x25000000),
+                    blurRadius: 16,
+                    offset: Offset(0, 8),
+                  ),
+                ]
+              : const [],
         ),
         child: InkWell(
           onTap: onTap,
@@ -154,8 +166,12 @@ class SurfaceCard extends StatelessWidget {
 }
 
 class SectionHeader extends StatelessWidget {
-  const SectionHeader(
-      {super.key, required this.title, this.subtitle, this.trailing});
+  const SectionHeader({
+    super.key,
+    required this.title,
+    this.subtitle,
+    this.trailing,
+  });
 
   final String title;
   final String? subtitle;
@@ -164,7 +180,7 @@ class SectionHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Padding(
-      padding: const EdgeInsets.only(top: 12, bottom: 10),
+      padding: const EdgeInsets.only(top: 16, bottom: 9),
       child: Row(
         crossAxisAlignment: CrossAxisAlignment.end,
         children: [
@@ -175,9 +191,13 @@ class SectionHeader extends StatelessWidget {
                 Text(title, style: Theme.of(context).textTheme.titleLarge),
                 if (subtitle != null) ...[
                   const SizedBox(height: 3),
-                  Text(subtitle!,
-                      style: const TextStyle(
-                          color: ByteSqueezeColors.muted, fontSize: 13)),
+                  Text(
+                    subtitle!,
+                    style: const TextStyle(
+                      color: ByteSqueezeColors.muted,
+                      fontSize: 13,
+                    ),
+                  ),
                 ],
               ],
             ),
@@ -189,12 +209,91 @@ class SectionHeader extends StatelessWidget {
   }
 }
 
+class CompactPageHeader extends StatelessWidget {
+  const CompactPageHeader({
+    super.key,
+    required this.title,
+    this.summary,
+    this.status,
+    this.statusColor = ByteSqueezeColors.mint,
+    this.trailing,
+  });
+
+  final String title;
+  final String? summary;
+  final String? status;
+  final Color statusColor;
+  final Widget? trailing;
+
+  @override
+  Widget build(BuildContext context) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 12),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Flexible(
+                      child: Text(
+                        title,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: Theme.of(context).textTheme.headlineLarge,
+                      ),
+                    ),
+                    if (status != null) ...[
+                      const SizedBox(width: 9),
+                      Icon(Icons.circle, color: statusColor, size: 8),
+                      const SizedBox(width: 5),
+                      Flexible(
+                        child: Text(
+                          status!,
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                          style: const TextStyle(
+                            color: ByteSqueezeColors.softInk,
+                            fontSize: 12,
+                            fontWeight: FontWeight.w700,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ],
+                ),
+                if (summary != null) ...[
+                  const SizedBox(height: 3),
+                  Text(
+                    summary!,
+                    maxLines: 2,
+                    overflow: TextOverflow.ellipsis,
+                    style: const TextStyle(
+                      color: ByteSqueezeColors.muted,
+                      fontSize: 12.5,
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+          if (trailing != null) ...[const SizedBox(width: 10), trailing!],
+        ],
+      ),
+    );
+  }
+}
+
 class StatusPill extends StatelessWidget {
-  const StatusPill(
-      {super.key,
-      required this.label,
-      this.color = ByteSqueezeColors.cyan,
-      this.icon});
+  const StatusPill({
+    super.key,
+    required this.label,
+    this.color = ByteSqueezeColors.cyan,
+    this.icon,
+  });
 
   final String label;
   final Color color;
@@ -215,11 +314,16 @@ class StatusPill extends StatelessWidget {
           children: [
             if (icon != null) ...[
               Icon(icon, color: color, size: 14),
-              const SizedBox(width: 5)
+              const SizedBox(width: 5),
             ],
-            Text(label,
-                style: TextStyle(
-                    color: color, fontSize: 12, fontWeight: FontWeight.w700)),
+            Text(
+              label,
+              style: TextStyle(
+                color: color,
+                fontSize: 12,
+                fontWeight: FontWeight.w700,
+              ),
+            ),
           ],
         ),
       ),
@@ -253,16 +357,19 @@ class OperationsDock extends StatelessWidget {
     final progress = ((current['progress'] as num?)?.toDouble() ?? 0)
         .clamp(0, 100)
         .toDouble();
-    final state = paused
-        ? 'Queue paused'
-        : runningCount > 0
-            ? '$runningCount encoding now'
-            : 'System ready';
-    final detail = current.isNotEmpty
+    final state = current.isNotEmpty
         ? fileName(current['src'])
-        : queuedCount > 0
-            ? '$queuedCount waiting to start'
-            : 'No active transcodes';
+        : paused
+            ? 'Queue paused'
+            : '$runningCount encoding now';
+    final encoder = '${current['encoder'] ?? current['preset'] ?? 'Smart'}';
+    final worker =
+        '${current['node_name'] ?? (current['is_worker_job'] == true ? 'Linked worker' : 'Main controller')}';
+    final fps = (current['fps'] as num?)?.toDouble();
+    final eta = formatDuration(current['eta_seconds']);
+    final detail = current.isNotEmpty
+        ? '$encoder · $worker${fps != null && fps > 0 ? ' · ${fps.toStringAsFixed(0)} FPS' : ''}${eta != '—' ? ' · $eta left' : ''}'
+        : '$queuedCount waiting';
     final color = paused
         ? ByteSqueezeColors.amber
         : runningCount > 0
@@ -271,29 +378,28 @@ class OperationsDock extends StatelessWidget {
 
     return Material(
       color: const Color(0xF50B1119),
-      borderRadius: BorderRadius.circular(17),
+      borderRadius: BorderRadius.circular(12),
       clipBehavior: Clip.antiAlias,
-      elevation: 18,
-      shadowColor: Colors.black.withValues(alpha: .65),
+      elevation: 0,
       child: InkWell(
         onTap: onTap,
         child: DecoratedBox(
           decoration: BoxDecoration(
             border: Border.all(color: ByteSqueezeColors.line),
-            borderRadius: BorderRadius.circular(17),
+            borderRadius: BorderRadius.circular(12),
           ),
           child: Padding(
-            padding: const EdgeInsets.fromLTRB(12, 10, 12, 9),
+            padding: const EdgeInsets.fromLTRB(10, 8, 10, 7),
             child: Row(
               children: [
                 DecoratedBox(
                   decoration: BoxDecoration(
                     color: color.withValues(alpha: .12),
-                    borderRadius: BorderRadius.circular(11),
+                    borderRadius: BorderRadius.circular(9),
                     border: Border.all(color: color.withValues(alpha: .25)),
                   ),
                   child: Padding(
-                    padding: const EdgeInsets.all(9),
+                    padding: const EdgeInsets.all(8),
                     child: Icon(
                       paused ? Icons.pause_rounded : Icons.graphic_eq_rounded,
                       color: color,
@@ -307,17 +413,25 @@ class OperationsDock extends StatelessWidget {
                     mainAxisSize: MainAxisSize.min,
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Text(state,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              fontWeight: FontWeight.w800, fontSize: 12)),
+                      Text(
+                        state,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          fontWeight: FontWeight.w800,
+                          fontSize: 12.5,
+                        ),
+                      ),
                       const SizedBox(height: 2),
-                      Text(detail,
-                          maxLines: 1,
-                          overflow: TextOverflow.ellipsis,
-                          style: const TextStyle(
-                              color: ByteSqueezeColors.muted, fontSize: 10)),
+                      Text(
+                        detail,
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: const TextStyle(
+                          color: ByteSqueezeColors.muted,
+                          fontSize: 10.5,
+                        ),
+                      ),
                       if (runningCount > 0) ...[
                         const SizedBox(height: 7),
                         ClipRRect(
@@ -332,24 +446,19 @@ class OperationsDock extends StatelessWidget {
                   ),
                 ),
                 const SizedBox(width: 10),
-                Column(
-                  mainAxisSize: MainAxisSize.min,
-                  crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    Text('$queuedCount',
-                        style: const TextStyle(
-                            fontWeight: FontWeight.w800, fontSize: 15)),
-                    const Text('QUEUED',
-                        style: TextStyle(
-                            color: ByteSqueezeColors.muted,
-                            fontSize: 8,
-                            fontWeight: FontWeight.w800,
-                            letterSpacing: .7)),
-                  ],
+                Text(
+                  '${progress.toStringAsFixed(0)}%',
+                  style: const TextStyle(
+                    fontWeight: FontWeight.w800,
+                    fontSize: 13,
+                  ),
                 ),
                 const SizedBox(width: 3),
-                const Icon(Icons.chevron_right_rounded,
-                    color: ByteSqueezeColors.muted, size: 20),
+                const Icon(
+                  Icons.chevron_right_rounded,
+                  color: ByteSqueezeColors.muted,
+                  size: 20,
+                ),
               ],
             ),
           ),
@@ -378,32 +487,46 @@ class MetricCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return SurfaceCard(
-      padding: const EdgeInsets.all(16),
+      padding: const EdgeInsets.all(13),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          DecoratedBox(
-            decoration: BoxDecoration(
-                color: color.withValues(alpha: .12),
-                borderRadius: BorderRadius.circular(12)),
-            child: Padding(
-                padding: const EdgeInsets.all(9),
-                child: Icon(icon, color: color, size: 20)),
+          Row(
+            children: [
+              Icon(icon, color: color, size: 18),
+              const Spacer(),
+              if (detail != null)
+                Flexible(
+                  child: Text(
+                    detail!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    textAlign: TextAlign.right,
+                    style: const TextStyle(
+                      color: ByteSqueezeColors.muted,
+                      fontSize: 10.5,
+                    ),
+                  ),
+                ),
+            ],
           ),
-          const Spacer(),
-          Text(value, style: Theme.of(context).textTheme.headlineSmall),
+          const SizedBox(height: 13),
+          Text(
+            value,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: Theme.of(context).textTheme.headlineSmall,
+          ),
           const SizedBox(height: 3),
-          Text(label,
-              style: const TextStyle(
-                  color: ByteSqueezeColors.muted, fontWeight: FontWeight.w600)),
-          if (detail != null) ...[
-            const SizedBox(height: 5),
-            Text(detail!,
-                maxLines: 1,
-                overflow: TextOverflow.ellipsis,
-                style: const TextStyle(
-                    color: ByteSqueezeColors.muted, fontSize: 11)),
-          ],
+          Text(
+            label,
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+            style: const TextStyle(
+              color: ByteSqueezeColors.muted,
+              fontWeight: FontWeight.w600,
+            ),
+          ),
         ],
       ),
     );
@@ -423,8 +546,11 @@ class BrandMark extends StatelessWidget {
       children: [
         ClipRRect(
           borderRadius: BorderRadius.circular(size * .24),
-          child: Image.asset('assets/branding/bytesqueeze_icon.png',
-              width: size, height: size),
+          child: Image.asset(
+            'assets/branding/bytesqueeze_icon.png',
+            width: size,
+            height: size,
+          ),
         ),
         if (showName) ...[
           const SizedBox(width: 10),
@@ -467,8 +593,7 @@ class PosterArt extends StatelessWidget {
   Widget build(BuildContext context) {
     final url = '${item['poster_url'] ?? ''}'.trim();
     final title = '${item['title'] ?? 'Media'}';
-    final identity =
-        '${item['id'] ?? ''}|${item['path'] ?? ''}|$title|$url';
+    final identity = '${item['id'] ?? ''}|${item['path'] ?? ''}|$title|$url';
     final hue = ((item['demo_hue'] as num?)?.toDouble() ??
         (title.hashCode.abs() % 360).toDouble());
     final first = HSVColor.fromAHSV(1, hue, .78, .88).toColor();
@@ -476,18 +601,23 @@ class PosterArt extends StatelessWidget {
     final fallback = DecoratedBox(
       decoration: BoxDecoration(
         gradient: LinearGradient(
-            begin: Alignment.topLeft,
-            end: Alignment.bottomRight,
-            colors: [first, second, ByteSqueezeColors.navy]),
+          begin: Alignment.topLeft,
+          end: Alignment.bottomRight,
+          colors: [first, second, ByteSqueezeColors.navy],
+        ),
       ),
       child: Stack(
         fit: StackFit.expand,
         children: [
           Positioned(
-              right: -28,
-              top: -24,
-              child: Icon(Icons.movie_filter_rounded,
-                  size: 120, color: Colors.white.withValues(alpha: .10))),
+            right: -28,
+            top: -24,
+            child: Icon(
+              Icons.movie_filter_rounded,
+              size: 120,
+              color: Colors.white.withValues(alpha: .10),
+            ),
+          ),
           Align(
             alignment: Alignment.bottomLeft,
             child: Padding(
@@ -497,10 +627,11 @@ class PosterArt extends StatelessWidget {
                 maxLines: 4,
                 overflow: TextOverflow.ellipsis,
                 style: const TextStyle(
-                    fontSize: 18,
-                    fontWeight: FontWeight.w800,
-                    height: 1.05,
-                    shadows: [Shadow(blurRadius: 12, color: Colors.black)]),
+                  fontSize: 18,
+                  fontWeight: FontWeight.w800,
+                  height: 1.05,
+                  shadows: [Shadow(blurRadius: 12, color: Colors.black)],
+                ),
               ),
             ),
           ),
@@ -519,8 +650,9 @@ class PosterArt extends StatelessWidget {
               loadingBuilder: (context, child, progress) => progress == null
                   ? child
                   : DecoratedBox(
-                      decoration:
-                          const BoxDecoration(color: ByteSqueezeColors.surface),
+                      decoration: const BoxDecoration(
+                        color: ByteSqueezeColors.surface,
+                      ),
                       child: Center(
                         child: SizedBox(
                           width: 24,
@@ -541,12 +673,13 @@ class PosterArt extends StatelessWidget {
 }
 
 class EmptyState extends StatelessWidget {
-  const EmptyState(
-      {super.key,
-      required this.icon,
-      required this.title,
-      required this.message,
-      this.action});
+  const EmptyState({
+    super.key,
+    required this.icon,
+    required this.title,
+    required this.message,
+    this.action,
+  });
 
   final IconData icon;
   final String title;
@@ -563,13 +696,17 @@ class EmptyState extends StatelessWidget {
           children: [
             Icon(icon, size: 54, color: ByteSqueezeColors.muted),
             const SizedBox(height: 18),
-            Text(title,
-                style: Theme.of(context).textTheme.titleLarge,
-                textAlign: TextAlign.center),
+            Text(
+              title,
+              style: Theme.of(context).textTheme.titleLarge,
+              textAlign: TextAlign.center,
+            ),
             const SizedBox(height: 8),
-            Text(message,
-                style: const TextStyle(color: ByteSqueezeColors.muted),
-                textAlign: TextAlign.center),
+            Text(
+              message,
+              style: const TextStyle(color: ByteSqueezeColors.muted),
+              textAlign: TextAlign.center,
+            ),
             if (action != null) ...[const SizedBox(height: 20), action!],
           ],
         ),
