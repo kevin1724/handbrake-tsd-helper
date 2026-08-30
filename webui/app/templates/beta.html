@@ -1062,6 +1062,7 @@
             <option value="hdr">HDR sources</option>
             <option value="tracked">Tracked shows</option>
             <option value="learning">Needs prediction data</option>
+            <option value="artwork">Missing artwork</option>
           </select>
         </div>
 
@@ -1122,7 +1123,7 @@
         <div class="beta-stat"><span>Movies</span><strong id="statMovies">0</strong></div>
         <div class="beta-stat"><span>Shows</span><strong id="statShows">0</strong></div>
         <div class="beta-stat"><span>Episodes</span><strong id="statEpisodes">0</strong></div>
-        <div class="beta-stat"><span>Scanned</span><strong id="statScanned">0</strong></div>
+        <div class="beta-stat"><span>Posters</span><strong id="statArtwork">0%</strong></div>
         <div class="beta-stat"><span>Tracked</span><strong id="statTracked">0</strong></div>
       </div>
 
@@ -1304,6 +1305,7 @@
     let queueBusy = false;
     let smartPreviewRun = 0;
     let smartSafetyProfile = {};
+    const libraryRenderLimit = { movies: 96, shows: 96 };
 
     function el(id) {
       return document.getElementById(id);
@@ -1420,6 +1422,7 @@
       if (filter === "hdr") return Boolean(item?.is_hdr) || (kind === "show" && showEpisodes(item).some((ep) => ep?.is_hdr));
       if (filter === "tracked") return kind === "show" && Boolean(item?.tracked);
       if (filter === "learning") return !item?.prediction?.available;
+      if (filter === "artwork") return !String(item?.poster_url || "").trim();
       return true;
     }
 
@@ -1921,7 +1924,7 @@
           ...(libraryData.tracking || {}),
           tracked_count: data.tracked_count || 0
         };
-        renderStats(libraryData.stats || {}, libraryData.tracking || {});
+        renderStats(libraryData.stats || {}, libraryData.tracking || {}, libraryData.metadata || {});
         renderLibrary();
         el("betaStatus").textContent = tracked
           ? `${item.title} is saving one aligned Smart profile and a tailored plan for every episode.`
@@ -2233,7 +2236,18 @@
         img.src = item.poster_url;
         img.alt = `${item.title} poster`;
         img.loading = "lazy";
+        img.decoding = "async";
+        const ph = document.createElement("div");
+        ph.className = "beta-placeholder";
+        ph.textContent = initials(item.title);
+        ph.hidden = true;
+        img.addEventListener("error", () => {
+          img.remove();
+          ph.hidden = false;
+          poster.classList.add("has-poster-error");
+        }, { once: true });
         poster.appendChild(img);
+        poster.appendChild(ph);
       } else {
         const ph = document.createElement("div");
         ph.className = "beta-placeholder";
@@ -2491,7 +2505,22 @@
       card.className = "beta-card beta-show-card";
       if (expanded) card.classList.add("beta-show-expanded");
       if (itemIsSelected(item)) card.classList.add("beta-card-selected");
-      card.appendChild(cardPoster(item, "Show"));
+      const poster = cardPoster(item, "Show");
+      poster.tabIndex = 0;
+      poster.setAttribute("role", "button");
+      poster.setAttribute("aria-label", `${expanded ? "Hide" : "Browse"} ${item.title || "show"} seasons`);
+      poster.onclick = () => {
+        if (expanded) expandedShows.delete(key);
+        else expandedShows.add(key);
+        renderLibrary();
+      };
+      poster.onkeydown = (event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          poster.click();
+        }
+      };
+      card.appendChild(poster);
 
       const body = document.createElement("div");
       body.className = "beta-card-body";
@@ -2505,11 +2534,12 @@
       showSelect.className = "show-select-checkbox";
       showSelect.checked = itemIsSelected(item);
       showSelect.setAttribute("aria-label", `Select every episode of ${item.title}`);
+      showSelect.addEventListener("click", (event) => event.stopPropagation());
       showSelect.addEventListener("change", () => {
         setItemSelected(item, showSelect.checked);
         renderLibrary();
       });
-      identity.appendChild(showSelect);
+      poster.appendChild(showSelect);
 
       const titleWrap = document.createElement("div");
       const title = document.createElement("div");
@@ -2547,6 +2577,10 @@
       body.appendChild(top);
 
       const seasonText = item.season_count === 1 ? "1 season" : `${item.season_count || 0} seasons`;
+      const compactMeta = document.createElement("div");
+      compactMeta.className = "show-compact-meta";
+      compactMeta.textContent = `${item.episode_count || 0} episodes · ${seasonText} · ${fmtBytes(item.total_size_bytes)}`;
+      body.appendChild(compactMeta);
       const summary = document.createElement("div");
       summary.className = "show-summary-grid";
       addShowSummaryItem(summary, "Episodes", String(item.episode_count || 0));
@@ -2592,6 +2626,7 @@
 
       const selectAll = document.createElement("button");
       selectAll.type = "button";
+      selectAll.className = "show-secondary-action";
       selectAll.textContent = itemIsSelected(item) ? "Clear selection" : "Select all episodes";
       selectAll.onclick = () => {
         setItemSelected(item, !itemIsSelected(item));
@@ -2607,12 +2642,13 @@
       actions.appendChild(queue);
       const tune = document.createElement("button");
       tune.type = "button";
-      tune.className = "smart-tune-button";
+      tune.className = "smart-tune-button show-secondary-action";
       tune.textContent = "Fine tune show";
       tune.onclick = () => openSmartTune(itemPaths(item), item.title || "show", tune);
       actions.appendChild(tune);
       const preview = document.createElement("button");
       preview.type = "button";
+      preview.className = "show-secondary-action";
       preview.textContent = "Preview show";
       preview.onclick = () => openSmartPreview(itemPaths(item), item.title || "show", preview);
       actions.insertBefore(preview, tune);
@@ -2654,21 +2690,44 @@
       grid.appendChild(empty);
     }
 
+    function renderLoadMore(grid, kind, shown, total) {
+      if (shown >= total) return;
+      const more = document.createElement("button");
+      more.type = "button";
+      more.className = "library-load-more";
+      more.textContent = `Show ${Math.min(96, total - shown)} more · ${total - shown} remaining`;
+      more.onclick = () => {
+        libraryRenderLimit[kind] += 96;
+        renderLibrary();
+      };
+      grid.appendChild(more);
+    }
+
+    function resetLibraryWindow() {
+      libraryRenderLimit.movies = 96;
+      libraryRenderLimit.shows = 96;
+      renderLibrary();
+    }
+
     function renderLibrary() {
       const { movies, shows } = visibleLibraryRows();
+      const visibleMovies = movies.slice(0, libraryRenderLimit.movies);
+      const visibleShows = shows.slice(0, libraryRenderLimit.shows);
 
       el("moviesGrid").innerHTML = "";
       el("showsGrid").innerHTML = "";
-      movies.forEach((item) => el("moviesGrid").appendChild(makeMovieCard(item)));
-      shows.forEach((item) => el("showsGrid").appendChild(makeShowCard(item)));
+      visibleMovies.forEach((item) => el("moviesGrid").appendChild(makeMovieCard(item)));
+      visibleShows.forEach((item) => el("showsGrid").appendChild(makeShowCard(item)));
+      renderLoadMore(el("moviesGrid"), "movies", visibleMovies.length, movies.length);
+      renderLoadMore(el("showsGrid"), "shows", visibleShows.length, shows.length);
 
       if (!movies.length) renderEmpty(el("moviesGrid"), "No movies found.");
       if (!shows.length) renderEmpty(el("showsGrid"), "No shows found.");
 
       renderReleaseCalendar();
 
-      el("movieCount").textContent = `${movies.length} shown`;
-      el("showCount").textContent = `${shows.length} shown`;
+      el("movieCount").textContent = `${visibleMovies.length} of ${movies.length}`;
+      el("showCount").textContent = `${visibleShows.length} of ${shows.length}`;
       document.querySelector('[data-library-tab-count="movies"]')?.replaceChildren(String(movies.length));
       document.querySelector('[data-library-tab-count="shows"]')?.replaceChildren(String(shows.length));
     }
@@ -2712,11 +2771,11 @@
       }
     }
 
-    function renderStats(stats = {}, tracking = {}) {
+    function renderStats(stats = {}, tracking = {}, metadata = {}) {
       el("statMovies").textContent = stats.movies || 0;
       el("statShows").textContent = stats.shows || 0;
       el("statEpisodes").textContent = stats.episodes || 0;
-      el("statScanned").textContent = stats.scanned || 0;
+      el("statArtwork").textContent = `${Number(metadata?.artwork?.percent || 0).toLocaleString()}%`;
       el("statTracked").textContent = tracking.tracked_count || 0;
       const totalTitles = Number(stats.movies || 0) + Number(stats.shows || 0);
       const summary = el("libraryHeaderSummary");
@@ -2739,13 +2798,12 @@
       const scanText = scannedAt ? ` Last scan: ${scannedAt}.` : " No saved scan yet.";
       const problemText = posterProblemText(data);
       const keyless = data.metadata?.keyless !== false;
-      const sourceText = keyless
-        ? "No-key fallback artwork is on: local sidecars, TVmaze for shows, and Apple Search for movies."
-        : "No-key fallback artwork is disabled in Library Settings.";
-      const tmdbText = data.tmdb_configured
-        ? " TMDb is configured and is the preferred artwork source."
-        : " Add TMDb in Library Settings for its more accurate poster matching.";
-      el("tmdbNotice").textContent = sourceText + tmdbText + scanText + problemText;
+      const artwork = data.metadata?.artwork || {};
+      const artworkText = artwork.total
+        ? `${Number(artwork.matched || 0).toLocaleString()} of ${Number(artwork.total || 0).toLocaleString()} posters matched (${Number(artwork.percent || 0).toLocaleString()}%).`
+        : "Artwork matching will run with the next scan.";
+      const providerText = data.tmdb_configured ? " TMDb preferred; local and keyless fallback enabled." : (keyless ? " Local, TVmaze, and Apple matching enabled." : " Artwork fallback disabled.");
+      el("tmdbNotice").textContent = artworkText + providerText + scanText + problemText;
     }
 
     function applyCachedScope(data = {}) {
@@ -2766,14 +2824,14 @@
         libraryData = data;
         selectedPaths.clear();
         applyCachedScope(data);
-        renderStats(data.stats || {}, data.tracking || {});
+        renderStats(data.stats || {}, data.tracking || {}, data.metadata || {});
         renderTmdbNotice(data);
         renderLibrary();
         el("betaStatus").textContent = data.generated_at ? "Loaded saved scan." : "No saved scan yet.";
       } catch (e) {
         el("betaStatus").textContent = e.message || "Failed to load saved scan";
         libraryData = { movies: [], shows: [], stats: {} };
-        renderStats({}, {});
+        renderStats({}, {}, {});
         renderLibrary();
       }
     }
@@ -2797,13 +2855,18 @@
         if (!res.ok) throw new Error(data.error || "Scan failed");
         libraryData = data;
         selectedPaths.clear();
-        renderStats(data.stats || {}, data.tracking || {});
+        renderStats(data.stats || {}, data.tracking || {}, data.metadata || {});
         renderTmdbNotice(data);
         renderLibrary();
         const autoQueue = data.tracking?.auto_queue || {};
+        const scan = data.scan || {};
+        const changed = Number(scan.new || 0) + Number(scan.changed || 0) + Number(scan.reclassified || 0);
+        const scanSummary = scan.mode === "incremental"
+          ? `${Number(scan.scanned || 0).toLocaleString()} files checked · ${changed.toLocaleString()} updated · ${Number(scan.removed || 0).toLocaleString()} removed`
+          : "Full library scan saved";
         el("betaStatus").textContent = autoQueue.queued_count
-          ? `Saved scan. Queued ${autoQueue.queued_count} new tracked episode${autoQueue.queued_count === 1 ? "" : "s"}.`
-          : "Saved scan.";
+          ? `${scanSummary} · queued ${autoQueue.queued_count} new tracked episode${autoQueue.queued_count === 1 ? "" : "s"}`
+          : scanSummary;
         if (window.setAppStatus) setAppStatus("Idle", "idle");
         if (window.appToast) appToast(autoQueue.queued_count ? `Scan complete. Queued ${autoQueue.queued_count} new episode${autoQueue.queued_count === 1 ? "" : "s"}.` : "Library scan complete.", "success");
       } catch (e) {
@@ -2811,7 +2874,7 @@
         if (window.setAppStatus) setAppStatus("Error", "error");
         if (window.appToast) appToast(e.message || "Library scan failed.", "error");
         libraryData = { movies: [], shows: [], stats: {} };
-        renderStats({}, {});
+        renderStats({}, {}, {});
         renderLibrary();
       } finally {
         document.body.classList.remove("is-loading");
@@ -2837,13 +2900,13 @@
     function start() {
       initRoots();
       initLibraryViewTabs();
-      renderStats({}, {});
+      renderStats({}, {}, {});
       renderTmdbNotice({ tmdb_configured: tmdbConfigured });
       renderLibrary();
       el("scanBtn").addEventListener("click", scanLibrary);
-      el("searchInput").addEventListener("input", renderLibrary);
-      el("sortSelect").addEventListener("change", renderLibrary);
-      el("quickFilterSelect").addEventListener("change", renderLibrary);
+      el("searchInput").addEventListener("input", resetLibraryWindow);
+      el("sortSelect").addEventListener("change", resetLibraryWindow);
+      el("quickFilterSelect").addEventListener("change", resetLibraryWindow);
       el("queueSelectedBtn").addEventListener("click", queueSelected);
       el("tuneSelectedBtn").addEventListener("click", tuneSelected);
       el("selectVisibleBtn").addEventListener("click", selectVisible);

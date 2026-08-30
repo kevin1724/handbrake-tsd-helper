@@ -30,7 +30,7 @@ from webui.app import node_linking as app_node_linking  # noqa: E402
 from webui.app import routes as app_routes  # noqa: E402
 from webui.app import storage_stats as app_storage_stats  # noqa: E402
 from webui.app import wizard_llm as app_wizard_llm  # noqa: E402
-from webui.app.media_metadata import _cache_sidecar, _choose_movie, _sidecar_directories  # noqa: E402
+from webui.app.media_metadata import _cache_sidecar, _choose_movie, _choose_show, _sidecar_directories  # noqa: E402
 from webui.app.smart_presets import (  # noqa: E402
     SMART_PRESETS_FILE,
     candidate_learning,
@@ -82,7 +82,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         status = self.client.get("/api/autopilot/status")
         self.assertEqual(status.status_code, 200)
-        self.assertEqual(status.get_json()["release"], "3.20.0")
+        self.assertEqual(status.get_json()["release"], "3.21.0")
         self.assertIn("continuous_learning", status.get_json())
         self.assertIn("onboarding", status.get_json())
 
@@ -326,6 +326,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
                 "record_smart_preset_feedback",
                 return_value={"learning": learned, "feedback": {"id": "feedback-1"}},
             ) as record,
+            patch.object(app_routes, "_wake_auto_node_dispatch") as wake,
         ):
             response = self.client.post(
                 "/encode_wizard",
@@ -354,6 +355,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(metadata["smart_feedback_context"], context)
         self.assertFalse(create.call_args.kwargs["preset_adaptive"])
         self.assertEqual(create.call_args.kwargs["dispatch_mode"], "auto")
+        wake.assert_called_once_with()
 
         with (
             patch.object(app_routes, "_wizard_plan", return_value=plan),
@@ -1019,6 +1021,74 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(create.call_args.kwargs["encode_metadata"]["encoder"], "qsv_h265_10bit")
         wake.assert_called_once_with()
 
+    def test_mobile_next_available_distributes_a_show_as_independent_jobs(self):
+        paths = []
+        for episode in range(1, 4):
+            path = os.path.join(
+                TEST_MEDIA,
+                f"Mobile.Distributed.Show.S01E{episode:02d}.mkv",
+            )
+            with open(path, "wb") as handle:
+                handle.write(b"episode")
+            paths.append(path)
+        plan = {
+            "preset": "1080",
+            "preset_bundle": None,
+            "extra_args": "--encoder qsv_h265_10bit",
+            "preset_selection": "smart",
+            "preset_adaptive": True,
+            "preset_preferences": {},
+            "encode_metadata": {
+                "smart_preset": True,
+                "encoder": "qsv_h265_10bit",
+                "encoder_family": "qsv",
+                "video_codec": "h265",
+                "bit_depth": "10",
+            },
+        }
+        with (
+            patch.object(
+                app_routes,
+                "_authenticated_mobile",
+                return_value={"name": "Distribution phone"},
+            ),
+            patch.object(
+                app_routes,
+                "_smart_recommendations_for_paths",
+                return_value=({path: {} for path in paths}, {}),
+            ),
+            patch.object(app_routes, "_node_queue_plan", return_value=plan),
+            patch.object(
+                app_routes,
+                "create_job",
+                side_effect=["episode-job-1", "episode-job-2", "episode-job-3"],
+            ) as create,
+            patch.object(app_routes, "_wake_auto_node_dispatch") as wake,
+        ):
+            response = self.client.post(
+                "/api/mobile/v1/library/queue",
+                json={
+                    "paths": paths,
+                    "preset": "smart",
+                    "mode": "available",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertEqual(payload["target"], "next available node")
+        self.assertEqual(payload["count"], 3)
+        self.assertEqual(payload["job_ids"], [
+            "episode-job-1",
+            "episode-job-2",
+            "episode-job-3",
+        ])
+        self.assertEqual([call.args[0] for call in create.call_args_list], paths)
+        self.assertTrue(
+            all(call.kwargs["dispatch_mode"] == "auto" for call in create.call_args_list)
+        )
+        wake.assert_called_once_with()
+
     @staticmethod
     def _video_preset_bundle(encoder="qsv_h265_10bit", name="Smart HEVC 10-bit"):
         return {
@@ -1087,6 +1157,52 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual(derived["preset_preferences"], plan["preset_preferences"])
         self.assertEqual(derived["preset_adaptation"]["from_encoder"], "qsv_h265_10bit")
         self.assertEqual(derived["preset_adaptation"]["to_encoder"], "nvenc_h265_10bit")
+        self.assertEqual(
+            derived["queued_preset_name"],
+            "Smart · H.265 10-bit · NVIDIA NVENC · 1080p",
+        )
+        self.assertEqual(derived["preset_bundle"]["name"], derived["queued_preset_name"])
+
+    def test_supported_smart_encoder_rewrites_base_bundle_and_public_name(self):
+        plan = {
+            "preset": "1080",
+            "preset_bundle": self._video_preset_bundle(
+                encoder="svt_av1_10bit",
+                name="Plex-AV1-Source-Dimensions-CFR-CRF24",
+            ),
+            "extra_args": "--encoder qsv_h265_10bit --width 1920 --height 1080",
+            "preset_selection": "smart",
+            "preset_adaptive": True,
+            "encode_metadata": {
+                "smart_preset": True,
+                "smart_candidate_id": "balanced",
+                "encoder": "qsv_h265_10bit",
+                "encoder_family": "qsv",
+                "video_codec": "h265",
+                "bit_depth": "10",
+                "smart_episode_plan": {
+                    "target": {"width": 1920, "height": 1080},
+                },
+            },
+        }
+        derived = app_routes._prepare_plan_for_node(
+            plan,
+            {
+                "id": "intel-worker",
+                "name": "Intel worker",
+                "hardware": {
+                    "encoder_families": ["qsv", "software"],
+                    "encoders": ["qsv_h265_10bit", "x265_10bit"],
+                },
+            },
+        )
+        preset = json.loads(derived["preset_bundle"]["contents"])["PresetList"][0]
+        expected = "Smart Balanced · H.265 10-bit · Intel QSV · 1080p"
+        self.assertEqual(derived["queued_preset_name"], expected)
+        self.assertEqual(derived["encode_metadata"]["queued_preset_name"], expected)
+        self.assertEqual(derived["preset_bundle"]["name"], expected)
+        self.assertEqual(preset["PresetName"], expected)
+        self.assertEqual(preset["VideoEncoder"], "qsv_h265_10bit")
 
     def test_smart_plan_falls_back_to_matching_software_encoder(self):
         plan = {
@@ -1281,6 +1397,108 @@ class ApiRouteSmokeTests(unittest.TestCase):
         claim.assert_called_once_with("oldest-job", "next-worker", "Next worker")
         self.assertEqual(dispatch.call_args.kwargs["require_available_for"], claimed)
         complete.assert_called_once_with("oldest-job")
+
+    def test_auto_dispatch_wake_restarts_a_missing_coordinator(self):
+        class DeadThread:
+            def is_alive(self):
+                return False
+
+        class StartedThread:
+            def __init__(self, **kwargs):
+                self.kwargs = kwargs
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def is_alive(self):
+                return self.started
+
+        replacement = StartedThread()
+        wake = unittest.mock.Mock()
+        stop = unittest.mock.Mock()
+        with (
+            patch.dict(
+                os.environ,
+                {"TSD_DISABLE_AUTO_NODE_DISPATCH": "0", "FLASK_DEBUG": "1"},
+            ),
+            patch.object(app_routes, "AUTO_NODE_DISPATCH_THREAD", DeadThread()),
+            patch.object(app_routes, "AUTO_NODE_DISPATCH_WAKE", wake),
+            patch.object(app_routes, "AUTO_NODE_DISPATCH_STOP", stop),
+            patch.object(app_routes.threading, "Thread", return_value=replacement) as thread_factory,
+            patch.object(app_routes, "_start_node_heartbeat_thread") as heartbeat,
+            patch.object(app_routes, "log_event") as event,
+        ):
+            app_routes._wake_auto_node_dispatch()
+            self.assertIs(app_routes.AUTO_NODE_DISPATCH_THREAD, replacement)
+
+        wake.set.assert_called_once_with()
+        heartbeat.assert_called_once_with(force_serving_process=True)
+        stop.clear.assert_called_once_with()
+        thread_factory.assert_called_once()
+        self.assertTrue(replacement.started)
+        event.assert_called_once_with(
+            "auto_node_dispatch_started",
+            "Automatic node dispatcher is running.",
+            extra={"restarted": True},
+        )
+
+    def test_pending_auto_dispatch_watchdog_revives_the_coordinator(self):
+        pending = ("waiting-job", {"status": "queued", "mode": "auto_node"})
+        with (
+            patch.object(app_routes, "get_next_auto_dispatch_job", return_value=pending),
+            patch.object(app_routes, "_wake_auto_node_dispatch") as wake,
+        ):
+            self.assertTrue(app_routes._ensure_auto_node_dispatch_for_pending_jobs())
+        wake.assert_called_once_with()
+
+        with (
+            patch.object(app_routes, "get_next_auto_dispatch_job", return_value=None),
+            patch.object(app_routes, "_wake_auto_node_dispatch") as wake,
+        ):
+            self.assertFalse(app_routes._ensure_auto_node_dispatch_for_pending_jobs())
+        wake.assert_not_called()
+
+    def test_jobs_polling_recovers_existing_waiting_for_node_jobs(self):
+        with patch.object(
+            app_routes,
+            "_ensure_auto_node_dispatch_for_pending_jobs",
+        ) as ensure:
+            jobs_response = self.client.get("/api/jobs")
+            summary_response = self.client.get("/jobs/summary")
+
+        self.assertEqual(jobs_response.status_code, 200, jobs_response.get_data(as_text=True))
+        self.assertEqual(summary_response.status_code, 200, summary_response.get_data(as_text=True))
+        self.assertEqual(ensure.call_count, 2)
+
+    def test_heartbeat_cycle_recovers_existing_waiting_for_node_jobs(self):
+        stop = unittest.mock.Mock()
+        stop.is_set.side_effect = [False, True]
+        with (
+            patch.object(app_routes, "NODE_HEARTBEAT_STOP", stop),
+            patch.object(app_routes, "list_nodes_private", return_value=[]),
+            patch.object(
+                app_routes,
+                "_ensure_auto_node_dispatch_for_pending_jobs",
+            ) as ensure,
+        ):
+            app_routes._node_heartbeat_loop()
+
+        ensure.assert_called_once_with()
+        stop.wait.assert_called_once_with(timeout=10)
+
+    def test_nodes_api_recovers_missing_heartbeat_monitor(self):
+        with (
+            patch.object(app_routes, "_start_node_heartbeat_thread") as heartbeat,
+            patch.object(
+                app_routes,
+                "_ensure_auto_node_dispatch_for_pending_jobs",
+            ) as ensure,
+        ):
+            response = self.client.get("/api/nodes")
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        heartbeat.assert_called_once_with(force_serving_process=True)
+        ensure.assert_called_once_with()
 
     def test_library_local_smart_batch_keeps_tuning_for_every_file(self):
         paths = []
@@ -2359,6 +2577,145 @@ class ApiRouteSmokeTests(unittest.TestCase):
                 parsed = app_routes._beta_parse_media(os.path.join(TEST_MEDIA, name))
                 self.assertEqual((parsed["title"], parsed["year"]), expected)
 
+    def test_v3_library_exposes_poster_health_filters_and_incremental_grid(self):
+        response = self.client.get("/library?ui=v3")
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        markup = response.get_data(as_text=True)
+        self.assertIn('class="beta-page ui-v3"', markup)
+        self.assertIn('value="artwork"', markup)
+        self.assertIn('id="statArtwork"', markup)
+        self.assertIn('className = "library-load-more"', markup)
+        self.assertIn('img.decoding = "async"', markup)
+
+    def test_library_parser_groups_show_folders_and_common_episode_formats(self):
+        shows_root = os.path.join(TEST_MEDIA, "Shows")
+        cases = {
+            os.path.join(
+                shows_root,
+                "Dragon Ball Super",
+                "Season 01",
+                "Dragon Ball SUPER S01 E02 To the Promised Resort DUAL Audio.mkv",
+            ): ("Dragon Ball Super", None, 1, 2),
+            os.path.join(
+                shows_root,
+                "The Bear (2022)",
+                "Season 2",
+                "The.Bear.Season.2.Episode.3.2160p.mkv",
+            ): ("The Bear", 2022, 2, 3),
+            os.path.join(
+                shows_root,
+                "Modern Family",
+                "Specials",
+                "Behind the scenes.mkv",
+            ): ("Modern Family", None, None, None),
+            os.path.join(
+                shows_root,
+                "DRAGON BALL Z (1989-2019) - The COMPLETE Series, Movies and OVAs - 1080p",
+                "1a. TV Series (1989-96)",
+                "01. The SAIYAN Saga (Eps. 001-035)",
+                "Dragon Ball Z - S01 E001 - The New Threat.mkv",
+            ): ("DRAGON BALL Z", 1989, 1, 1),
+            os.path.join(
+                shows_root,
+                "House.Of.The.Dragon.S02.COMPLETE.1080p.WEB-DL",
+                "House.Of.The.Dragon.S02E01.mkv",
+            ): ("House Of The Dragon", None, 2, 1),
+            os.path.join(
+                shows_root,
+                "Fresh Off the Boat S01 Season 1 Complete 480p HDTV",
+                "Fresh Off the Boat S01E01.mkv",
+            ): ("Fresh Off the Boat", None, 1, 1),
+            os.path.join(
+                shows_root,
+                "telonov",
+                "Teresa 040 Decepción Amorosa.mkv",
+            ): ("Teresa", None, 1, 40),
+            os.path.join(
+                shows_root,
+                "telonov",
+                "Teresa Final Alternativo 1.mp4",
+            ): ("Teresa", None, 0, None),
+        }
+        for path, expected in cases.items():
+            with self.subTest(path=path):
+                parsed = app_routes._beta_parse_media(
+                    path,
+                    root_kind="shows",
+                    library_root=shows_root,
+                )
+                self.assertEqual(
+                    (parsed["title"], parsed["year"], parsed["season"], parsed["episode"]),
+                    expected,
+                )
+                self.assertEqual(parsed["type"], "show")
+                self.assertEqual(parsed["parser_version"], app_routes.BETA_LIBRARY_PARSER_VERSION)
+
+    def test_show_grouping_merges_missing_year_but_keeps_known_reboots_separate(self):
+        groups = {"acapulco::": {"title": "Acapulco", "year": None}}
+        key = app_routes._beta_resolve_show_group_key(groups, "Acapulco", 2021)
+        self.assertEqual(key, "acapulco::2021")
+        self.assertNotIn("acapulco::", groups)
+        self.assertEqual(groups[key]["year"], 2021)
+
+        groups["acapulco::2035"] = {"title": "Acapulco", "year": 2035}
+        self.assertEqual(
+            app_routes._beta_resolve_show_group_key(groups, "Acapulco", None),
+            "acapulco::",
+        )
+
+    def test_tvmaze_show_match_rejects_provider_score_without_title_fit(self):
+        rows = [
+            {"score": 0.99, "show": {"id": 1, "name": "Dragon Ball", "premiered": "1986-02-26"}},
+            {"score": 0.75, "show": {"id": 2, "name": "Dragon Ball Super", "premiered": "2015-07-05"}},
+        ]
+        match = _choose_show(rows, "Dragon Ball Super", 2015)
+        self.assertIsNotNone(match)
+        self.assertEqual(match["id"], 2)
+        self.assertIsNone(_choose_show(rows, "Modern Family", 2009))
+
+    def test_incremental_scan_reparses_unchanged_files_after_parser_upgrade(self):
+        shows_root = os.path.join(TEST_MEDIA, "parser-upgrade-shows")
+        season_dir = os.path.join(shows_root, "Better Call Saul (2015)", "Season 01")
+        os.makedirs(season_dir, exist_ok=True)
+        episode_path = os.path.join(season_dir, "Better.Call.Saul.S01 E01.1080p.mkv")
+        with open(episode_path, "wb") as handle:
+            handle.write(b"episode")
+        stat = os.stat(episode_path)
+        old_index = {
+            "version": 1,
+            "files": {
+                episode_path: {
+                    "path": episode_path,
+                    "size_bytes": stat.st_size,
+                    "mtime": stat.st_mtime,
+                    "root_kind": "shows",
+                    "parser_version": 1,
+                    "item": {"title": "Better Call Saul S01 E01", "type": "show"},
+                    "first_seen": 10,
+                    "queued_at": 20,
+                },
+            },
+        }
+        with (
+            patch.object(app_routes, "_beta_load_scan_index", return_value=old_index),
+            patch.object(
+                app_routes,
+                "_beta_mapped_roots",
+                return_value=[{"path": shows_root, "kind": "shows", "label": "Shows"}],
+            ),
+            patch.object(app_routes, "is_allowed_path", return_value=True),
+            patch.object(app_routes, "_beta_save_scan_index") as save,
+        ):
+            index, summary = app_routes._beta_update_scan_index({})
+
+        row = index["files"][episode_path]
+        self.assertEqual(summary["reclassified"], 1)
+        self.assertEqual(row["parser_version"], app_routes.BETA_LIBRARY_PARSER_VERSION)
+        self.assertEqual(row["item"]["title"], "Better Call Saul")
+        self.assertEqual((row["item"]["season"], row["item"]["episode"]), (1, 1))
+        self.assertEqual(row["queued_at"], 20)
+        save.assert_called_once_with(index)
+
     def test_mobile_bearer_flow_and_scope_enforcement(self):
         pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "read"})
         self.assertEqual(pairing_response.status_code, 200)
@@ -2716,7 +3073,7 @@ class ApiRouteSmokeTests(unittest.TestCase):
 
         self.assertEqual(dashboard.status_code, 200, dashboard.get_data(as_text=True))
         dashboard_payload = dashboard.get_json()
-        self.assertEqual(dashboard_payload["release"], "3.20.0")
+        self.assertEqual(dashboard_payload["release"], "3.21.0")
         self.assertEqual(dashboard_payload["library"]["movies"], 1)
         self.assertIn("automation", dashboard_payload)
         self.assertIn("storage", dashboard_payload)

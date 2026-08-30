@@ -246,6 +246,14 @@ void main() {
         find.text('Preview first episode’s Smart encode'), 220,
         scrollable: detailsScroll);
     expect(find.text('Preview first episode’s Smart encode'), findsOneWidget);
+    await tester.scrollUntilVisible(find.text('Queue destination'), 220,
+        scrollable: detailsScroll);
+    await tester.tap(find.text('This server (local)'));
+    await tester.pumpAndSettle();
+    expect(find.text('Next available · distribute files'), findsOneWidget);
+    expect(find.text('Best node · keep selection together'), findsOneWidget);
+    await tester.tap(find.text('Next available · distribute files'));
+    await tester.pumpAndSettle();
     await tester.scrollUntilVisible(find.text('Smart Queue Full Show'), 220,
         scrollable: detailsScroll);
     expect(find.text('Smart Queue Full Show'), findsOneWidget);

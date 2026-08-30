@@ -1,5 +1,6 @@
 import 'package:bytesqueeze/src/api_client.dart';
 import 'package:bytesqueeze/src/app_controller.dart';
+import 'package:bytesqueeze/src/session_store.dart';
 import 'package:flutter_test/flutter_test.dart';
 
 void main() {
@@ -41,6 +42,55 @@ void main() {
     expect(controller.operations['hardware_transcode_concurrency'], 3);
     expect(controller.dashboard['ok'], isTrue);
   });
+
+  test('library queue forwards next available as a distributed destination',
+      () async {
+    final controller = AppController();
+    final api = _RecordingApi(controller.store);
+    controller.api = api;
+    controller.session = const ServerSession(
+      baseUrl: 'http://bytesqueeze.test',
+      deviceId: 'distribution-phone',
+      deviceName: 'Distribution phone',
+      scope: 'control',
+      accessToken: 'access',
+      refreshToken: 'refresh',
+    );
+
+    await controller.queuePaths(
+      const ['/shows/Example.S01E01.mkv', '/shows/Example.S01E02.mkv'],
+      preset: 'smart',
+      mode: 'available',
+    );
+
+    expect(api.lastPostPath, '/library/queue');
+    expect(api.lastPostBody['mode'], 'available');
+    expect(api.lastPostBody['paths'], hasLength(2));
+    expect(api.lastPostBody.containsKey('node_id'), isFalse);
+  });
+}
+
+class _RecordingApi extends ByteSqueezeApi {
+  _RecordingApi(super.store);
+
+  String lastPostPath = '';
+  Map<String, dynamic> lastPostBody = <String, dynamic>{};
+
+  @override
+  Future<Map<String, dynamic>> post(
+    String path,
+    Map<String, dynamic>? body, {
+    Duration? timeout,
+  }) async {
+    lastPostPath = path;
+    lastPostBody = Map<String, dynamic>.from(body ?? const {});
+    return {'ok': true};
+  }
+
+  @override
+  Future<Map<String, dynamic>> get(String path, {Duration? timeout}) async {
+    return {'ok': true};
+  }
 }
 
 class _LegacyServerApi extends ByteSqueezeApi {

@@ -76,24 +76,60 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
                     "/media/Automatic.Movie.1080p.mkv",
                     "1080",
                     extra_args="--encoder qsv_h265_10bit",
+                    preset_bundle={
+                        "key": "1080",
+                        "file_name": "base-av1.json",
+                        "name": "Plex-AV1-Source-Dimensions-CFR-CRF24",
+                        "contents": json.dumps({
+                            "PresetList": [{
+                                "PresetName": "Plex-AV1-Source-Dimensions-CFR-CRF24",
+                                "VideoEncoder": "svt_av1_10bit",
+                            }],
+                        }),
+                    },
                     encode_metadata={
                         "encoder": "qsv_h265_10bit",
                         "encoder_family": "qsv",
+                        "video_codec": "h265",
+                        "bit_depth": "10",
+                        "smart_preset": True,
+                        "smart_candidate_id": "balanced",
+                        "smart_episode_plan": {
+                            "target": {"width": 1920, "height": 1080},
+                        },
                     },
                     dispatch_mode="auto",
+                    preset_selection="smart",
+                    preset_adaptive=True,
                 )
                 queued = jobs.get_job(job_id)
                 self.assertEqual(queued["mode"], "auto_node")
                 self.assertEqual(queued["phase"], "waiting_for_node")
                 self.assertEqual(queued["dispatch_node_name"], "Next available node")
+                self.assertEqual(
+                    queued["queued_preset_name"],
+                    "Smart Balanced · H.265 10-bit · Intel QSV · 1080p",
+                )
                 self.assertEqual(jobs.get_next_auto_dispatch_job()[0], job_id)
 
+                # Simulate the incorrect label persisted by an older release.
+                queued["queued_preset_name"] = "Plex-AV1-Source-Dimensions-CFR-CRF24"
+                queued["dispatch_plan"]["queued_preset_name"] = "Plex-AV1-Source-Dimensions-CFR-CRF24"
+                jobs.save_jobs()
                 jobs.jobs = {}
                 jobs.job_queue = []
                 jobs.load_jobs()
                 queued = jobs.get_job(job_id)
                 self.assertEqual(queued["mode"], "auto_node")
                 self.assertEqual(queued["dispatch_plan"]["encode_metadata"]["encoder"], "qsv_h265_10bit")
+                self.assertEqual(
+                    queued["queued_preset_name"],
+                    "Smart Balanced · H.265 10-bit · Intel QSV · 1080p",
+                )
+                self.assertEqual(
+                    queued["dispatch_plan"]["queued_preset_name"],
+                    queued["queued_preset_name"],
+                )
                 self.assertEqual(jobs.get_next_auto_dispatch_job()[0], job_id)
 
                 claimed = jobs.claim_auto_dispatch_job(job_id, "worker-1", "Worker one")

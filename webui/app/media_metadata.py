@@ -38,9 +38,10 @@ APPLE_ATTRIBUTION = {
     "name": "Apple Search",
     "url": "https://www.apple.com/apple-tv-app/",
 }
-METADATA_CACHE_VERSION = 2
+METADATA_CACHE_VERSION = 3
 
 _CACHE_LOCK = threading.RLock()
+_CACHE_MEMORY: dict = {"signature": None, "data": None}
 _REQUEST_LOCK = threading.Lock()
 _LAST_REQUEST_AT: dict[str, float] = {}
 _SIDECAR_NAMES = (
@@ -74,21 +75,33 @@ def _empty_cache() -> dict:
     return {"version": METADATA_CACHE_VERSION, "entries": {}, "updated_at": 0.0}
 
 
+def _cache_signature():
+    try:
+        stat = os.stat(METADATA_CACHE_FILE)
+        return int(stat.st_mtime_ns), int(stat.st_size)
+    except OSError:
+        return None
+
+
 def _load_cache() -> dict:
+    signature = _cache_signature()
+    if _CACHE_MEMORY.get("data") is not None and _CACHE_MEMORY.get("signature") == signature:
+        return _CACHE_MEMORY["data"]
     try:
         with open(METADATA_CACHE_FILE, "r", encoding="utf-8") as handle:
             data = json.load(handle)
     except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return _empty_cache()
+        data = _empty_cache()
     if not isinstance(data, dict):
-        return _empty_cache()
-    if data.get("version") != METADATA_CACHE_VERSION:
+        data = _empty_cache()
+    elif data.get("version") != METADATA_CACHE_VERSION:
         # Version 1 could cache year-only Apple matches, including unrelated
         # movies. Rebuild those entries using the strict title matcher.
-        return _empty_cache()
+        data = _empty_cache()
     data.setdefault("entries", {})
     if not isinstance(data["entries"], dict):
         data["entries"] = {}
+    _CACHE_MEMORY.update({"signature": signature, "data": data})
     return data
 
 
@@ -101,6 +114,7 @@ def _save_cache(data: dict) -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temp_path, METADATA_CACHE_FILE)
+    _CACHE_MEMORY.update({"signature": _cache_signature(), "data": data})
 
 
 def _cache_key(kind: str, title: str, year=None, country: str = "") -> str:
@@ -233,6 +247,7 @@ def _year(value) -> int | None:
 
 def _choose_show(rows: list, title: str, year=None) -> dict | None:
     wanted = _normal_title(title)
+    wanted_tokens = set(_title_tokens(title))
     wanted_year = _year(year)
     ranked = []
     for wrapper in rows if isinstance(rows, list) else []:
@@ -240,15 +255,30 @@ def _choose_show(rows: list, title: str, year=None) -> dict | None:
         if not isinstance(show, dict):
             continue
         candidate = _normal_title(show.get("name"))
+        candidate_tokens = set(_title_tokens(show.get("name")))
+        if not wanted or not candidate:
+            continue
         candidate_year = _year(show.get("premiered"))
         exact = candidate == wanted
-        year_fit = wanted_year is None or candidate_year is None or abs(candidate_year - wanted_year) <= 1
-        score = float(wrapper.get("score") or 0.0) + (5.0 if exact else 0.0) + (1.0 if year_fit else -2.0)
-        ranked.append((score, exact, year_fit, show))
+        similarity = difflib.SequenceMatcher(None, wanted, candidate).ratio()
+        shared = len(wanted_tokens & candidate_tokens)
+        coverage = shared / max(1, len(wanted_tokens))
+        candidate_coverage = shared / max(1, len(candidate_tokens))
+        title_fit = exact or similarity >= 0.74 or (coverage >= 0.75 and candidate_coverage >= 0.6)
+        if not title_fit:
+            continue
+        if wanted_year is not None and candidate_year is not None:
+            year_delta = abs(candidate_year - wanted_year)
+            if year_delta > 1:
+                continue
+            year_score = 1.5 if year_delta == 0 else 0.5
+        else:
+            year_score = 0.25
+        provider_score = min(1.0, max(0.0, float(wrapper.get("score") or 0.0)))
+        score = (6.0 if exact else 0.0) + similarity * 4.0 + coverage * 2.0 + candidate_coverage + year_score + provider_score
+        ranked.append((score, similarity, show))
     ranked.sort(key=lambda row: row[0], reverse=True)
-    if not ranked or (not ranked[0][1] and ranked[0][0] < 1.0):
-        return None
-    return ranked[0][3]
+    return ranked[0][2] if ranked else None
 
 
 def _episode_row(episode: dict, show: dict) -> dict:
@@ -295,6 +325,9 @@ def _show_remote(title: str, year=None) -> dict:
         "summary": _strip_markup(show.get("summary"))[:900],
         "next_episode": recent_and_future[0] if recent_and_future else None,
         "release_calendar": recent_and_future[:80],
+        "metadata_match_title": show.get("name") or "",
+        "metadata_match_year": _year(show.get("premiered")),
+        "metadata_provider_id": show_id,
     }
 
 

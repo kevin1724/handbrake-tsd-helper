@@ -99,6 +99,7 @@ from .jobs import (
     complete_auto_dispatch_job,
     activate_auto_dispatch_locally,
     replace_queued_job_preset,
+    _queued_preset_display_name,
     _encoded_output_is_valid,
     _format_handbrake_fps,
 )
@@ -3493,7 +3494,11 @@ def _queue_wizard_job(data: dict) -> dict:
     requested_mode = str(data.get("mode") or "local").strip().lower()
     if requested_mode in {"best", "auto", "available", "next_available"}:
         dispatch_mode = "auto"
-        response_mode = "best"
+        response_mode = (
+            "best"
+            if requested_mode == "best"
+            else "next_available"
+        )
     elif requested_mode == "local":
         dispatch_mode = "local"
         response_mode = "local"
@@ -3529,6 +3534,8 @@ def _queue_wizard_job(data: dict) -> dict:
         preset_adaptive=False,
         preset_preferences=preset_preferences,
     )
+    if dispatch_mode == "auto":
+        _wake_auto_node_dispatch()
     learning_result = None
     learning_recorded = bool(job_id and str(job_id) not in active_before)
     if learning_recorded:
@@ -3587,11 +3594,14 @@ BETA_AUTOSCAN_THREAD = None
 BETA_AUTOSCAN_STOP = threading.Event()
 BETA_AUTOSCAN_RUN_NOW = threading.Event()
 BETA_AUTOSCAN_LOCK = threading.Lock()
+BETA_LIBRARY_PARSER_VERSION = 6
 NODE_HEARTBEAT_THREAD = None
 NODE_HEARTBEAT_STOP = threading.Event()
+NODE_HEARTBEAT_LOCK = threading.Lock()
 AUTO_NODE_DISPATCH_THREAD = None
 AUTO_NODE_DISPATCH_STOP = threading.Event()
 AUTO_NODE_DISPATCH_WAKE = threading.Event()
+AUTO_NODE_DISPATCH_LOCK = threading.Lock()
 AUTO_NODE_LAST_ASSIGNMENT: dict[str, float] = {}
 NODE_HEARTBEAT_HEALTH = {
     "running": False,
@@ -3610,7 +3620,7 @@ BETA_MEDIA_TAG_RE = re.compile(
 )
 
 
-APP_RELEASE = "3.20.0"
+APP_RELEASE = "3.21.0"
 BETA_DIMENSION_TAG_RE = re.compile(r"(?<!\d)(?:\d{3,4}x\d{3,4}|(?:8|10|12)bit)(?!\d)", re.IGNORECASE)
 HDR_PATH_RE = re.compile(
     r"(?:^|[ ._\-\[\(])(?:"
@@ -4824,24 +4834,124 @@ def _beta_clean_title(value: str) -> str:
     return text or "Unknown Title"
 
 
-def _beta_title_from_path(src_path: str, title_part: str, media_type: str) -> str:
-    if title_part and len(title_part.strip()) >= 2:
-        return _beta_clean_title(title_part)
+def _beta_clean_show_title(value: str) -> str:
+    raw = os.path.basename(str(value or ""))
+    dated_folder = re.search(r"\s*[\[(](?:19|20)\d{2}(?:\s*[-–]\s*(?:19|20)\d{2})?[\])]", raw)
+    # Release-pack folders often append an edition/year range followed by a
+    # long contents list. The part before that marker is the stable show name.
+    title_prefix = raw[: dated_folder.start()].strip(" -._") if dated_folder else ""
+    text = _beta_clean_title(title_prefix if len(title_prefix) >= 2 else raw)
+    text = re.sub(r"\s+(?:mp4|mkv)\s*$", "", text, flags=re.IGNORECASE)
+    # Strip everything from a release-pack season suffix. This handles names
+    # such as "Fallout.S01.COMPLETE" and "Futurama Season 1-7 S01-S07 Movies"
+    # after separators and technical tags have been normalized.
+    text = re.sub(r"\s+(?:seasons?\s*\d|s\d{1,2}\b).*$", "", text, flags=re.IGNORECASE)
+    for _ in range(2):
+        text = re.sub(r"\s+complete(?:\s+series)?\s*$", "", text, flags=re.IGNORECASE)
+    return re.sub(r"\s+", " ", text).strip(" -._") or "Unknown Title"
 
+
+def _beta_show_root_folder_name(src_path: str, library_root: str = "") -> str:
+    if not library_root:
+        return ""
+    try:
+        relative = os.path.relpath(os.path.dirname(src_path), library_root)
+    except (OSError, ValueError):
+        return ""
+    parts = [part for part in re.split(r"[\\/]+", relative) if part and part != "."]
+    if not parts or parts[0] == "..":
+        return ""
+    return parts[0]
+
+
+def _beta_show_folder_is_generic(value: str) -> bool:
+    normalized = re.sub(r"[^a-z]+", "", str(value or "").lower())
+    return normalized in {
+        "misc",
+        "miscellaneous",
+        "shows",
+        "television",
+        "telenov",
+        "telonov",
+        "telenovela",
+        "telenovelas",
+        "tv",
+        "unsorted",
+    }
+
+
+def _beta_show_title_from_directories(src_path: str, library_root: str = "") -> str:
+    root_folder = _beta_show_root_folder_name(src_path, library_root)
+    if root_folder and not _beta_show_folder_is_generic(root_folder):
+        return _beta_clean_show_title(root_folder)
+    if root_folder:
+        return ""
+    generic = re.compile(
+        r"^(?:season\s*\d+|s\d{1,2}|specials?|extras?|featurettes?|bonus(?:\s+features?)?)$",
+        re.IGNORECASE,
+    )
+    current = os.path.dirname(src_path)
+    root_real = os.path.normcase(os.path.realpath(library_root)) if library_root else ""
+    for _depth in range(6):
+        if not current:
+            break
+        current_real = os.path.normcase(os.path.realpath(current))
+        if root_real and current_real == root_real:
+            break
+        name = os.path.basename(current)
+        if name and not generic.fullmatch(name.strip()):
+            return _beta_clean_show_title(name)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    return ""
+
+
+def _beta_title_from_path(
+    src_path: str,
+    title_part: str,
+    media_type: str,
+    *,
+    root_kind: str = "",
+    library_root: str = "",
+) -> str:
     parent = os.path.basename(os.path.dirname(src_path))
     grandparent = os.path.basename(os.path.dirname(os.path.dirname(src_path)))
     parent_l = parent.lower()
 
     if media_type == "show":
-        if re.search(r"season\s*\d+|^s\d+$", parent_l, re.IGNORECASE) and grandparent:
-            return _beta_clean_title(grandparent)
-        if parent:
-            return _beta_clean_title(parent)
+        generic_episode_folders = re.compile(
+            r"^(?:season\s*\d+|s\d{1,2}|specials?|extras?|featurettes?|bonus(?:\s+features?)?)$",
+            re.IGNORECASE,
+        )
+        parent_is_root = bool(
+            library_root
+            and os.path.normcase(os.path.realpath(os.path.dirname(src_path)))
+            == os.path.normcase(os.path.realpath(library_root))
+        )
+        # A mapped Shows root gives folder layout more authority than release
+        # names. This keeps every episode in "Show/Season 01" or "Show" under
+        # one stable catalog identity, even when episode filenames contain
+        # scene titles, audio tags, or inconsistent separators.
+        if root_kind == "shows":
+            folder_title = _beta_show_title_from_directories(src_path, library_root)
+            if folder_title:
+                return folder_title
+        if generic_episode_folders.search(parent_l) and grandparent:
+            return _beta_clean_show_title(grandparent)
+        if title_part and len(title_part.strip()) >= 2:
+            return _beta_clean_show_title(title_part)
+        if parent and not parent_is_root:
+            return _beta_clean_show_title(parent)
+
+    if title_part and len(title_part.strip()) >= 2:
+        return _beta_clean_title(title_part)
 
     return _beta_clean_title(os.path.basename(src_path))
 
 
-def _beta_parse_media(src_path: str) -> dict:
+def _beta_parse_media(src_path: str, *, root_kind: str = "", library_root: str = "") -> dict:
     filename = os.path.basename(src_path)
     name_only, _ext = os.path.splitext(filename)
     source_type = _wizard_detect_source_type(src_path)
@@ -4849,14 +4959,47 @@ def _beta_parse_media(src_path: str) -> dict:
 
     season = episode = None
     title_part = name_only
-    show_match = re.search(r"(?i)(?:^|[ ._\-\[\(])s(\d{1,2})e(\d{1,3})(?:\D|$)", name_only)
+    show_match = re.search(
+        r"(?i)(?:^|[ ._\-\[\(])s(\d{1,2})[ ._\-]*e(\d{1,3})(?=$|[^0-9])",
+        name_only,
+    )
     if not show_match:
-        show_match = re.search(r"(?i)(?:^|[ ._\-\[\(])(\d{1,2})x(\d{1,3})(?:\D|$)", name_only)
+        show_match = re.search(r"(?i)(?:^|[ ._\-\[\(])(\d{1,2})[ ._\-]*x[ ._\-]*(\d{1,3})(?=$|[^0-9])", name_only)
+    if not show_match:
+        show_match = re.search(
+            r"(?i)(?:^|[ ._\-\[\(])season[ ._\-]*(\d{1,2})[ ._\-]+episode[ ._\-]*(\d{1,3})(?=$|[^0-9])",
+            name_only,
+        )
     if show_match:
         media_type = "show"
         season = int(show_match.group(1))
         episode = int(show_match.group(2))
         title_part = name_only[: show_match.start()]
+
+    if root_kind == "shows":
+        media_type = "show"
+        parent = os.path.basename(os.path.dirname(src_path))
+        folder_season = re.fullmatch(r"(?i)(?:season\s*|s)(\d{1,2})", parent.strip())
+        if season is None and folder_season:
+            season = int(folder_season.group(1))
+        root_folder = _beta_show_root_folder_name(src_path, library_root)
+        if show_match is None and _beta_show_folder_is_generic(root_folder):
+            numbered_episode = re.match(
+                r"(?i)^(.{2,80}?)[ ._\-]+(?:episode[ ._\-]*|ep[ ._\-]*)?(\d{2,4})(?=$|[^0-9])",
+                name_only,
+            )
+            if numbered_episode:
+                title_part = numbered_episode.group(1)
+                season = season or 1
+                episode = int(numbered_episode.group(2))
+            else:
+                special_episode = re.match(
+                    r"(?i)^(.{2,80}?)[ ._\-]+(?:final|special|bonus|trailer|extras?)\b",
+                    name_only,
+                )
+                if special_episode:
+                    title_part = special_episode.group(1)
+                    season = 0
 
     year = None
     year_match = re.search(r"(?:^|[ ._\-\[\(])((?:19|20)\d{2})(?:\D|$)", name_only)
@@ -4868,7 +5011,29 @@ def _beta_parse_media(src_path: str) -> dict:
             # year as metadata, not as the whole title or an empty title.
             title_part = before_year or name_only[year_match.end() :]
 
-    title = _beta_title_from_path(src_path, title_part, media_type)
+    title = _beta_title_from_path(
+        src_path,
+        title_part,
+        media_type,
+        root_kind=root_kind,
+        library_root=library_root,
+    )
+    if root_kind == "shows":
+        root_folder = _beta_show_root_folder_name(src_path, library_root)
+        folder_year = re.search(r"(?:^|[^0-9])((?:19|20)\d{2})(?:[^0-9]|$)", root_folder)
+        # Episode filenames may contain air/release years. They must not split
+        # one show into multiple catalog identities; only the show folder owns
+        # the series year.
+        year = int(folder_year.group(1)) if folder_year else None
+    # Folder names commonly carry a trailing release year. Keep it as match
+    # metadata but remove it from the searchable title (except titles that are
+    # themselves a year, such as "1923").
+    title_year_match = re.search(r"(?:^|\s)((?:19|20)\d{2})$", title)
+    if title_year_match:
+        title_without_year = title[: title_year_match.start()].strip(" -._()[]")
+        if len(title_without_year) >= 2:
+            year = year or int(title_year_match.group(1))
+            title = title_without_year
     try:
         size_bytes = int(os.path.getsize(src_path))
     except Exception:
@@ -4894,6 +5059,7 @@ def _beta_parse_media(src_path: str) -> dict:
         "is_hdr": bool(hdr_reason),
         "hdr_reason": hdr_reason,
         "detected_reason": source_type.get("reason") or "filename",
+        "parser_version": BETA_LIBRARY_PARSER_VERSION,
         "target": _wizard_source_target("show" if media_type == "show" else "movie"),
     }
 
@@ -5080,6 +5246,9 @@ def _beta_tmdb_search(media_type: str, title: str, year=None, settings=None) -> 
         "tmdb_id": best.get("id"),
         "tmdb_title": best.get("name") or best.get("title") or "",
         "tmdb_year": (best.get("first_air_date") or best.get("release_date") or "")[:4],
+        "metadata_match_title": best.get("name") or best.get("title") or "",
+        "metadata_match_year": (best.get("first_air_date") or best.get("release_date") or "")[:4],
+        "metadata_provider_id": best.get("id"),
     }
     BETA_POSTER_CACHE[cache_key] = result
     return result.copy()
@@ -5147,11 +5316,27 @@ def _beta_finalize_catalog(data: dict) -> dict:
         "complete": not bool((data.get("stats") or {}).get("limited")),
         "recently_added": recent,
     }
+    all_titles = [*movies, *shows]
+    matched = sum(1 for row in all_titles if str(row.get("poster_url") or "").strip())
+    sources: dict[str, int] = {}
+    for row in all_titles:
+        source = str(row.get("poster_source") or row.get("metadata_source") or "missing").strip() or "missing"
+        sources[source] = sources.get(source, 0) + 1
+    metadata = data.setdefault("metadata", {})
+    if isinstance(metadata, dict):
+        metadata["artwork"] = {
+            "matched": matched,
+            "missing": max(0, len(all_titles) - matched),
+            "total": len(all_titles),
+            "percent": round((matched / len(all_titles)) * 100, 1) if all_titles else 100.0,
+            "sources": sources,
+        }
     return data
 
 
 def _beta_enrich_metadata(data: dict, settings: dict, *, enabled: bool = True) -> dict:
     """Prefer TMDb artwork when configured, with local/keyless fallback."""
+    data = _beta_apply_cached_art(data)
     tmdb_enabled = bool(enabled and _beta_tmdb_config(settings))
     preferred_art: list[tuple[dict, dict, dict]] = []
     if tmdb_enabled:
@@ -5161,14 +5346,32 @@ def _beta_enrich_metadata(data: dict, settings: dict, *, enabled: bool = True) -
         for show in data.get("shows") or []:
             if not isinstance(show, dict):
                 continue
-            result = _beta_tmdb_search("show", show.get("title"), show.get("year"), settings)
-            season_art = _beta_tmdb_season_art(result.get("tmdb_id"), show.get("seasons") or [], settings)
+            if show.get("poster_url") and show.get("tmdb_id") and show.get("metadata_source") == "tmdb":
+                result = {
+                    "poster_url": show.get("poster_url"),
+                    "poster_source": "tmdb",
+                    "metadata_source": "tmdb",
+                    "tmdb_id": show.get("tmdb_id"),
+                }
+            else:
+                result = _beta_tmdb_search("show", show.get("title"), show.get("year"), settings)
+            existing_season_art = show.get("season_art") if isinstance(show.get("season_art"), dict) else {}
+            missing_seasons = [season for season in show.get("seasons") or [] if not existing_season_art.get(str(season))]
+            season_art = {**existing_season_art, **_beta_tmdb_season_art(result.get("tmdb_id"), missing_seasons, settings)}
             if result.get("poster_url"):
                 show.update(result)
             preferred_art.append((show, result, season_art))
         for movie in data.get("movies") or []:
             if isinstance(movie, dict):
-                result = _beta_tmdb_search("movie", movie.get("title"), movie.get("year"), settings)
+                if movie.get("poster_url") and movie.get("tmdb_id") and movie.get("metadata_source") == "tmdb":
+                    result = {
+                        "poster_url": movie.get("poster_url"),
+                        "poster_source": "tmdb",
+                        "metadata_source": "tmdb",
+                        "tmdb_id": movie.get("tmdb_id"),
+                    }
+                else:
+                    result = _beta_tmdb_search("movie", movie.get("title"), movie.get("year"), settings)
                 if result.get("poster_url"):
                     movie.update(result)
                 preferred_art.append((movie, result, {}))
@@ -5189,7 +5392,31 @@ def _beta_enrich_metadata(data: dict, settings: dict, *, enabled: bool = True) -
         metadata["tmdb_configured"] = bool(_beta_tmdb_config(settings))
         metadata["artwork_priority"] = "tmdb_then_keyless" if tmdb_enabled else "keyless"
 
+    _beta_sanitize_duplicate_artwork(data)
     return _beta_finalize_catalog(data)
+
+
+def _beta_show_group_key(title: str, year=None) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", " ", str(title or "Unknown Title").lower()).strip()
+    return f"{normalized}::{year or ''}"
+
+
+def _beta_resolve_show_group_key(groups: dict, title: str, year=None) -> str:
+    exact = _beta_show_group_key(title, year)
+    normalized = exact.rsplit("::", 1)[0]
+    candidates = [key for key in groups if key.rsplit("::", 1)[0] == normalized]
+    if exact in groups:
+        return exact
+    if year not in (None, ""):
+        missing_year_key = f"{normalized}::"
+        if missing_year_key in groups and len(candidates) == 1:
+            groups[exact] = groups.pop(missing_year_key)
+            if not groups[exact].get("year"):
+                groups[exact]["year"] = year
+            return exact
+    elif len(candidates) == 1:
+        return candidates[0]
+    return exact
 
 
 def _beta_scan_library(root_path: str, *, recursive: bool, posters: bool, settings: dict, root_kind: str = "") -> dict:
@@ -5210,7 +5437,7 @@ def _beta_scan_library(root_path: str, *, recursive: bool, posters: bool, settin
                 skipped_tsd += 1
                 continue
 
-            item = _beta_parse_media(full)
+            item = _beta_parse_media(full, root_kind=root_kind, library_root=root_path)
             if root_kind == "movies":
                 item["type"] = "movie"
                 item["target"] = _wizard_source_target("movie")
@@ -5219,11 +5446,12 @@ def _beta_scan_library(root_path: str, *, recursive: bool, posters: bool, settin
                 item["target"] = _wizard_source_target("show")
             scanned += 1
             if item["type"] == "show":
-                key = f"{item['title'].lower()}::{item.get('year') or ''}"
+                key = _beta_resolve_show_group_key(shows, item.get("title"), item.get("year"))
+                identity = f"{item['title'].lower()}::{item.get('year') or ''}"
                 group = shows.setdefault(
                     key,
                     {
-                        "id": uuid.uuid5(uuid.NAMESPACE_DNS, key).hex,
+                        "id": uuid.uuid5(uuid.NAMESPACE_DNS, identity).hex,
                         "type": "show",
                         "title": item["title"],
                         "year": item.get("year"),
@@ -5270,11 +5498,12 @@ def _beta_scan_library(root_path: str, *, recursive: bool, posters: bool, settin
 
 
 def _beta_merge_show_group(groups: dict, incoming: dict) -> None:
-    key = f"{str(incoming.get('title') or '').lower()}::{incoming.get('year') or ''}"
+    key = _beta_resolve_show_group_key(groups, incoming.get("title"), incoming.get("year"))
+    identity = f"{str(incoming.get('title') or '').lower()}::{incoming.get('year') or ''}"
     group = groups.setdefault(
         key,
         {
-            "id": incoming.get("id") or uuid.uuid5(uuid.NAMESPACE_DNS, key).hex,
+            "id": incoming.get("id") or uuid.uuid5(uuid.NAMESPACE_DNS, identity).hex,
             "type": "show",
             "title": incoming.get("title") or "Unknown Title",
             "year": incoming.get("year"),
@@ -5290,6 +5519,8 @@ def _beta_merge_show_group(groups: dict, incoming: dict) -> None:
     group["episode_count"] += int(incoming.get("episode_count") or 0)
     group["total_size_bytes"] += int(incoming.get("total_size_bytes") or 0)
     group["files"].extend(incoming.get("files") or [])
+    if not group.get("year") and incoming.get("year"):
+        group["year"] = incoming.get("year")
 
     for key_name in ("poster_url", "poster_source", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error"):
         if not group.get(key_name) and incoming.get(key_name):
@@ -5411,7 +5642,7 @@ def _beta_scan_all_libraries(*, recursive: bool, posters: bool, settings: dict) 
 
 
 def _beta_empty_scan_index() -> dict:
-    return {"version": 1, "generated_at": 0, "files": {}}
+    return {"version": BETA_LIBRARY_PARSER_VERSION, "generated_at": 0, "files": {}}
 
 
 def _beta_load_scan_index() -> dict:
@@ -5435,6 +5666,7 @@ def _beta_load_scan_index() -> dict:
 
 def _beta_save_scan_index(index: dict) -> None:
     index = index if isinstance(index, dict) else _beta_empty_scan_index()
+    index["version"] = BETA_LIBRARY_PARSER_VERSION
     index["generated_at"] = time.time()
     _beta_write_json(BETA_SCAN_INDEX_FILE, index)
 
@@ -5529,13 +5761,15 @@ def _beta_cached_art_maps() -> tuple[dict, dict]:
         keys = {
             str(item.get("id") or ""),
             f"{str(item.get('title') or '').lower()}::{item.get('year') or ''}",
+            _beta_show_group_key(item.get("title"), item.get("year")),
         }
         art = {
             k: item.get(k)
             for k in (
                 "poster_url", "poster_source", "source", "tmdb_id", "tmdb_title", "tmdb_year", "error", "season_art",
                 "metadata_source", "metadata_provider", "metadata_url", "summary", "genres", "tvmaze_id",
-                "show_status", "network", "next_episode", "release_calendar",
+                "show_status", "network", "next_episode", "release_calendar", "metadata_match_title",
+                "metadata_match_year", "metadata_provider_id",
             )
             if item.get(k)
         }
@@ -5565,6 +5799,7 @@ def _beta_apply_cached_art(data: dict) -> dict:
         art = (
             show_art.get(str(show.get("id") or ""))
             or show_art.get(f"{str(show.get('title') or '').lower()}::{show.get('year') or ''}")
+            or show_art.get(_beta_show_group_key(show.get("title"), show.get("year")))
             or {}
         )
         for key, value in art.items():
@@ -5591,11 +5826,12 @@ def _beta_library_from_scan_index(index: dict, *, settings: dict, recursive: boo
             skipped_tsd += 1
             continue
         if item.get("type") == "show":
-            key = f"{item.get('title', '').lower()}::{item.get('year') or ''}"
+            key = _beta_resolve_show_group_key(shows, item.get("title"), item.get("year"))
+            identity = f"{item.get('title', '').lower()}::{item.get('year') or ''}"
             group = shows.setdefault(
                 key,
                 {
-                    "id": uuid.uuid5(uuid.NAMESPACE_DNS, key).hex,
+                    "id": uuid.uuid5(uuid.NAMESPACE_DNS, identity).hex,
                     "type": "show",
                     "title": item.get("title") or "Unknown Title",
                     "year": item.get("year"),
@@ -5660,6 +5896,7 @@ def _beta_update_scan_index(settings: dict) -> tuple[dict, dict]:
         "scanned": 0,
         "new": 0,
         "changed": 0,
+        "reclassified": 0,
         "removed": 0,
         "unchanged": 0,
         "skipped_tsd": 0,
@@ -5693,12 +5930,17 @@ def _beta_update_scan_index(settings: dict) -> tuple[dict, dict]:
                     continue
 
                 row = files.get(full) if isinstance(files.get(full), dict) else {}
-                same = (
+                content_same = bool(
                     row
                     and not row.get("removed")
                     and int(row.get("size_bytes") or -1) == size_bytes
                     and abs(float(row.get("mtime") or 0) - mtime) < 0.0001
                     and isinstance(row.get("item"), dict)
+                )
+                same = (
+                    content_same
+                    and int(row.get("parser_version") or 0) == BETA_LIBRARY_PARSER_VERSION
+                    and str(row.get("root_kind") or "") == root_kind
                 )
                 if same:
                     row["last_seen"] = now
@@ -5708,7 +5950,7 @@ def _beta_update_scan_index(settings: dict) -> tuple[dict, dict]:
                     continue
 
                 try:
-                    item = _beta_parse_media(full)
+                    item = _beta_parse_media(full, root_kind=root_kind, library_root=root_path)
                     if root_kind == "movies":
                         item["type"] = "movie"
                         item["target"] = _wizard_source_target("movie")
@@ -5720,20 +5962,22 @@ def _beta_update_scan_index(settings: dict) -> tuple[dict, dict]:
                     continue
 
                 is_new = not row or row.get("removed")
+                is_reclassified = bool(content_same and not is_new)
                 files[full] = {
                     "path": full,
                     "size_bytes": size_bytes,
                     "mtime": mtime,
                     "root_kind": root_kind,
+                    "parser_version": BETA_LIBRARY_PARSER_VERSION,
                     "item": item,
                     "first_seen": float(row.get("first_seen") or now),
                     "last_seen": now,
-                    "changed_at": now,
-                    "stable_passes": 0,
+                    "changed_at": float(row.get("changed_at") or row.get("first_seen") or now) if is_reclassified else now,
+                    "stable_passes": int(row.get("stable_passes") or 0) + 1 if is_reclassified else 0,
                     "removed": False,
                     "queued_at": row.get("queued_at") if isinstance(row, dict) else 0,
                 }
-                summary["new" if is_new else "changed"] += 1
+                summary["new" if is_new else ("reclassified" if is_reclassified else "changed")] += 1
 
     for path, row in list(files.items()):
         if path in seen_paths or not isinstance(row, dict) or row.get("removed"):
@@ -6260,7 +6504,7 @@ def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = Fals
         summary = {**scan_summary, **{f"queue_{k}": v for k, v in queue_summary.items()}, "autopilot": autopilot_summary}
         message = (
             f"Auto scan complete: {scan_summary['scanned']} scanned, "
-            f"{scan_summary['new'] + scan_summary['changed']} changed, "
+            f"{scan_summary['new'] + scan_summary['changed'] + scan_summary.get('reclassified', 0)} updated, "
             f"{scan_summary['removed']} removed, "
             f"{queue_summary.get('queued', 0) + autopilot_summary.get('queued', 0)} queued."
         )
@@ -6693,19 +6937,37 @@ def _node_heartbeat_loop() -> None:
             except Exception as cycle_error:
                 NODE_HEARTBEAT_HEALTH["cycle_errors"] = int(NODE_HEARTBEAT_HEALTH.get("cycle_errors") or 0) + 1
                 NODE_HEARTBEAT_HEALTH["last_error"] = str(cycle_error)[:240]
+            # A worker becoming idle is the capacity-release signal for the
+            # next automatic job.  Do not rely on the coordinator having
+            # survived a reload or an earlier background-thread failure.
+            _ensure_auto_node_dispatch_for_pending_jobs()
             NODE_HEARTBEAT_STOP.wait(timeout=10)
     finally:
         NODE_HEARTBEAT_HEALTH["running"] = False
 
 
-def _start_node_heartbeat_thread() -> None:
+def _start_node_heartbeat_thread(*, force_serving_process: bool = False) -> bool:
+    """Ensure worker health polling runs in the process serving requests."""
     global NODE_HEARTBEAT_THREAD
-    if os.environ.get("FLASK_DEBUG") == "1" and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-        return
-    if NODE_HEARTBEAT_THREAD and NODE_HEARTBEAT_THREAD.is_alive():
-        return
-    NODE_HEARTBEAT_THREAD = threading.Thread(target=_node_heartbeat_loop, name="node-heartbeat", daemon=True)
-    NODE_HEARTBEAT_THREAD.start()
+    if os.environ.get("TSD_DISABLE_NODE_HEARTBEAT") == "1":
+        return False
+    if (
+        not force_serving_process
+        and os.environ.get("FLASK_DEBUG") == "1"
+        and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
+    ):
+        return False
+    with NODE_HEARTBEAT_LOCK:
+        if NODE_HEARTBEAT_THREAD and NODE_HEARTBEAT_THREAD.is_alive():
+            return False
+        NODE_HEARTBEAT_STOP.clear()
+        NODE_HEARTBEAT_THREAD = threading.Thread(
+            target=_node_heartbeat_loop,
+            name="node-heartbeat",
+            daemon=True,
+        )
+        NODE_HEARTBEAT_THREAD.start()
+    return True
 
 
 def _authenticated_controller():
@@ -7242,7 +7504,12 @@ def _replace_plan_encoder_args(extra_args: str, encoder: str) -> str:
     return shlex.join(out)
 
 
-def _derived_preset_bundle(bundle: dict | None, encoder: str, family: str) -> dict | None:
+def _derived_preset_bundle(
+    bundle: dict | None,
+    encoder: str,
+    family: str,
+    display_name: str = "",
+) -> dict | None:
     if not isinstance(bundle, dict):
         return None
     try:
@@ -7274,7 +7541,7 @@ def _derived_preset_bundle(bundle: dict | None, encoder: str, family: str) -> di
         return bundle
     family_label = {"qsv": "Intel QSV", "nvenc": "NVIDIA NVENC", "vce": "AMD VCE", "software": "Software"}.get(family, family.upper())
     original_name = str(bundle.get("name") or selected.get("PresetName") or "Smart preset")
-    derived_name = f"{original_name} [Smart {family_label}]"[:160]
+    derived_name = str(display_name or f"{original_name} [Smart {family_label}]")[:160]
     selected["VideoEncoder"] = encoder
     selected["VideoHWDecode"] = 0
     selected["VideoQSVDecode"] = False
@@ -7294,16 +7561,37 @@ def _adapt_smart_plan_for_node(plan: dict, node: dict) -> dict:
     out = deepcopy(plan if isinstance(plan, dict) else {})
     metadata = out.get("encode_metadata") if isinstance(out.get("encode_metadata"), dict) else {}
     original_bundle = out.get("preset_bundle") if isinstance(out.get("preset_bundle"), dict) else {}
-    out.setdefault("queued_preset_name", str(original_bundle.get("name") or out.get("preset") or ""))
     out.setdefault("preset_revision", max(1, int(metadata.get("preset_revision") or 1)))
     adaptive = bool(out.get("preset_adaptive") or metadata.get("preset_adaptive") or metadata.get("smart_preset"))
     if not adaptive:
+        out.setdefault("queued_preset_name", str(original_bundle.get("name") or out.get("preset") or ""))
         return out
+    old_encoder, old_family, codec, depth = _plan_encoder(out)
+    display_name = _queued_preset_display_name(
+        str(out.get("preset") or "1080"),
+        original_bundle,
+        extra_args=str(out.get("extra_args") or ""),
+        encode_metadata=metadata,
+        preset_selection=str(out.get("preset_selection") or "smart"),
+        preset_adaptive=True,
+    )
+    # Keep the snapshotted HandBrake preset and its public label aligned with
+    # the encoder selected by the per-episode Smart plan, even when the node
+    # already supports that encoder and no fallback is required.
+    out["queued_preset_name"] = display_name
+    out["preset_bundle"] = _derived_preset_bundle(
+        out.get("preset_bundle"),
+        old_encoder,
+        old_family,
+        display_name,
+    )
+    metadata = dict(metadata)
+    metadata["queued_preset_name"] = display_name
+    out["encode_metadata"] = metadata
     hardware = node.get("hardware") if isinstance(node.get("hardware"), dict) else {}
     if not hardware or _hardware_supports_plan(out, hardware):
         return out
 
-    old_encoder, old_family, codec, depth = _plan_encoder(out)
     families = [str(value).lower() for value in hardware.get("encoder_families") or []]
     supported = {str(value).lower() for value in hardware.get("encoders") or []}
     selected_encoder = ""
@@ -7342,7 +7630,22 @@ def _adapt_smart_plan_for_node(plan: dict, node: dict) -> dict:
     metadata["preset_preferences"] = out.get("preset_preferences") if isinstance(out.get("preset_preferences"), dict) else metadata.get("preset_preferences", {})
     out["encode_metadata"] = metadata
     out["extra_args"] = _replace_plan_encoder_args(str(out.get("extra_args") or ""), selected_encoder)
-    out["preset_bundle"] = _derived_preset_bundle(out.get("preset_bundle"), selected_encoder, selected_family)
+    display_name = _queued_preset_display_name(
+        str(out.get("preset") or "1080"),
+        out.get("preset_bundle"),
+        extra_args=out["extra_args"],
+        encode_metadata=metadata,
+        preset_selection="smart",
+        preset_adaptive=True,
+    )
+    metadata["queued_preset_name"] = display_name
+    out["queued_preset_name"] = display_name
+    out["preset_bundle"] = _derived_preset_bundle(
+        out.get("preset_bundle"),
+        selected_encoder,
+        selected_family,
+        display_name,
+    )
     out["preset_adaptation"] = adaptation
     return out
 
@@ -7719,24 +8022,88 @@ def _auto_node_dispatch_loop() -> None:
             AUTO_NODE_DISPATCH_STOP.wait(2.0)
 
 
-def _start_auto_node_dispatch_thread() -> None:
+def _start_auto_node_dispatch_thread(*, force_serving_process: bool = False) -> bool:
+    """Ensure the automatic node coordinator is alive.
+
+    A wake event cannot revive a missing daemon thread.  Whole-show queueing
+    made that failure particularly visible because every episode remained in
+    ``waiting_for_node`` with zero attempts.  This function is intentionally
+    safe to call on startup and again from every queue wake.
+    """
     global AUTO_NODE_DISPATCH_THREAD
     if os.environ.get("TSD_DISABLE_AUTO_NODE_DISPATCH") == "1":
-        return
-    if os.environ.get("FLASK_DEBUG") == "1" and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-        return
-    if AUTO_NODE_DISPATCH_THREAD and AUTO_NODE_DISPATCH_THREAD.is_alive():
-        return
-    AUTO_NODE_DISPATCH_THREAD = threading.Thread(
-        target=_auto_node_dispatch_loop,
-        name="auto-node-dispatch",
-        daemon=True,
-    )
-    AUTO_NODE_DISPATCH_THREAD.start()
+        return False
+    if (
+        not force_serving_process
+        and os.environ.get("FLASK_DEBUG") == "1"
+        and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
+    ):
+        return False
+    with AUTO_NODE_DISPATCH_LOCK:
+        if AUTO_NODE_DISPATCH_THREAD and AUTO_NODE_DISPATCH_THREAD.is_alive():
+            return False
+        restarted = AUTO_NODE_DISPATCH_THREAD is not None
+        # The event is reserved for an intentional application shutdown.  A
+        # replacement coordinator must not inherit an already-set event from
+        # a dead predecessor.
+        AUTO_NODE_DISPATCH_STOP.clear()
+        thread = threading.Thread(
+            target=_auto_node_dispatch_loop,
+            name="auto-node-dispatch",
+            daemon=True,
+        )
+        AUTO_NODE_DISPATCH_THREAD = thread
+        thread.start()
+    try:
+        log_event(
+            "auto_node_dispatch_started",
+            "Automatic node dispatcher is running.",
+            extra={"restarted": restarted},
+        )
+    except Exception as exc:
+        print(f"[WARN] Could not log automatic node dispatcher startup: {exc}", flush=True)
+    return True
 
 
 def _wake_auto_node_dispatch() -> None:
+    # Set first so a newly started coordinator observes pending work without
+    # sleeping through its initial cycle.
     AUTO_NODE_DISPATCH_WAKE.set()
+    try:
+        # Eligibility is based on current heartbeats.  Revive this monitor as
+        # well so stale-but-reachable workers become selectable on the next
+        # coordinator cycle.
+        _start_node_heartbeat_thread(force_serving_process=True)
+        _start_auto_node_dispatch_thread(force_serving_process=True)
+    except Exception as exc:
+        try:
+            log_event(
+                "auto_node_dispatch_start_error",
+                f"Could not start automatic node dispatcher: {str(exc)[:180]}",
+                level="error",
+            )
+        except Exception:
+            print(f"[ERROR] Could not start automatic node dispatcher: {exc}", flush=True)
+
+
+def _ensure_auto_node_dispatch_for_pending_jobs() -> bool:
+    """Revive the coordinator whenever durable automatic work is waiting."""
+    try:
+        pending = get_next_auto_dispatch_job()
+    except Exception as exc:
+        try:
+            log_event(
+                "auto_node_dispatch_queue_error",
+                f"Could not inspect the automatic node queue: {str(exc)[:180]}",
+                level="warn",
+            )
+        except Exception:
+            pass
+        return False
+    if not pending:
+        return False
+    _wake_auto_node_dispatch()
+    return True
 
 
 def _transfer_output_path_for_src(src: str) -> str:
@@ -8204,12 +8571,18 @@ def register_routes(app):
         posters = str(request.args.get("posters", "1")).lower() not in {"0", "false", "no"}
 
         try:
-            if root == "__all__":
-                data = _beta_scan_all_libraries(
-                    recursive=recursive,
-                    posters=posters,
-                    settings=settings,
-                )
+            if root == "__all__" and recursive:
+                # The primary refresh path is incremental. Besides avoiding a
+                # full reparse on every click, parser-version changes migrate
+                # unchanged files once and cached artwork is reused before any
+                # provider request is considered.
+                index, scan_summary = _beta_update_scan_index(settings)
+                data = _beta_library_from_scan_index(index, settings=settings, recursive=True)
+                data = _beta_enrich_metadata(data, settings, enabled=posters) if posters else _beta_finalize_catalog(data)
+                data["scan"] = {"mode": "incremental", **scan_summary}
+            elif root == "__all__":
+                data = _beta_scan_all_libraries(recursive=False, posters=posters, settings=settings)
+                data["scan"] = {"mode": "full"}
             else:
                 mapped_root = next((row for row in _beta_mapped_roots(settings) if row["path"] == root), {})
                 data = _beta_scan_library(
@@ -8219,6 +8592,7 @@ def register_routes(app):
                     settings=settings,
                     root_kind=mapped_root.get("kind") or "",
                 )
+                data["scan"] = {"mode": "full"}
             data = _beta_refresh_predictions(data)
             with BETA_TRACKING_LOCK:
                 tracking = _beta_load_tracking()
@@ -8994,10 +9368,18 @@ def register_routes(app):
         if preset not in {"auto", "1080", "4k", "smart"}:
             return jsonify(error="invalid preset"), 400
         dispatch_mode = str(data.get("mode") or "local").strip().lower()
-        if dispatch_mode in {"best", "node"}:
+        if dispatch_mode in {
+            "best",
+            "node",
+            "available",
+            "auto_node",
+            "next_available",
+        }:
             return nodes_dispatch_api()
         if dispatch_mode != "local":
-            return jsonify(error="mode must be local, best, or node"), 400
+            return jsonify(
+                error="mode must be local, next available, best, or a specific node"
+            ), 400
 
         seen = set()
         queueable = []
@@ -9856,6 +10238,8 @@ def register_routes(app):
 
     @app.route("/api/nodes")
     def nodes_api():
+        _start_node_heartbeat_thread(force_serving_process=True)
+        _ensure_auto_node_dispatch_for_pending_jobs()
         nodes = []
         for node in list_nodes_public():
             controller_profile = _history_prediction_profile(node.get("id"))
@@ -9872,6 +10256,8 @@ def register_routes(app):
 
     @app.route("/api/nodes/diagnostics")
     def nodes_diagnostics_api():
+        _start_node_heartbeat_thread(force_serving_process=True)
+        _ensure_auto_node_dispatch_for_pending_jobs()
         nodes = list_nodes_public()
         return jsonify(
             ok=True,
@@ -11387,6 +11773,7 @@ def register_routes(app):
     @app.route("/api/jobs")
     def jobs_list():
         """Return one coherent queue, summary, and durable-history snapshot."""
+        _ensure_auto_node_dispatch_for_pending_jobs()
         items = _combined_jobs_for_api()
         return jsonify(
             jobs=items,
@@ -11424,6 +11811,7 @@ def register_routes(app):
     @app.route("/jobs/summary")
     def jobs_summary():
         """Return dashboard metrics for the jobs page."""
+        _ensure_auto_node_dispatch_for_pending_jobs()
         return jsonify(summary=_combined_job_summary())
 
     @app.route("/jobs/clear_error_status", methods=["POST"])

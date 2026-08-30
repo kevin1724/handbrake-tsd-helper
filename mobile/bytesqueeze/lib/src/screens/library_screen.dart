@@ -744,7 +744,10 @@ class _MediaDetailsState extends State<_MediaDetails> {
 
   String _targetLabel() {
     if (_queueTarget == 'local:') return 'this server';
-    if (_queueTarget == 'best:') return 'the best available node';
+    if (_queueTarget == 'available:') {
+      return 'the next free nodes as capacity opens';
+    }
+    if (_queueTarget == 'best:') return 'one best node for this selection';
     final id = _queueTarget.substring('node:'.length);
     for (final value in asList(widget.controller.nodes['nodes'])) {
       final node = asMap(value);
@@ -1031,10 +1034,11 @@ class _MediaDetailsState extends State<_MediaDetails> {
             _LibraryPreviewCard(preview: _preview, working: _previewWorking),
           const SectionHeader(
             title: 'Queue destination',
-            subtitle: 'All encoding stays on the server or selected worker',
+            subtitle: 'Distribute each file automatically or lock this selection to one node',
           ),
           DropdownButtonFormField<String>(
             initialValue: _queueTarget,
+            isExpanded: true,
             decoration: const InputDecoration(
               labelText: 'Encoding node',
               prefixIcon: Icon(Icons.hub_outlined),
@@ -1044,12 +1048,16 @@ class _MediaDetailsState extends State<_MediaDetails> {
                 value: 'local:',
                 child: Text('This server (local)'),
               ),
+              const DropdownMenuItem(
+                value: 'available:',
+                child: Text('Next available · distribute files'),
+              ),
               if (asList(widget.controller.nodes['nodes'])
                   .map(asMap)
                   .any((row) => row['online'] == true))
                 const DropdownMenuItem(
                   value: 'best:',
-                  child: Text('Best available node'),
+                  child: Text('Best node · keep selection together'),
                 ),
               ...asList(widget.controller.nodes['nodes'])
                   .map(asMap)

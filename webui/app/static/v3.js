@@ -378,7 +378,7 @@
     if (!controls || !filterSelect || !filterBar || controls.querySelector(".v3-library-filters")) return;
     const chips = document.createElement("div");
     chips.className = "v3-library-filters v3-only";
-    [["all", "All"], ["savings", "Largest savings"], ["hdr", "HDR"], ["tracked", "Tracked shows"], ["learning", "Needs learning"]].forEach(([value, label]) => {
+    [["all", "All"], ["savings", "Largest savings"], ["hdr", "HDR"], ["tracked", "Tracked shows"], ["artwork", "Missing artwork"], ["learning", "Needs learning"]].forEach(([value, label]) => {
       const button = document.createElement("button");
       button.type = "button";
       button.dataset.filter = value;

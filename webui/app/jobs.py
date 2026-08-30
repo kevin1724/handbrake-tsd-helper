@@ -1063,6 +1063,109 @@ def _encode_metadata_from_extra_args(extra_args: str = "", preset: str = "", met
     return out
 
 
+def _queued_preset_display_name(
+    preset: str,
+    preset_bundle: dict | None = None,
+    *,
+    extra_args: str = "",
+    encode_metadata: dict | None = None,
+    preset_selection: str = "",
+    preset_adaptive: bool = False,
+) -> str:
+    """Return the immutable, truthful preset label shown by every client.
+
+    Smart jobs start from a configured HandBrake preset bundle, but their
+    episode plan can select a different video encoder, bit depth, and target
+    resolution.  The bundle name therefore is not a useful Smart preset name
+    and previously made QSV H.265 jobs appear as AV1 jobs in the queue.
+    """
+    metadata = encode_metadata if isinstance(encode_metadata, dict) else {}
+    selection = str(
+        preset_selection
+        or metadata.get("preset_selection")
+        or preset
+        or "1080"
+    ).strip().lower()
+    smart = bool(
+        selection == "smart"
+        or preset_adaptive
+        or metadata.get("preset_adaptive")
+        or metadata.get("smart_preset")
+    )
+    bundle_name = str((preset_bundle or {}).get("name") or "").strip()
+    explicit_name = str(metadata.get("queued_preset_name") or "").strip()
+    if not smart:
+        return (explicit_name or bundle_name or str(preset or "Preset"))[:160]
+
+    method = _encode_metadata_from_extra_args(extra_args, preset, metadata)
+    codec = str(method.get("video_codec") or "").strip().lower()
+    depth = str(method.get("bit_depth") or "").strip()
+    family = str(method.get("encoder_family") or "").strip().lower()
+
+    candidate_id = str(metadata.get("smart_candidate_id") or "").strip().lower()
+    candidate_labels = {
+        "balanced": "Balanced",
+        "compact": "Space Saver",
+        "detail": "Detail First",
+        "fast": "Fast",
+        "archive": "Archive",
+        "manual": "Custom",
+    }
+    candidate = str(metadata.get("smart_candidate_name") or "").strip()
+    if not candidate:
+        candidate = candidate_labels.get(
+            candidate_id,
+            candidate_id.replace("_", " ").replace("-", " ").title(),
+        )
+
+    codec_label = {
+        "h264": "H.264",
+        "h265": "H.265",
+        "av1": "AV1",
+        "vp9": "VP9",
+        "vp8": "VP8",
+    }.get(codec, codec.upper() if codec else "Video")
+    if depth and depth not in {"", "8"}:
+        codec_label = f"{codec_label} {depth}-bit"
+    family_label = {
+        "qsv": "Intel QSV",
+        "nvenc": "NVIDIA NVENC",
+        "vce": "AMD VCE",
+        "amf": "AMD AMF",
+        "software": "Software",
+        "videotoolbox": "VideoToolbox",
+        "vaapi": "VAAPI",
+    }.get(family, family.upper() if family and family != "preset" else "")
+
+    episode_plan = metadata.get("smart_episode_plan")
+    episode_plan = episode_plan if isinstance(episode_plan, dict) else {}
+    target = episode_plan.get("target")
+    target = target if isinstance(target, dict) else {}
+    try:
+        target_height = int(target.get("height") or 0)
+    except (TypeError, ValueError):
+        target_height = 0
+    try:
+        target_width = int(target.get("width") or 0)
+    except (TypeError, ValueError):
+        target_width = 0
+    if target_width >= 3000 or target_height >= 2000:
+        resolution_label = "4K"
+    elif target_height >= 1000:
+        resolution_label = "1080p"
+    elif target_height >= 700:
+        resolution_label = "720p"
+    elif target_height:
+        resolution_label = f"{target_height}p"
+    else:
+        resolution_label = "4K" if str(preset or "").strip().lower() == "4k" else "1080p"
+
+    smart_label = f"Smart {candidate}" if candidate else "Smart"
+    return " · ".join(
+        part for part in (smart_label, codec_label, family_label, resolution_label) if part
+    )[:160]
+
+
 def _job_encode_metadata(job: dict | None) -> dict:
     job = job if isinstance(job, dict) else {}
     return _encode_metadata_from_extra_args(
@@ -1653,8 +1756,18 @@ def load_jobs():
                 status = "queued"
             method = _encode_metadata_from_extra_args(j.get("extra_args", ""), j.get("preset"), j)
             loaded_bundle = _normalize_preset_bundle(j.get("preset_bundle")) or snapshot_preset_bundle(j.get("preset") or "1080")
-            loaded_preset_name = str(j.get("queued_preset_name") or (loaded_bundle or {}).get("name") or j.get("preset") or "")
             loaded_dispatch_plan = deepcopy(j.get("dispatch_plan")) if isinstance(j.get("dispatch_plan"), dict) else None
+            display_metadata = dict(j)
+            if isinstance(loaded_dispatch_plan, dict) and isinstance(loaded_dispatch_plan.get("encode_metadata"), dict):
+                display_metadata.update(loaded_dispatch_plan["encode_metadata"])
+            loaded_preset_name = _queued_preset_display_name(
+                str(j.get("preset") or "1080"),
+                loaded_bundle,
+                extra_args=str(j.get("extra_args") or ""),
+                encode_metadata=display_metadata,
+                preset_selection=str(j.get("preset_selection") or ""),
+                preset_adaptive=bool(j.get("preset_adaptive", False)),
+            )
             if j.get("mode") == "auto_node":
                 loaded_dispatch_plan = loaded_dispatch_plan or {}
                 loaded_dispatch_plan.setdefault("preset", j.get("preset"))
@@ -1667,7 +1780,10 @@ def load_jobs():
                     "preset_preferences",
                     j.get("preset_preferences") if isinstance(j.get("preset_preferences"), dict) else {},
                 )
-                loaded_dispatch_plan.setdefault("queued_preset_name", loaded_preset_name)
+                # Repair stale Smart labels written by older releases.  A
+                # persisted base bundle name must not override the actual
+                # episode encoder selected in the immutable dispatch plan.
+                loaded_dispatch_plan["queued_preset_name"] = loaded_preset_name
                 loaded_dispatch_plan.setdefault("preset_revision", max(1, int(j.get("preset_revision") or 1)))
 
             jobs[jid] = {
@@ -1830,7 +1946,14 @@ def create_job(
     )
     method = _encode_metadata_from_extra_args(extra_args, preset, encode_metadata)
     normalized_bundle = _normalize_preset_bundle(preset_bundle) or snapshot_preset_bundle(preset)
-    queued_preset_name = str((normalized_bundle or {}).get("name") or preset)
+    queued_preset_name = _queued_preset_display_name(
+        preset,
+        normalized_bundle,
+        extra_args=extra_args,
+        encode_metadata=metadata_source,
+        preset_selection=normalized_selection,
+        preset_adaptive=adaptive_encoder,
+    )
     dispatch_plan = None
     if automatic_dispatch:
         dispatch_plan = {
@@ -1944,6 +2067,16 @@ def _apply_planned_preset(job: dict, plan: dict, *, user_edit: bool = False) -> 
     preset = str(plan.get("preset") or job.get("preset") or "1080")
     bundle = _normalize_preset_bundle(plan.get("preset_bundle")) or snapshot_preset_bundle(preset)
     method = _encode_metadata_from_extra_args(str(plan.get("extra_args") or ""), preset, metadata)
+    selection = str(plan.get("preset_selection") or job.get("preset_selection") or preset).strip().lower()
+    adaptive = bool(plan.get("preset_adaptive") or selection == "smart")
+    queued_preset_name = _queued_preset_display_name(
+        preset,
+        bundle,
+        extra_args=str(plan.get("extra_args") or ""),
+        encode_metadata=metadata,
+        preset_selection=selection,
+        preset_adaptive=adaptive,
+    )
     job.update({
         "preset": preset,
         "extra_args": str(plan.get("extra_args") or ""),
@@ -1953,19 +2086,19 @@ def _apply_planned_preset(job: dict, plan: dict, *, user_edit: bool = False) -> 
         "video_codec": method.get("video_codec"),
         "encoder_family": method.get("encoder_family"),
         "bit_depth": method.get("bit_depth"),
+        "queued_preset_name": queued_preset_name,
         **_job_learning_metadata(metadata),
     })
     if isinstance(plan.get("preset_adaptation"), dict):
         job["preset_adaptation"] = plan["preset_adaptation"]
     if user_edit:
-        selection = str(plan.get("preset_selection") or preset).strip().lower()
         job.update({
             "preset_selection": selection,
-            "preset_adaptive": bool(plan.get("preset_adaptive") or selection == "smart"),
+            "preset_adaptive": adaptive,
             "preset_preferences": plan.get("preset_preferences") if isinstance(plan.get("preset_preferences"), dict) else {},
             "preset_snapshot_locked": True,
             "preset_revision": max(1, int(job.get("preset_revision") or 1)) + 1,
-            "queued_preset_name": str((bundle or {}).get("name") or preset),
+            "queued_preset_name": queued_preset_name,
             "preset_adaptation": None,
             "preset_last_edited_at": _now_ts(),
         })
@@ -2246,6 +2379,14 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
     normalized_bundle = _normalize_preset_bundle(preset_bundle) or snapshot_preset_bundle(preset)
     selection = str((learning_metadata or {}).get("preset_selection") or preset).strip().lower()
     adaptive = bool((learning_metadata or {}).get("preset_adaptive") or (learning_metadata or {}).get("smart_preset"))
+    queued_preset_name = _queued_preset_display_name(
+        preset,
+        normalized_bundle,
+        extra_args=extra_args,
+        encode_metadata=learning_metadata,
+        preset_selection=selection,
+        preset_adaptive=adaptive,
+    )
     jobs[job_id] = {
         "status": "queued",
         "src": display_src,
@@ -2259,7 +2400,7 @@ def create_remote_transfer_job(src: str, preset: str, transfer: dict, extra_args
         "preset_preferences": (learning_metadata or {}).get("preset_preferences") if isinstance((learning_metadata or {}).get("preset_preferences"), dict) else {},
         "preset_snapshot_locked": True,
         "preset_revision": max(1, int((learning_metadata or {}).get("preset_revision") or 1)),
-        "queued_preset_name": str((learning_metadata or {}).get("queued_preset_name") or (normalized_bundle or {}).get("name") or preset),
+        "queued_preset_name": queued_preset_name,
         "preset_adaptation": (learning_metadata or {}).get("preset_adaptation") if isinstance((learning_metadata or {}).get("preset_adaptation"), dict) else None,
         "encoding_policy": _normalize_encoding_policy(encoding_policy),
         "encode_method": method.get("encode_method"),

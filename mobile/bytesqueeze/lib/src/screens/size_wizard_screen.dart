@@ -485,10 +485,10 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
                 _dropdown(
                   label: 'Run on',
                   value: _destination,
-                  values: const ['local', 'best'],
+                  values: const ['local', 'available'],
                   labels: const {
                     'local': 'Main controller',
-                    'best': 'Next available node',
+                    'available': 'Next available node',
                   },
                   onChanged: (value) => setState(() => _destination = value),
                 ),
@@ -503,7 +503,7 @@ class _SizeWizardScreenState extends State<SizeWizardScreen> {
             Padding(
               padding: const EdgeInsets.only(left: 4, right: 4, bottom: 7),
               child: Text(
-                '${_destination == 'best' ? 'Next available node' : 'Main controller'} · $encoderLabel',
+                '${_destination == 'available' ? 'Next available node' : 'Main controller'} · $encoderLabel',
                 maxLines: 1,
                 overflow: TextOverflow.ellipsis,
                 textAlign: TextAlign.center,
