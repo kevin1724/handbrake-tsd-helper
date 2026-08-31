@@ -1,0 +1,31 @@
+# Local-development override.
+#
+# Use this together with docker-compose.yml to build the controller from the
+# source in this checkout instead of pulling the published Docker Hub image:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build hb-web
+#
+# The Web UI source is bind-mounted and Gunicorn reloads when Python files
+# change, so templates, styles, scripts, and backend edits can be tested before
+# publishing an image.
+services:
+  hb-web:
+    build:
+      context: .
+      target: controller
+    image: handbrake-tsd-helper:local
+    pull_policy: never
+    environment:
+      - FLASK_ENV=development
+    volumes:
+      - ./webui:/app/webui
+    command:
+      - gunicorn
+      - --reload
+      - --bind=0.0.0.0:8080
+      - --workers=1
+      - --threads=4
+      - --timeout=300
+      - --graceful-timeout=30
+      - --error-logfile=-
+      - webui.app:create_app()

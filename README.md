@@ -118,6 +118,33 @@ Start the app:
 docker compose up -d
 ```
 
+### Test Local Source Before Publishing
+
+The normal `docker-compose.yml` is the deployment configuration. It pulls the
+published `main` image from Docker Hub, so `docker compose up --build` by itself
+does not build the source in your checkout.
+
+For local development, layer the included local override on top of it:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml up -d --build hb-web
+```
+
+This builds the controller target from the current folder, uses the local image
+name `handbrake-tsd-helper:local`, prevents Docker Hub pulls for `hb-web`, and
+bind-mounts `webui` with automatic Gunicorn reloads. Frontend changes normally
+only need a browser refresh. Python changes restart the web process
+automatically. Re-run the command with `--build` after changing the Dockerfile
+or container dependencies.
+
+To return that machine to the published production image:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.local.yml down
+docker compose pull hb-web
+docker compose up -d hb-web
+```
+
 Open the web UI:
 
 ```text
