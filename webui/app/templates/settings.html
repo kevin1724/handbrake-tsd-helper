@@ -2588,16 +2588,22 @@
 
     function summaryText(summary) {
       const data = summary && typeof summary === "object" ? summary : {};
-      const entries = Object.entries(data);
-      if (!entries.length) return "No summary yet";
-      return entries
-        .map(([key, value]) => {
-          if (key === "autopilot" && value && typeof value === "object") {
-            return `autopilot: ${value.eligible || 0} eligible, ${value.queued || 0} queued`;
-          }
-          return `${key.replace(/_/g, " ")}: ${value}`;
-        })
-        .join(" / ");
+      if (!Object.keys(data).length) return "No summary yet";
+      if (data.error) return `Scan error: ${data.error}`;
+      if (data.skipped) return `Skipped: ${data.skipped}`;
+      const parts = [];
+      if (data.mode) parts.push(data.mode === "quick_incremental" ? "Quick incremental scan" : "Full verification scan");
+      if (Number(data.duration_ms || 0) > 0) parts.push(`${(Number(data.duration_ms) / 1000).toFixed(Number(data.duration_ms) >= 10000 ? 0 : 1)}s`);
+      if (data.scanned !== undefined) parts.push(`${Number(data.scanned || 0).toLocaleString()} indexed`);
+      const updated = Number(data.new || 0) + Number(data.changed || 0) + Number(data.reclassified || 0);
+      parts.push(`${updated.toLocaleString()} updated`);
+      if (Number(data.removed || 0)) parts.push(`${Number(data.removed).toLocaleString()} removed`);
+      if (Number(data.directories_cached || 0)) parts.push(`${Number(data.directories_cached).toLocaleString()} folders reused`);
+      if (data.file_stats !== undefined) parts.push(`${Number(data.file_stats || 0).toLocaleString()} file reads`);
+      const autopilot = data.autopilot && typeof data.autopilot === "object" ? data.autopilot : {};
+      const queued = Number(data.queue_queued || 0) + Number(autopilot.queued || 0);
+      parts.push(`${queued.toLocaleString()} queued`);
+      return parts.join(" · ");
     }
 
     function setAutoScanControls(settings) {
@@ -2621,16 +2627,21 @@
       if (!box) return;
       const settings = data?.settings || {};
       const status = data?.status || {};
+      const scheduler = data?.scheduler || {};
+      const schedulerOnline = Boolean(scheduler.thread_alive);
       const state = status.running ? "running" : (status.last_status || "idle");
       box.innerHTML = "";
 
       const head = document.createElement("div");
       head.className = "node-status-head";
       const title = document.createElement("strong");
-      title.textContent = status.running ? "Auto scan running" : `Auto scan ${String(state).replace(/_/g, " ")}`;
+      title.textContent = settings.enabled && !schedulerOnline
+        ? "Auto scan scheduler offline"
+        : (status.running ? "Auto scan running" : `Auto scan ${String(state).replace(/_/g, " ")}`);
       const pill = document.createElement("span");
-      pill.className = `node-pill node-pill-${String(state).toLowerCase().replace(/[^a-z0-9_-]+/g, "-")}`;
-      pill.textContent = settings.enabled ? "Enabled" : "Disabled";
+      const pillState = !settings.enabled ? "disabled" : (schedulerOnline ? "ok" : "error");
+      pill.className = `node-pill node-pill-${pillState}`;
+      pill.textContent = !settings.enabled ? "Disabled" : (schedulerOnline ? "Scheduler online" : "Offline");
       head.appendChild(title);
       head.appendChild(pill);
       box.appendChild(head);

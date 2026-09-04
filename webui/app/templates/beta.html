@@ -2861,8 +2861,14 @@
         const autoQueue = data.tracking?.auto_queue || {};
         const scan = data.scan || {};
         const changed = Number(scan.new || 0) + Number(scan.changed || 0) + Number(scan.reclassified || 0);
+        const duration = Number(scan.duration_ms || 0);
+        const durationText = duration > 0 ? ` · ${(duration / 1000).toFixed(duration >= 10000 ? 0 : 1)}s` : "";
+        const cachedDirs = Number(scan.directories_cached || 0);
+        const strategyText = scan.strategy === "quick_incremental"
+          ? `Quick scan${cachedDirs ? ` · ${cachedDirs.toLocaleString()} folders reused` : ""}`
+          : "Verified scan";
         const scanSummary = scan.mode === "incremental"
-          ? `${Number(scan.scanned || 0).toLocaleString()} files checked · ${changed.toLocaleString()} updated · ${Number(scan.removed || 0).toLocaleString()} removed`
+          ? `${strategyText}${durationText} · ${Number(scan.scanned || 0).toLocaleString()} indexed · ${changed.toLocaleString()} updated · ${Number(scan.removed || 0).toLocaleString()} removed`
           : "Full library scan saved";
         el("betaStatus").textContent = autoQueue.queued_count
           ? `${scanSummary} · queued ${autoQueue.queued_count} new tracked episode${autoQueue.queued_count === 1 ? "" : "s"}`

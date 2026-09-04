@@ -3592,9 +3592,29 @@ BETA_LIBRARY_MEMORY_CACHE = {"signature": None, "data": None}
 BETA_LIBRARY_SUMMARY_CACHE = {"signature": None, "data": None}
 BETA_AUTOSCAN_THREAD = None
 BETA_AUTOSCAN_STOP = threading.Event()
-BETA_AUTOSCAN_RUN_NOW = threading.Event()
+BETA_AUTOSCAN_WAKE = threading.Event()
 BETA_AUTOSCAN_LOCK = threading.Lock()
+BETA_AUTOSCAN_THREAD_LOCK = threading.Lock()
+BETA_AUTOSCAN_HEALTH = {
+    "running": False,
+    "started_at": 0,
+    "last_cycle_at": 0,
+    "last_success_at": 0,
+    "cycle_errors": 0,
+    "last_error": "",
+}
 BETA_LIBRARY_PARSER_VERSION = 6
+
+
+def _beta_scan_full_verify_seconds() -> int:
+    try:
+        hours = int(os.environ.get("TSD_LIBRARY_FULL_VERIFY_HOURS") or 12)
+    except (TypeError, ValueError):
+        hours = 12
+    return max(3600, min(7 * 86400, hours * 3600))
+
+
+BETA_SCAN_FULL_VERIFY_SECONDS = _beta_scan_full_verify_seconds()
 NODE_HEARTBEAT_THREAD = None
 NODE_HEARTBEAT_STOP = threading.Event()
 NODE_HEARTBEAT_LOCK = threading.Lock()
@@ -5642,7 +5662,14 @@ def _beta_scan_all_libraries(*, recursive: bool, posters: bool, settings: dict) 
 
 
 def _beta_empty_scan_index() -> dict:
-    return {"version": BETA_LIBRARY_PARSER_VERSION, "generated_at": 0, "files": {}}
+    return {
+        "version": BETA_LIBRARY_PARSER_VERSION,
+        "generated_at": 0,
+        "last_full_scan_at": 0,
+        "files": {},
+        "directories": {},
+        "unavailable_paths": [],
+    }
 
 
 def _beta_load_scan_index() -> dict:
@@ -5658,9 +5685,16 @@ def _beta_load_scan_index() -> dict:
         return _beta_empty_scan_index()
     data.setdefault("version", 1)
     data.setdefault("generated_at", 0)
+    data.setdefault("last_full_scan_at", 0)
     data.setdefault("files", {})
+    data.setdefault("directories", {})
+    data.setdefault("unavailable_paths", [])
     if not isinstance(data["files"], dict):
         data["files"] = {}
+    if not isinstance(data["directories"], dict):
+        data["directories"] = {}
+    if not isinstance(data["unavailable_paths"], list):
+        data["unavailable_paths"] = []
     return data
 
 
@@ -5671,9 +5705,17 @@ def _beta_save_scan_index(index: dict) -> None:
     _beta_write_json(BETA_SCAN_INDEX_FILE, index)
 
 
+def _beta_autoscan_interval_seconds(settings: dict | None) -> int:
+    try:
+        minutes = int((settings or {}).get("beta_auto_scan_interval_minutes") or 30)
+    except (TypeError, ValueError):
+        minutes = 30
+    return max(300, min(7 * 86400, minutes * 60))
+
+
 def _beta_empty_autoscan_status(settings=None) -> dict:
     settings = settings or {}
-    interval_seconds = max(300, int(settings.get("beta_auto_scan_interval_minutes") or 30) * 60)
+    interval_seconds = _beta_autoscan_interval_seconds(settings)
     return {
         "running": False,
         "last_started_at": 0,
@@ -5702,7 +5744,13 @@ def _beta_load_autoscan_status(settings=None) -> dict:
 
 def _beta_save_autoscan_status(status: dict) -> dict:
     status = status if isinstance(status, dict) else {}
-    _beta_write_json(BETA_AUTOSCAN_STATUS_FILE, status)
+    try:
+        _beta_write_json(BETA_AUTOSCAN_STATUS_FILE, status)
+    except Exception as exc:
+        # Status persistence should never terminate the scheduler or leave its
+        # run lock held. The next cycle can repair a transient NAS write error.
+        status["persistence_error"] = str(exc)[:240]
+        print(f"[WARN] Failed to save auto-scan status: {exc}", flush=True)
     return status
 
 
@@ -5887,12 +5935,36 @@ def _beta_active_job_paths() -> set[str]:
     return active
 
 
-def _beta_update_scan_index(settings: dict) -> tuple[dict, dict]:
+def _beta_update_scan_index(settings: dict, *, force_full: bool = False) -> tuple[dict, dict]:
+    """Refresh the media index with a low-I/O directory cache.
+
+    Most libraries live on SMB/NFS storage where repeated ``isfile`` and
+    ``stat`` calls dominate scan time.  A quick pass stats each directory and
+    reuses its direct file list when the directory mtime is unchanged.  New or
+    still-growing files are always statted, and a periodic full verification
+    catches rare in-place edits that do not update a parent directory mtime.
+    """
+    started = time.monotonic()
     now = time.time()
     index = _beta_load_scan_index()
     files = index.setdefault("files", {})
-    seen_paths = set()
+    directories = index.setdefault("directories", {})
+    try:
+        last_full_scan_at = float(index.get("last_full_scan_at") or 0)
+    except (TypeError, ValueError):
+        last_full_scan_at = 0
+    full_scan = bool(
+        force_full
+        or not directories
+        or not last_full_scan_at
+        or (now - last_full_scan_at) >= BETA_SCAN_FULL_VERIFY_SECONDS
+    )
+    seen_paths: set[str] = set()
+    seen_directories: set[str] = set()
+    unavailable_paths: set[str] = set()
+    index_dirty = False
     summary = {
+        "mode": "full_verify" if full_scan else "quick_incremental",
         "scanned": 0,
         "new": 0,
         "changed": 0,
@@ -5900,84 +5972,246 @@ def _beta_update_scan_index(settings: dict) -> tuple[dict, dict]:
         "removed": 0,
         "unchanged": 0,
         "skipped_tsd": 0,
+        "directories_scanned": 0,
+        "directories_cached": 0,
+        "file_stats": 0,
+        "unavailable_roots": 0,
         "errors": 0,
     }
 
-    for root in _beta_mapped_roots(settings):
-        root_path = root.get("path") or ""
-        root_kind = root.get("kind") or ""
-        if not root_path or not is_allowed_path(root_path) or not os.path.isdir(root_path):
-            continue
-        for root_dir, _dirs, names in os.walk(root_path):
-            for name in sorted(names):
-                if not name.lower().endswith(VIDEO_EXTS):
-                    continue
-                full = os.path.join(root_dir, name)
-                if not os.path.isfile(full):
-                    continue
-                if os.path.splitext(name)[0].lower().endswith("-tsd"):
-                    summary["skipped_tsd"] += 1
-                    continue
+    files_by_directory: dict[str, list[str]] = {}
+    for path, row in files.items():
+        if isinstance(row, dict) and not row.get("removed"):
+            files_by_directory.setdefault(os.path.dirname(path), []).append(path)
 
+    def mtime_matches(row: dict, stat_result) -> bool:
+        stored_ns = row.get("mtime_ns")
+        if stored_ns is not None:
+            try:
+                return int(stored_ns) == int(stat_result.st_mtime_ns)
+            except (TypeError, ValueError, AttributeError):
+                return False
+        try:
+            return abs(float(row.get("mtime") or 0) - float(stat_result.st_mtime)) < 0.0001
+        except (TypeError, ValueError):
+            return False
+
+    def accept_cached(path: str, root_kind: str, root_path: str) -> None:
+        """Reuse a stable row, but keep statting files still being copied."""
+        nonlocal index_dirty
+        if path in seen_paths:
+            return
+        row = files.get(path) if isinstance(files.get(path), dict) else {}
+        if not row or row.get("removed"):
+            return
+        if not _beta_file_is_stable(row, settings, now):
+            try:
+                stat_result = os.stat(path)
+                summary["file_stats"] += 1
+            except OSError:
+                summary["errors"] += 1
+                unavailable_paths.add(path)
+                # A transient NAS read error must not delete a previously
+                # indexed file. A later scan will verify it again.
+                seen_paths.add(path)
                 summary["scanned"] += 1
-                seen_paths.add(full)
-                try:
-                    stat = os.stat(full)
-                    size_bytes = int(stat.st_size)
-                    mtime = float(stat.st_mtime)
-                except Exception:
-                    summary["errors"] += 1
-                    continue
+                summary["unchanged"] += 1
+                return
+            process_file(path, stat_result, root_kind, root_path)
+            return
+        seen_paths.add(path)
+        summary["scanned"] += 1
+        summary["unchanged"] += 1
 
-                row = files.get(full) if isinstance(files.get(full), dict) else {}
-                content_same = bool(
-                    row
-                    and not row.get("removed")
-                    and int(row.get("size_bytes") or -1) == size_bytes
-                    and abs(float(row.get("mtime") or 0) - mtime) < 0.0001
-                    and isinstance(row.get("item"), dict)
+    def process_file(path: str, stat_result, root_kind: str, root_path: str) -> None:
+        nonlocal index_dirty
+        if path in seen_paths:
+            return
+        seen_paths.add(path)
+        summary["scanned"] += 1
+        size_bytes = int(stat_result.st_size)
+        mtime = float(stat_result.st_mtime)
+        mtime_ns = int(getattr(stat_result, "st_mtime_ns", int(mtime * 1_000_000_000)))
+        row = files.get(path) if isinstance(files.get(path), dict) else {}
+        content_same = bool(
+            row
+            and not row.get("removed")
+            and int(row.get("size_bytes") or -1) == size_bytes
+            and mtime_matches(row, stat_result)
+            and isinstance(row.get("item"), dict)
+        )
+        same = (
+            content_same
+            and int(row.get("parser_version") or 0) == BETA_LIBRARY_PARSER_VERSION
+            and str(row.get("root_kind") or "") == root_kind
+        )
+        if same:
+            if row.get("mtime_ns") is None:
+                row["mtime_ns"] = mtime_ns
+                index_dirty = True
+            stable_passes = min(2, int(row.get("stable_passes") or 0) + 1)
+            if stable_passes != int(row.get("stable_passes") or 0):
+                row["stable_passes"] = stable_passes
+                index_dirty = True
+            files[path] = row
+            summary["unchanged"] += 1
+            return
+
+        try:
+            item = _beta_parse_media(path, root_kind=root_kind, library_root=root_path)
+            if root_kind == "movies":
+                item["type"] = "movie"
+                item["target"] = _wizard_source_target("movie")
+            elif root_kind == "shows":
+                item["type"] = "show"
+                item["target"] = _wizard_source_target("show")
+        except Exception:
+            summary["errors"] += 1
+            # Preserve a previously valid row on a transient parse failure.
+            if row and not row.get("removed"):
+                summary["unchanged"] += 1
+            return
+
+        is_new = not row or row.get("removed")
+        is_reclassified = bool(content_same and not is_new)
+        files[path] = {
+            "path": path,
+            "size_bytes": size_bytes,
+            "mtime": mtime,
+            "mtime_ns": mtime_ns,
+            "root_kind": root_kind,
+            "parser_version": BETA_LIBRARY_PARSER_VERSION,
+            "item": item,
+            "first_seen": float(row.get("first_seen") or now),
+            "last_seen": now,
+            "changed_at": float(row.get("changed_at") or row.get("first_seen") or now) if is_reclassified else now,
+            "stable_passes": min(2, int(row.get("stable_passes") or 0) + 1) if is_reclassified else 0,
+            "removed": False,
+            "queued_at": row.get("queued_at") if isinstance(row, dict) else 0,
+        }
+        index_dirty = True
+        summary["new" if is_new else ("reclassified" if is_reclassified else "changed")] += 1
+
+    def preserve_cached_subtree(directory: str, root_kind: str, root_path: str) -> None:
+        """Keep cached rows when a share or directory is temporarily unreadable."""
+        stack = [directory]
+        preserved: set[str] = set()
+        while stack:
+            current = stack.pop()
+            if current in preserved:
+                continue
+            preserved.add(current)
+            seen_directories.add(current)
+            record = directories.get(current) if isinstance(directories.get(current), dict) else {}
+            current_kind = str(record.get("root_kind") or root_kind)
+            current_root = str(record.get("root_path") or root_path)
+            for path in files_by_directory.get(current, []):
+                accept_cached(path, current_kind, current_root)
+            stack.extend(
+                child for child in (record.get("children") or [])
+                if isinstance(child, str) and child not in preserved
+            )
+
+    for root in _beta_mapped_roots(settings):
+        root_path = str(root.get("path") or "").strip()
+        root_kind = str(root.get("kind") or "")
+        if not root_path or not is_allowed_path(root_path):
+            continue
+        root_path = os.path.normpath(root_path)
+        try:
+            root_is_directory = os.path.isdir(root_path)
+        except OSError:
+            root_is_directory = False
+        if not root_is_directory:
+            summary["unavailable_roots"] += 1
+            summary["errors"] += 1
+            unavailable_paths.add(root_path)
+            preserve_cached_subtree(root_path, root_kind, root_path)
+            continue
+
+        stack = [root_path]
+        while stack:
+            root_dir = stack.pop()
+            if root_dir in seen_directories:
+                continue
+            try:
+                before_stat = os.stat(root_dir)
+                before_mtime_ns = int(before_stat.st_mtime_ns)
+            except OSError:
+                summary["errors"] += 1
+                unavailable_paths.add(root_dir)
+                preserve_cached_subtree(root_dir, root_kind, root_path)
+                continue
+
+            record = directories.get(root_dir) if isinstance(directories.get(root_dir), dict) else {}
+            can_reuse = bool(
+                not full_scan
+                and record
+                and int(record.get("mtime_ns") or -1) == before_mtime_ns
+                and str(record.get("root_kind") or "") == root_kind
+                and str(record.get("root_path") or "") == root_path
+            )
+            seen_directories.add(root_dir)
+            if can_reuse:
+                summary["directories_cached"] += 1
+                for path in files_by_directory.get(root_dir, []):
+                    accept_cached(path, root_kind, root_path)
+                stack.extend(
+                    child for child in (record.get("children") or [])
+                    if isinstance(child, str) and child not in seen_directories
                 )
-                same = (
-                    content_same
-                    and int(row.get("parser_version") or 0) == BETA_LIBRARY_PARSER_VERSION
-                    and str(row.get("root_kind") or "") == root_kind
-                )
-                if same:
-                    row["last_seen"] = now
-                    row["stable_passes"] = int(row.get("stable_passes") or 0) + 1
-                    files[full] = row
-                    summary["unchanged"] += 1
-                    continue
+                continue
 
-                try:
-                    item = _beta_parse_media(full, root_kind=root_kind, library_root=root_path)
-                    if root_kind == "movies":
-                        item["type"] = "movie"
-                        item["target"] = _wizard_source_target("movie")
-                    elif root_kind == "shows":
-                        item["type"] = "show"
-                        item["target"] = _wizard_source_target("show")
-                except Exception:
-                    summary["errors"] += 1
-                    continue
+            summary["directories_scanned"] += 1
+            children = []
+            try:
+                with os.scandir(root_dir) as entries:
+                    for entry in entries:
+                        try:
+                            if entry.is_dir(follow_symlinks=False):
+                                children.append(entry.path)
+                                continue
+                            if not entry.name.lower().endswith(VIDEO_EXTS) or not entry.is_file():
+                                continue
+                            if os.path.splitext(entry.name)[0].lower().endswith("-tsd"):
+                                summary["skipped_tsd"] += 1
+                                continue
+                            stat_result = entry.stat()
+                            summary["file_stats"] += 1
+                            process_file(entry.path, stat_result, root_kind, root_path)
+                        except OSError:
+                            summary["errors"] += 1
+                            unavailable_paths.add(entry.path)
+                            # Do not turn one transient SMB metadata failure
+                            # into a removal. Keep whichever indexed subtree or
+                            # file row was last known to be valid.
+                            if entry.path in directories:
+                                preserve_cached_subtree(entry.path, root_kind, root_path)
+                            elif entry.path in files:
+                                accept_cached(entry.path, root_kind, root_path)
+            except OSError:
+                summary["errors"] += 1
+                unavailable_paths.add(root_dir)
+                preserve_cached_subtree(root_dir, root_kind, root_path)
+                continue
 
-                is_new = not row or row.get("removed")
-                is_reclassified = bool(content_same and not is_new)
-                files[full] = {
-                    "path": full,
-                    "size_bytes": size_bytes,
-                    "mtime": mtime,
-                    "root_kind": root_kind,
-                    "parser_version": BETA_LIBRARY_PARSER_VERSION,
-                    "item": item,
-                    "first_seen": float(row.get("first_seen") or now),
-                    "last_seen": now,
-                    "changed_at": float(row.get("changed_at") or row.get("first_seen") or now) if is_reclassified else now,
-                    "stable_passes": int(row.get("stable_passes") or 0) + 1 if is_reclassified else 0,
-                    "removed": False,
-                    "queued_at": row.get("queued_at") if isinstance(row, dict) else 0,
-                }
-                summary["new" if is_new else ("reclassified" if is_reclassified else "changed")] += 1
+            try:
+                after_mtime_ns = int(os.stat(root_dir).st_mtime_ns)
+            except OSError:
+                after_mtime_ns = -1
+            # A directory that changed while it was being enumerated is forced
+            # through the next scan again so an in-flight copy cannot be missed.
+            stored_mtime_ns = after_mtime_ns if after_mtime_ns == before_mtime_ns else -1
+            new_record = {
+                "mtime_ns": stored_mtime_ns,
+                "root_kind": root_kind,
+                "root_path": root_path,
+                "children": children,
+            }
+            if record != new_record:
+                directories[root_dir] = new_record
+                index_dirty = True
+            stack.extend(child for child in children if child not in seen_directories)
 
     for path, row in list(files.items()):
         if path in seen_paths or not isinstance(row, dict) or row.get("removed"):
@@ -5985,9 +6219,26 @@ def _beta_update_scan_index(settings: dict) -> tuple[dict, dict]:
         row["removed"] = True
         row["removed_at"] = now
         files[path] = row
+        index_dirty = True
         summary["removed"] += 1
 
-    _beta_save_scan_index(index)
+    for directory in list(directories):
+        if directory not in seen_directories:
+            directories.pop(directory, None)
+            index_dirty = True
+
+    normalized_unavailable = sorted(unavailable_paths)
+    if index.get("unavailable_paths") != normalized_unavailable:
+        index["unavailable_paths"] = normalized_unavailable
+        index_dirty = True
+
+    if full_scan:
+        index["last_full_scan_at"] = now
+        index_dirty = True
+    if index_dirty:
+        _beta_save_scan_index(index)
+    summary["index_saved"] = bool(index_dirty)
+    summary["duration_ms"] = int((time.monotonic() - started) * 1000)
     return index, summary
 
 
@@ -6117,6 +6368,20 @@ def _autopilot_candidates(data: dict, index: dict, settings: dict) -> dict:
     batch_limit = max(1, int(settings.get("autopilot_batch_limit") or 3))
     capacity = max(0, max_active - active_jobs)
     index_files = index.get("files") if isinstance(index.get("files"), dict) else {}
+    unavailable_prefixes = []
+    for value in index.get("unavailable_paths") or []:
+        if not value:
+            continue
+        normalized = os.path.normcase(os.path.normpath(str(value)))
+        unavailable_prefixes.append(normalized)
+
+    def path_is_temporarily_unavailable(path: str) -> bool:
+        normalized = os.path.normcase(os.path.normpath(path))
+        for prefix in unavailable_prefixes:
+            if normalized == prefix or normalized.startswith(prefix.rstrip(os.sep) + os.sep):
+                return True
+        return False
+
     decisions = []
     eligible = []
     smart_learning = smart_learning_status()
@@ -6143,8 +6408,10 @@ def _autopilot_candidates(data: dict, index: dict, settings: dict) -> dict:
         reason = "Eligible: stable, allowed, and within the configured policy."
         decision = "eligible"
 
-        if not path or not os.path.isfile(path) or not is_allowed_path(path):
+        if not path or not is_allowed_path(path) or not idx_row or idx_row.get("removed"):
             decision, reason = "skip", "File is missing or outside an allowed media root."
+        elif path_is_temporarily_unavailable(path):
+            decision, reason = "wait", "The library path is temporarily unavailable; the next scan will verify it again."
         elif media_type == "movie" and not settings.get("autopilot_include_movies", True):
             decision, reason = "skip", "Movies are disabled in this Autopilot policy."
         elif media_type == "show" and not settings.get("autopilot_include_shows", False):
@@ -6420,7 +6687,9 @@ def _beta_autoscan_event_summary(summary: dict) -> dict:
     compact = {
         key: summary.get(key)
         for key in (
-            "scanned", "new", "changed", "removed", "unchanged", "skipped_tsd",
+            "mode", "duration_ms", "directories_scanned", "directories_cached",
+            "file_stats", "catalog_rebuilt", "scanned", "new", "changed",
+            "removed", "unchanged", "skipped_tsd", "unavailable_roots",
             "queue_queued", "queue_skipped_unstable", "queue_skipped_active",
             "queue_skipped_missing_mapping", "error",
         )
@@ -6442,22 +6711,30 @@ def _beta_autoscan_event_summary(summary: dict) -> dict:
 
 def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = False) -> dict:
     if not BETA_AUTOSCAN_LOCK.acquire(blocking=False):
-        status = _beta_load_autoscan_status(load_settings())
+        try:
+            status = _beta_load_autoscan_status(load_settings())
+        except Exception:
+            status = _beta_empty_autoscan_status()
         status["running"] = True
         status["last_status"] = "running"
         return status
-    settings = load_settings()
     started = time.time()
-    interval_seconds = max(300, int(settings.get("beta_auto_scan_interval_minutes") or 30) * 60)
-    status = _beta_load_autoscan_status(settings)
-    status.update({
-        "running": True,
-        "last_started_at": started,
-        "last_status": "running",
-        "last_message": "Auto scan running.",
-    })
-    _beta_save_autoscan_status(status)
+    settings = {}
+    interval_seconds = 30 * 60
+    status = _beta_empty_autoscan_status()
     try:
+        settings = load_settings()
+        interval_seconds = _beta_autoscan_interval_seconds(settings)
+        status = _beta_load_autoscan_status(settings)
+        status.update({
+            "running": True,
+            "last_started_at": started,
+            "last_status": "running",
+            "last_message": "Auto scan running.",
+            "last_reason": str(reason or "timer"),
+        })
+        _beta_save_autoscan_status(status)
+
         if not force and not (settings.get("beta_auto_scan_enabled", False) or settings.get("autopilot_enabled", False)):
             status.update({
                 "running": False,
@@ -6478,14 +6755,29 @@ def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = Fals
                 "last_status": "skipped",
                 "last_message": message,
                 "last_summary": summary,
-                "next_scan_at": time.time() + interval_seconds,
+                # Recheck soon after an active encode instead of sleeping for
+                # the entire configured interval again.
+                "next_scan_at": time.time() + min(60, interval_seconds),
             })
             return _beta_save_autoscan_status(status)
 
         index, scan_summary = _beta_update_scan_index(settings)
-        data = _beta_library_from_scan_index(index, settings=settings, recursive=True)
-        data = _beta_enrich_metadata(data, settings, enabled=True)
-        data = _beta_refresh_predictions(data)
+        catalog_changed = any(
+            int(scan_summary.get(key) or 0) > 0
+            for key in ("new", "changed", "reclassified", "removed")
+        )
+        cache_available = os.path.isfile(BETA_LIBRARY_CACHE_FILE)
+        if catalog_changed or not cache_available:
+            data = _beta_library_from_scan_index(index, settings=settings, recursive=True)
+            data = _beta_enrich_metadata(data, settings, enabled=True)
+            data = _beta_refresh_predictions(data)
+            scan_summary["catalog_rebuilt"] = True
+        else:
+            # The expensive catalog grouping, artwork providers, and prediction
+            # pass are already represented by the saved cache. Reuse it when
+            # the filesystem index is unchanged.
+            data = _beta_load_library_cache(settings)
+            scan_summary["catalog_rebuilt"] = False
         tracking = _beta_load_tracking()
         data = _beta_apply_tracking(data, tracking)
         queue_summary = _beta_queue_stable_tracked_episodes(data, index, settings)
@@ -6498,8 +6790,9 @@ def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = Fals
         }
         autopilot_summary = _autopilot_candidates(data, index, settings)
         data["autopilot"] = autopilot_summary
-        data = _beta_stamp_library_scan(data)
-        _beta_save_library_cache(data)
+        if catalog_changed or not cache_available:
+            data = _beta_stamp_library_scan(data)
+            _beta_save_library_cache(data)
 
         summary = {**scan_summary, **{f"queue_{k}": v for k, v in queue_summary.items()}, "autopilot": autopilot_summary}
         message = (
@@ -6521,7 +6814,10 @@ def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = Fals
     except Exception as e:
         summary = {"error": str(e)[:240]}
         message = f"Auto scan failed: {str(e)[:180]}"
-        log_event("beta_auto_scan_error", message, level="error", extra=summary)
+        try:
+            log_event("beta_auto_scan_error", message, level="error", extra=summary)
+        except Exception as log_error:
+            print(f"[WARN] Could not save auto-scan error event: {log_error}", flush=True)
         status.update({
             "running": False,
             "last_finished_at": time.time(),
@@ -6536,34 +6832,118 @@ def _beta_run_incremental_auto_scan(*, reason: str = "timer", force: bool = Fals
 
 
 def _beta_autoscan_loop() -> None:
-    while not BETA_AUTOSCAN_STOP.is_set():
-        settings = load_settings()
-        interval_seconds = max(300, int(settings.get("beta_auto_scan_interval_minutes") or 30) * 60)
-        status = _beta_load_autoscan_status(settings)
-        next_scan_at = float(status.get("next_scan_at") or 0)
-        now = time.time()
+    BETA_AUTOSCAN_HEALTH.update({
+        "running": True,
+        "started_at": time.time(),
+        "last_error": "",
+    })
+    try:
+        while not BETA_AUTOSCAN_STOP.is_set():
+            try:
+                now = time.time()
+                BETA_AUTOSCAN_HEALTH["last_cycle_at"] = now
+                settings = load_settings()
+                interval_seconds = _beta_autoscan_interval_seconds(settings)
+                status = _beta_load_autoscan_status(settings)
+                try:
+                    next_scan_at = float(status.get("next_scan_at") or 0)
+                    has_completed_scan = bool(float(status.get("last_finished_at") or 0))
+                except (TypeError, ValueError):
+                    next_scan_at = 0
+                    has_completed_scan = False
 
-        automation_enabled = settings.get("beta_auto_scan_enabled", False) or settings.get("autopilot_enabled", False)
-        if automation_enabled and now >= next_scan_at:
-            _beta_run_incremental_auto_scan(reason="timer", force=False)
-            continue
+                automation_enabled = bool(
+                    settings.get("beta_auto_scan_enabled", False)
+                    or settings.get("autopilot_enabled", False)
+                )
+                if automation_enabled and (not has_completed_scan or now >= next_scan_at):
+                    _beta_run_incremental_auto_scan(reason="timer", force=False)
+                    BETA_AUTOSCAN_HEALTH["last_success_at"] = time.time()
+                    BETA_AUTOSCAN_HEALTH["last_error"] = ""
+                    continue
 
-        wait_seconds = 30
-        if automation_enabled and next_scan_at > now:
-            wait_seconds = max(5, min(30, int(next_scan_at - now)))
-        if BETA_AUTOSCAN_RUN_NOW.wait(timeout=wait_seconds):
-            BETA_AUTOSCAN_RUN_NOW.clear()
-            _beta_run_incremental_auto_scan(reason="manual", force=True)
+                wait_seconds = 30
+                if automation_enabled and next_scan_at > now:
+                    wait_seconds = max(5, min(30, int(next_scan_at - now)))
+                if BETA_AUTOSCAN_WAKE.wait(timeout=wait_seconds):
+                    BETA_AUTOSCAN_WAKE.clear()
+                    continue
+                BETA_AUTOSCAN_HEALTH["last_success_at"] = time.time()
+                BETA_AUTOSCAN_HEALTH["last_error"] = ""
+            except Exception as exc:
+                BETA_AUTOSCAN_HEALTH["cycle_errors"] = int(
+                    BETA_AUTOSCAN_HEALTH.get("cycle_errors") or 0
+                ) + 1
+                BETA_AUTOSCAN_HEALTH["last_error"] = str(exc)[:240]
+                try:
+                    log_event(
+                        "beta_auto_scan_scheduler_error",
+                        f"Auto-scan scheduler recovered from an error: {str(exc)[:180]}",
+                        level="warn",
+                    )
+                except Exception:
+                    print(f"[WARN] Auto-scan scheduler recovered from an error: {exc}", flush=True)
+                BETA_AUTOSCAN_STOP.wait(5)
+    finally:
+        BETA_AUTOSCAN_HEALTH["running"] = False
 
 
-def _start_beta_autoscan_thread() -> None:
+def _start_beta_autoscan_thread(*, force_serving_process: bool = False) -> bool:
     global BETA_AUTOSCAN_THREAD
-    if os.environ.get("FLASK_DEBUG") == "1" and os.environ.get("WERKZEUG_RUN_MAIN") != "true":
-        return
-    if BETA_AUTOSCAN_THREAD and BETA_AUTOSCAN_THREAD.is_alive():
-        return
-    BETA_AUTOSCAN_THREAD = threading.Thread(target=_beta_autoscan_loop, name="beta-auto-scan", daemon=True)
-    BETA_AUTOSCAN_THREAD.start()
+    if os.environ.get("TSD_DISABLE_BETA_AUTOSCAN") == "1":
+        return False
+    if (
+        not force_serving_process
+        and os.environ.get("FLASK_DEBUG") == "1"
+        and os.environ.get("WERKZEUG_RUN_MAIN") != "true"
+    ):
+        return False
+    with BETA_AUTOSCAN_THREAD_LOCK:
+        if BETA_AUTOSCAN_THREAD and BETA_AUTOSCAN_THREAD.is_alive():
+            return False
+        restarted = BETA_AUTOSCAN_THREAD is not None
+        BETA_AUTOSCAN_STOP.clear()
+        BETA_AUTOSCAN_THREAD = threading.Thread(
+            target=_beta_autoscan_loop,
+            name="beta-auto-scan",
+            daemon=True,
+        )
+        BETA_AUTOSCAN_THREAD.start()
+    try:
+        log_event(
+            "beta_auto_scan_scheduler_started",
+            "Automatic library scan scheduler is running.",
+            extra={"restarted": restarted},
+        )
+    except Exception:
+        pass
+    return True
+
+
+def _ensure_beta_autoscan_scheduler() -> bool:
+    """Restart a missing scan coordinator and wake an overdue schedule."""
+    try:
+        settings = load_settings()
+    except Exception:
+        settings = {}
+    enabled = bool(
+        settings.get("beta_auto_scan_enabled", False)
+        or settings.get("autopilot_enabled", False)
+    )
+    started = _start_beta_autoscan_thread(force_serving_process=True)
+    if enabled:
+        status = _beta_load_autoscan_status(settings)
+        try:
+            overdue = (
+                not float(status.get("last_finished_at") or 0)
+                or time.time() >= float(status.get("next_scan_at") or 0)
+            )
+        except (TypeError, ValueError):
+            overdue = True
+        if overdue:
+            BETA_AUTOSCAN_WAKE.set()
+    thread_alive = bool(BETA_AUTOSCAN_THREAD and BETA_AUTOSCAN_THREAD.is_alive())
+    return bool(started or thread_alive)
 
 
 def _node_summary_status(summary: dict) -> str:
@@ -7898,6 +8278,12 @@ def _worker_available_for_auto(row: dict, job: dict) -> tuple[bool, float]:
     reported_active = max(0, int(counts.get("queued") or 0)) + max(0, int(counts.get("running") or 0))
     if not active and reported_active:
         return False, 1.0
+    # Queued work has already reserved this worker.  A later automatic job may
+    # use another node, but must not jump onto this node before its pinned work
+    # starts.  Once the older job is running, normal hardware concurrency rules
+    # can use any genuinely spare slots.
+    if any(str(item.get("status") or "").lower() == "queued" for item in active):
+        return False, 1.0
     limit = normalize_hardware_transcode_concurrency(public.get("hardware_transcode_concurrency"), 1)
     if not active:
         return True, 0.0
@@ -8577,9 +8963,24 @@ def register_routes(app):
                 # unchanged files once and cached artwork is reused before any
                 # provider request is considered.
                 index, scan_summary = _beta_update_scan_index(settings)
-                data = _beta_library_from_scan_index(index, settings=settings, recursive=True)
-                data = _beta_enrich_metadata(data, settings, enabled=posters) if posters else _beta_finalize_catalog(data)
-                data["scan"] = {"mode": "incremental", **scan_summary}
+                catalog_changed = any(
+                    int(scan_summary.get(key) or 0) > 0
+                    for key in ("new", "changed", "reclassified", "removed")
+                )
+                cache_available = os.path.isfile(BETA_LIBRARY_CACHE_FILE)
+                if catalog_changed or not cache_available:
+                    data = _beta_library_from_scan_index(index, settings=settings, recursive=True)
+                    data = _beta_enrich_metadata(data, settings, enabled=posters) if posters else _beta_finalize_catalog(data)
+                    data = _beta_refresh_predictions(data)
+                    scan_summary["catalog_rebuilt"] = True
+                else:
+                    # A normal refresh should be cheap when no folders changed:
+                    # reuse the existing grouped catalog/artwork instead of
+                    # rebuilding and rewriting several megabytes of JSON.
+                    data = _beta_load_library_cache(settings)
+                    scan_summary["catalog_rebuilt"] = False
+                scan_strategy = str(scan_summary.get("mode") or "quick_incremental")
+                data["scan"] = {**scan_summary, "mode": "incremental", "strategy": scan_strategy}
             elif root == "__all__":
                 data = _beta_scan_all_libraries(recursive=False, posters=posters, settings=settings)
                 data["scan"] = {"mode": "full"}
@@ -8593,7 +8994,8 @@ def register_routes(app):
                     root_kind=mapped_root.get("kind") or "",
                 )
                 data["scan"] = {"mode": "full"}
-            data = _beta_refresh_predictions(data)
+            if not (root == "__all__" and recursive):
+                data = _beta_refresh_predictions(data)
             with BETA_TRACKING_LOCK:
                 tracking = _beta_load_tracking()
                 data = _beta_apply_tracking(data, tracking)
@@ -8604,8 +9006,9 @@ def register_routes(app):
             for planning_show_id, planning_paths in planning_requests:
                 _beta_schedule_tracked_show_planning(planning_show_id, planning_paths)
             data.setdefault("tracking", {})["auto_queue"] = auto_queue
-            data = _beta_stamp_library_scan(data)
-            _beta_save_library_cache(data)
+            if not (root == "__all__" and recursive) or data.get("scan", {}).get("catalog_rebuilt"):
+                data = _beta_stamp_library_scan(data)
+                _beta_save_library_cache(data)
         except Exception as e:
             return jsonify(error=str(e)), 500
 
@@ -8636,6 +9039,7 @@ def register_routes(app):
     @app.route("/api/beta/auto_scan/status")
     def beta_auto_scan_status_api():
         """Return Beta auto-scan settings and the last scan status."""
+        _ensure_beta_autoscan_scheduler()
         settings = load_settings()
         status = _beta_load_autoscan_status(settings)
         return jsonify(
@@ -8648,10 +9052,15 @@ def register_routes(app):
                 "file_stability_minutes": int(settings.get("beta_auto_scan_file_stability_minutes") or 10),
             },
             status=status,
+            scheduler={
+                **dict(BETA_AUTOSCAN_HEALTH),
+                "thread_alive": bool(BETA_AUTOSCAN_THREAD and BETA_AUTOSCAN_THREAD.is_alive()),
+            },
         )
 
     @app.route("/api/autopilot/status")
     def autopilot_status_api():
+        _ensure_beta_autoscan_scheduler()
         return jsonify(ok=True, **_autopilot_status_payload())
 
     @app.route("/api/autopilot/run", methods=["POST"])
@@ -9047,6 +9456,8 @@ def register_routes(app):
         old_tmdb_tag = _beta_tmdb_auth_cache_tag(load_settings())
         new_settings = save_settings(data)
         ensure_dispatcher()
+        _ensure_beta_autoscan_scheduler()
+        BETA_AUTOSCAN_WAKE.set()
         tmdb_changed = _beta_tmdb_auth_cache_tag(new_settings) != old_tmdb_tag
         if tmdb_changed:
             BETA_POSTER_CACHE.clear()
@@ -9708,11 +10119,14 @@ def register_routes(app):
             elif action == "save":
                 updates = {key: data[key] for key in allowed_keys if key in data}
                 save_settings(updates)
+                _ensure_beta_autoscan_scheduler()
+                BETA_AUTOSCAN_WAKE.set()
                 scan_status = None
                 log_event("mobile_autopilot_settings", f"{device.get('name')} updated automation settings.", level="info")
             else:
                 return jsonify(error="action must be save or run"), 400
         else:
+            _ensure_beta_autoscan_scheduler()
             scan_status = None
 
         settings = load_settings()

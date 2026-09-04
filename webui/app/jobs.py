@@ -2044,7 +2044,13 @@ def create_job(
 
 
 def get_next_auto_dispatch_job() -> tuple[str, dict] | None:
-    """Return the oldest queueable automatic job without bypassing FIFO."""
+    """Return the oldest queueable automatic job.
+
+    Pinned controller jobs reserve the controller, but they must not create
+    head-of-line blocking for work that is allowed to run on another node.
+    Automatic jobs still keep FIFO order relative to each other: a retry delay
+    on the oldest automatic job prevents a newer automatic job from passing it.
+    """
     now = _now_ts()
     with DISPATCH_LOCK:
         for job_id in list(job_queue):
@@ -2054,11 +2060,24 @@ def get_next_auto_dispatch_job() -> tuple[str, dict] | None:
             if job.get("status") != "queued":
                 continue
             if job.get("mode") != "auto_node":
-                return None
+                continue
             if float(job.get("dispatch_retry_at") or 0.0) > now:
                 return None
             return job_id, dict(job)
     return None
+
+
+def _queued_local_job_precedes(job_id: str) -> bool:
+    """Return whether older queued work has reserved the controller."""
+    for queued_id in list(job_queue):
+        if queued_id == job_id:
+            return False
+        queued_job = jobs.get(queued_id)
+        if not queued_job or queued_job.get("status") != "queued":
+            continue
+        if queued_job.get("mode") != "auto_node":
+            return True
+    return False
 
 
 def _apply_planned_preset(job: dict, plan: dict, *, user_edit: bool = False) -> None:
@@ -2144,6 +2163,11 @@ def auto_dispatch_local_available(job_id: str) -> bool:
         job = jobs.get(job_id)
         if not job:
             return False
+        # A later Next Available job may pass pinned work only by using a
+        # different node.  Do not let it consume the controller reserved by an
+        # older local/remote-transfer queue entry.
+        if _queued_local_job_precedes(job_id):
+            return False
         running_jobs = [
             jobs[running_id]
             for running_id, thread in RUNNING_JOB_THREADS.items()
@@ -2225,6 +2249,10 @@ def activate_auto_dispatch_locally(
             return False
         job = jobs.get(job_id)
         if not job:
+            return False
+        # Repeat the reservation check while holding the claim lock so a race
+        # cannot move this job onto the controller after availability changed.
+        if _queued_local_job_precedes(job_id):
             return False
         if isinstance(dispatch_plan, dict):
             _apply_planned_preset(job, dispatch_plan)

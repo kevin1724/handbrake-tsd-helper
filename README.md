@@ -260,16 +260,20 @@ By default, it is designed to run every 30 minutes. On each pass it:
 
 1. Checks whether auto scan is enabled.
 2. Skips if an encode is running and skip-while-encoding is enabled.
-3. Loads the previous scan index.
-4. Walks only mapped movie and show folders.
-5. Compares path, size, and modified time.
+3. Loads the previous file and directory index.
+4. Checks mapped movie and show directory timestamps, reusing unchanged directory contents.
+5. Reads file metadata only in changed folders or for files still inside the stability window.
 6. Parses only new or changed video files.
 7. Ignores `-TSD` files.
 8. Marks missing files as removed.
-9. Saves the scan index and Library cache.
+9. Rebuilds and saves the Library cache only when its catalog changed.
 10. Auto-queues tracked episodes only after file stability checks pass.
 
-This keeps normal scans lightweight.
+This keeps routine scans lightweight even on large SMB/NFS libraries. A full
+verification pass runs every 12 hours by default to catch uncommon in-place file
+changes that do not update a directory timestamp. Set
+`TSD_LIBRARY_FULL_VERIFY_HOURS` to an integer from 1 to 168 to change that safety
+interval.
 
 ## Autopilot
 

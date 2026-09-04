@@ -153,6 +153,54 @@ class HeadlessWorkerServiceTests(unittest.TestCase):
             jobs.JOBS_FILE = original_jobs_file
             jobs.queue_paused = original_queue_paused
 
+    def test_next_available_bypasses_pinned_local_only_for_another_node(self):
+        original_jobs = jobs.jobs
+        original_queue = jobs.job_queue
+        original_threads = jobs.RUNNING_JOB_THREADS
+        jobs.jobs = {
+            "pinned-local": {
+                "status": "queued",
+                "mode": "local",
+                "src": "/media/Pinned.Movie.mkv",
+                "preset": "1080",
+            },
+            "automatic": {
+                "status": "queued",
+                "mode": "auto_node",
+                "src": "/media/Automatic.Movie.mkv",
+                "preset": "1080",
+                "dispatch_retry_at": 0,
+                "dispatch_attempts": 0,
+            },
+        }
+        jobs.job_queue = ["pinned-local", "automatic"]
+        jobs.RUNNING_JOB_THREADS = {}
+        try:
+            pending = jobs.get_next_auto_dispatch_job()
+            self.assertIsNotNone(pending)
+            self.assertEqual(pending[0], "automatic")
+            self.assertFalse(jobs.auto_dispatch_local_available("automatic"))
+            self.assertFalse(
+                jobs.activate_auto_dispatch_locally(
+                    "automatic",
+                    "main",
+                    "Main controller",
+                )
+            )
+            with mock.patch.object(jobs, "save_jobs"):
+                claimed = jobs.claim_auto_dispatch_job(
+                    "automatic",
+                    "worker-2",
+                    "Worker two",
+                )
+            self.assertIsNotNone(claimed)
+            self.assertEqual(claimed["dispatch_node_id"], "worker-2")
+            self.assertEqual(jobs.jobs["pinned-local"]["status"], "queued")
+        finally:
+            jobs.jobs = original_jobs
+            jobs.job_queue = original_queue
+            jobs.RUNNING_JOB_THREADS = original_threads
+
     def test_pairing_response_marks_worker_as_transfer_only(self):
         pairing = node_linking.create_pairing_code()
         response = self.client.post(

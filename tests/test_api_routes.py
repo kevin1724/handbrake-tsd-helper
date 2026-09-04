@@ -1326,11 +1326,16 @@ class ApiRouteSmokeTests(unittest.TestCase):
             **base,
             "jobs": [{"status": "running", "uses_hardware_encoder": True}],
         }
+        queued_hardware_row = {
+            **base,
+            "jobs": [{"status": "queued", "uses_hardware_encoder": True}],
+        }
         software_row = {
             **base,
             "jobs": [{"status": "running", "uses_hardware_encoder": False}],
         }
         self.assertTrue(app_routes._worker_available_for_auto(hardware_row, auto_job)[0])
+        self.assertFalse(app_routes._worker_available_for_auto(queued_hardware_row, auto_job)[0])
         self.assertFalse(app_routes._worker_available_for_auto(software_row, auto_job)[0])
 
         smart_qsv_job = {
@@ -2715,6 +2720,302 @@ class ApiRouteSmokeTests(unittest.TestCase):
         self.assertEqual((row["item"]["season"], row["item"]["episode"]), (1, 1))
         self.assertEqual(row["queued_at"], 20)
         save.assert_called_once_with(index)
+
+    def test_incremental_scan_reuses_unchanged_directories_without_file_stats(self):
+        shows_root = os.path.join(TEST_MEDIA, "quick-index-shows")
+        season_dir = os.path.join(shows_root, "Efficient Show", "Season 01")
+        os.makedirs(season_dir, exist_ok=True)
+        episode_path = os.path.join(season_dir, "Efficient.Show.S01E01.mkv")
+        with open(episode_path, "wb") as handle:
+            handle.write(b"episode")
+        mapped = [{"path": shows_root, "kind": "shows", "label": "Shows"}]
+        scan_settings = {"beta_auto_scan_file_stability_enabled": False}
+        with (
+            patch.object(app_routes, "_beta_load_scan_index", return_value=app_routes._beta_empty_scan_index()),
+            patch.object(app_routes, "_beta_mapped_roots", return_value=mapped),
+            patch.object(app_routes, "is_allowed_path", return_value=True),
+            patch.object(app_routes, "_beta_save_scan_index"),
+        ):
+            index, first = app_routes._beta_update_scan_index(scan_settings, force_full=True)
+
+        self.assertEqual(first["mode"], "full_verify")
+        self.assertEqual(first["new"], 1)
+        self.assertGreaterEqual(first["directories_scanned"], 3)
+        # Fresh directories on SMB can report one delayed mtime update after
+        # their first enumeration. Model the settled state used by later scans.
+        for directory, row in index["directories"].items():
+            row["mtime_ns"] = os.stat(directory).st_mtime_ns
+
+        real_scandir = os.scandir
+        with (
+            patch.object(app_routes, "_beta_load_scan_index", return_value=index),
+            patch.object(app_routes, "_beta_mapped_roots", return_value=mapped),
+            patch.object(app_routes, "is_allowed_path", return_value=True),
+            patch.object(app_routes.os, "scandir", wraps=real_scandir) as scandir,
+            patch.object(app_routes, "_beta_parse_media") as parse,
+            patch.object(app_routes, "_beta_save_scan_index") as save,
+        ):
+            _index, second = app_routes._beta_update_scan_index(scan_settings)
+
+        self.assertEqual(second["mode"], "quick_incremental")
+        self.assertEqual(second["scanned"], 1)
+        self.assertEqual(second["unchanged"], 1)
+        self.assertEqual(second["file_stats"], 0)
+        self.assertGreaterEqual(second["directories_cached"], 3)
+        scandir.assert_not_called()
+        parse.assert_not_called()
+        save.assert_not_called()
+
+    def test_incremental_scan_preserves_index_when_library_share_is_unavailable(self):
+        missing_root = os.path.join(TEST_MEDIA, "offline-share")
+        movie_path = os.path.join(missing_root, "Preserved Movie.mkv")
+        old_index = {
+            "version": app_routes.BETA_LIBRARY_PARSER_VERSION,
+            "generated_at": 1,
+            "last_full_scan_at": app_routes.time.time(),
+            "directories": {
+                missing_root: {
+                    "mtime_ns": 1,
+                    "root_kind": "movies",
+                    "root_path": missing_root,
+                    "children": [],
+                }
+            },
+            "files": {
+                movie_path: {
+                    "path": movie_path,
+                    "size_bytes": 100,
+                    "root_kind": "movies",
+                    "parser_version": app_routes.BETA_LIBRARY_PARSER_VERSION,
+                    "item": {"path": movie_path, "title": "Preserved Movie", "type": "movie"},
+                    "stable_passes": 2,
+                    "removed": False,
+                }
+            },
+            "unavailable_paths": [],
+        }
+        with (
+            patch.object(app_routes, "_beta_load_scan_index", return_value=old_index),
+            patch.object(
+                app_routes,
+                "_beta_mapped_roots",
+                return_value=[{"path": missing_root, "kind": "movies", "label": "Movies"}],
+            ),
+            patch.object(app_routes, "is_allowed_path", return_value=True),
+            patch.object(app_routes, "_beta_save_scan_index"),
+        ):
+            index, summary = app_routes._beta_update_scan_index(
+                {"beta_auto_scan_file_stability_enabled": False}
+            )
+
+        self.assertEqual(summary["unavailable_roots"], 1)
+        self.assertEqual(summary["removed"], 0)
+        self.assertFalse(index["files"][movie_path]["removed"])
+        self.assertIn(missing_root, index["unavailable_paths"])
+
+    def test_auto_scan_failure_releases_lock_and_status_poll_revives_scheduler(self):
+        run_lock = app_routes.threading.Lock()
+        with (
+            patch.object(app_routes, "BETA_AUTOSCAN_LOCK", run_lock),
+            patch.object(app_routes, "load_settings", side_effect=RuntimeError("settings unavailable")),
+            patch.object(
+                app_routes,
+                "_beta_save_autoscan_status",
+                side_effect=lambda value: value,
+            ) as save_status,
+            patch.object(app_routes, "log_event"),
+        ):
+            status = app_routes._beta_run_incremental_auto_scan(reason="test")
+        self.assertEqual(status["last_status"], "error")
+        self.assertIn("settings unavailable", status["last_message"])
+        self.assertTrue(run_lock.acquire(blocking=False))
+        run_lock.release()
+        save_status.assert_called()
+
+        with patch.object(app_routes, "_ensure_beta_autoscan_scheduler") as ensure:
+            response = self.client.get("/api/beta/auto_scan/status")
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        ensure.assert_called_once_with()
+
+    def test_auto_scan_scheduler_restarts_a_dead_thread(self):
+        class DeadThread:
+            def is_alive(self):
+                return False
+
+        class StartedThread:
+            def __init__(self):
+                self.started = False
+
+            def start(self):
+                self.started = True
+
+            def is_alive(self):
+                return self.started
+
+        replacement = StartedThread()
+        with (
+            patch.dict(
+                app_routes.os.environ,
+                {"TSD_DISABLE_BETA_AUTOSCAN": "0", "FLASK_DEBUG": "0"},
+            ),
+            patch.object(app_routes, "BETA_AUTOSCAN_THREAD", DeadThread()),
+            patch.object(app_routes.threading, "Thread", return_value=replacement) as thread_factory,
+            patch.object(app_routes, "log_event"),
+        ):
+            started = app_routes._start_beta_autoscan_thread(force_serving_process=True)
+
+        self.assertTrue(started)
+        self.assertTrue(replacement.started)
+        thread_factory.assert_called_once()
+
+    def test_unchanged_auto_scan_reuses_catalog_without_metadata_rebuild(self):
+        scan_summary = {
+            "mode": "quick_incremental",
+            "scanned": 42,
+            "new": 0,
+            "changed": 0,
+            "reclassified": 0,
+            "removed": 0,
+            "unchanged": 42,
+        }
+        queue_summary = {
+            "queued": 0,
+            "smart_planned": 0,
+            "skipped_unstable": 0,
+            "skipped_active": 0,
+            "skipped_missing_mapping": 0,
+            "skipped": [],
+        }
+        autopilot_summary = {"queued": 0, "eligible": 0}
+        cached = {"movies": [], "shows": [], "tracking": {}}
+        with (
+            patch.object(app_routes, "BETA_AUTOSCAN_LOCK", app_routes.threading.Lock()),
+            patch.object(
+                app_routes,
+                "load_settings",
+                return_value={
+                    "beta_auto_scan_enabled": True,
+                    "beta_auto_scan_skip_while_encoding": False,
+                },
+            ),
+            patch.object(app_routes, "_beta_load_autoscan_status", return_value=app_routes._beta_empty_autoscan_status()),
+            patch.object(app_routes, "_beta_save_autoscan_status", side_effect=lambda value: value),
+            patch.object(app_routes, "_beta_update_scan_index", return_value=({"files": {}}, scan_summary)),
+            patch.object(app_routes.os.path, "isfile", return_value=True),
+            patch.object(app_routes, "_beta_load_library_cache", return_value=cached) as load_cache,
+            patch.object(app_routes, "_beta_library_from_scan_index") as rebuild,
+            patch.object(app_routes, "_beta_enrich_metadata") as enrich,
+            patch.object(app_routes, "_beta_refresh_predictions") as predictions,
+            patch.object(app_routes, "_beta_load_tracking", return_value={}),
+            patch.object(app_routes, "_beta_apply_tracking", side_effect=lambda data, _tracking: data),
+            patch.object(app_routes, "_beta_queue_stable_tracked_episodes", return_value=queue_summary),
+            patch.object(app_routes, "_autopilot_candidates", return_value=autopilot_summary),
+            patch.object(app_routes, "_beta_save_library_cache") as save_cache,
+            patch.object(app_routes, "log_event"),
+        ):
+            status = app_routes._beta_run_incremental_auto_scan(reason="test")
+
+        self.assertEqual(status["last_status"], "ok")
+        self.assertFalse(status["last_summary"]["catalog_rebuilt"])
+        load_cache.assert_called_once()
+        rebuild.assert_not_called()
+        enrich.assert_not_called()
+        predictions.assert_not_called()
+        save_cache.assert_not_called()
+
+    def test_manual_library_refresh_reuses_unchanged_catalog(self):
+        scan_summary = {
+            "mode": "quick_incremental",
+            "scanned": 42,
+            "new": 0,
+            "changed": 0,
+            "reclassified": 0,
+            "removed": 0,
+            "unchanged": 42,
+            "duration_ms": 12,
+        }
+        cached = {"movies": [], "shows": [], "stats": {}, "tracking": {}}
+        with (
+            patch.object(app_routes, "load_settings", return_value={}),
+            patch.object(app_routes, "_beta_update_scan_index", return_value=({"files": {}}, scan_summary)),
+            patch.object(app_routes.os.path, "isfile", return_value=True),
+            patch.object(app_routes, "_beta_load_library_cache", return_value=cached) as load_cache,
+            patch.object(app_routes, "_beta_library_from_scan_index") as rebuild,
+            patch.object(app_routes, "_beta_enrich_metadata") as enrich,
+            patch.object(app_routes, "_beta_refresh_predictions") as predictions,
+            patch.object(app_routes, "_beta_load_tracking", return_value={}),
+            patch.object(app_routes, "_beta_apply_tracking", side_effect=lambda data, _tracking: data),
+            patch.object(
+                app_routes,
+                "_beta_auto_queue_tracked_episodes",
+                return_value={"queued_count": 0, "skipped": [], "_planning_requests": []},
+            ),
+            patch.object(app_routes, "_beta_save_tracking"),
+            patch.object(app_routes, "_beta_save_library_cache") as save_cache,
+        ):
+            response = self.client.get("/api/beta/library?root=__all__&recursive=1&posters=1")
+
+        self.assertEqual(response.status_code, 200, response.get_data(as_text=True))
+        payload = response.get_json()
+        self.assertEqual(payload["scan"]["mode"], "incremental")
+        self.assertEqual(payload["scan"]["strategy"], "quick_incremental")
+        self.assertFalse(payload["scan"]["catalog_rebuilt"])
+        load_cache.assert_called_once()
+        rebuild.assert_not_called()
+        enrich.assert_not_called()
+        predictions.assert_not_called()
+        save_cache.assert_not_called()
+
+    def test_autopilot_uses_scan_index_without_restating_every_media_file(self):
+        movie_path = os.path.join(TEST_MEDIA, "indexed-movie.mkv")
+        movie = {
+            "path": movie_path,
+            "title": "Indexed Movie",
+            "size_bytes": 3 * 1024 ** 3,
+            "prediction": {"available": False},
+        }
+        index = {
+            "files": {
+                movie_path: {
+                    "path": movie_path,
+                    "size_bytes": movie["size_bytes"],
+                    "item": movie,
+                    "removed": False,
+                }
+            },
+            "unavailable_paths": [],
+        }
+        settings = {
+            "autopilot_include_movies": True,
+            "autopilot_include_shows": False,
+            "beta_auto_scan_file_stability_enabled": False,
+        }
+        with (
+            patch.object(app_routes, "_beta_active_job_paths", return_value=set()),
+            patch.object(app_routes, "_autopilot_active_job_count", return_value=0),
+            patch.object(app_routes, "smart_learning_status", return_value={"automation_ready": False}),
+            patch.object(
+                app_routes.os.path,
+                "isfile",
+                side_effect=AssertionError("Autopilot should trust the refreshed scan index"),
+            ),
+        ):
+            result = app_routes._autopilot_candidates({"movies": [movie], "shows": []}, index, settings)
+
+        self.assertEqual(result["considered"], 1)
+        self.assertEqual(result["eligible"], 1)
+        self.assertEqual(result["decisions"][0]["decision"], "eligible")
+
+        index["unavailable_paths"] = [TEST_MEDIA]
+        with (
+            patch.object(app_routes, "_beta_active_job_paths", return_value=set()),
+            patch.object(app_routes, "_autopilot_active_job_count", return_value=0),
+            patch.object(app_routes, "smart_learning_status", return_value={"automation_ready": False}),
+        ):
+            unavailable = app_routes._autopilot_candidates({"movies": [movie], "shows": []}, index, settings)
+        self.assertEqual(unavailable["eligible"], 0)
+        self.assertEqual(unavailable["decisions"][0]["decision"], "wait")
+        self.assertIn("temporarily unavailable", unavailable["decisions"][0]["reason"])
 
     def test_mobile_bearer_flow_and_scope_enforcement(self):
         pairing_response = self.client.post("/api/mobile/pairing_code", json={"scope": "read"})
